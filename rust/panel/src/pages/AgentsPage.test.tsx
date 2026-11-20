@@ -275,7 +275,7 @@ describe('Şimdi çalıştır', () => {
     renderAt('/agents');
     const row = await rowOf('content-routine');
     expect(within(row).getByRole('button', { name: tr.wake.line.runNow })).toBeDisabled();
-    expect(within(row).getByText(`${wakeTimeIn(after, 'tr', 'abl')} sonra çalıştırabilirsiniz.`)).toBeInTheDocument();
+    expect(within(row).getByText(`${wakeTimeIn(after, 'tr', 'abl')} sonra çalıştırabilirsin.`)).toBeInTheDocument();
   });
 
   it('says when the server holds the call back', async () => {
@@ -284,7 +284,7 @@ describe('Şimdi çalıştır', () => {
     owner({ [`POST /api/agents/${content.id}/wake/run`]: withStatus(409, { code: 'CONFLICT', message: 'rate limited', details: { reason: 'rate_limited', retry_at: retry } }) });
     renderAt('/agents');
     await user.click(within(await rowOf('content-routine')).getByRole('button', { name: tr.wake.line.runNow }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(`Ajan az önce çağrıldı; ${wakeTimeIn(retry, 'tr', 'abl')} sonra yeniden deneyebilirsiniz.`);
+    expect(await screen.findByRole('alert')).toHaveTextContent(`Ajan az önce çağrıldı; ${wakeTimeIn(retry, 'tr', 'abl')} sonra yeniden deneyebilirsin.`);
   });
 });
 

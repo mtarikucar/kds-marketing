@@ -29,6 +29,7 @@ export const NEEDS: { need: NeedKey; permission: Permission; module: string | nu
   { need: 'ads', permission: 'ads.work', module: 'ads' },
   { need: 'research', permission: 'prospects.work', module: null },
   { need: 'inbox', permission: 'inbox.work', module: null },
+  { need: 'knowledge', permission: 'content.work', module: null },
 ];
 
 /**
@@ -38,7 +39,7 @@ export const NEEDS: { need: NeedKey; permission: Permission; module: string | nu
  * a version waiting for a time, an ad plan) are not in a person's read at all.
  */
 export function agentWorkByNeed(items: readonly WorkItem[]): Record<NeedKey, number> {
-  const out: Record<NeedKey, number> = { content: 0, materials: 0, social: 0, ads: 0, research: 0, inbox: 0 };
+  const out: Record<NeedKey, number> = { content: 0, materials: 0, social: 0, ads: 0, research: 0, inbox: 0, knowledge: 0 };
   for (const item of items) {
     switch (item.kind) {
       case 'content_area': out.content += 1; break;

@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { isApiError } from '@/api/client';
 import type { Campaign, CampaignDetail, Platform } from '@/api/ads';
 import { useSession } from '@/auth/useSession';
@@ -105,6 +106,7 @@ const REFUSALS = [
   'spend_stopped',
   'above_general_budget',
   'above_strategy_cap',
+  'above_rules_cap',
   'above_account_cap',
   'already_built',
   'stopped_by_budget',
@@ -128,6 +130,8 @@ export function CampaignError({ error, currency }: { error: unknown; currency: s
   }
   const reason = isApiError(error) ? REFUSALS.find((r) => r === error.details.reason) : undefined;
   if (isApiError(error) && reason) {
+    // The ad budget's ceiling is the owner's Kurallar (design 2026-11-19 §4.6.2): changed there.
+    const rules = reason === 'no_paid_lane' || reason === 'above_strategy_cap' || reason === 'above_rules_cap';
     return (
       <p role="alert" className="text-sm text-danger">
         {t(`adCampaigns.errors.${reason}`, {
@@ -136,6 +140,12 @@ export function CampaignError({ error, currency }: { error: unknown; currency: s
               ? formatMoney(error.details.left, currency, i18n.language)
               : '—',
         })}
+        {rules && (
+          <>
+            {' '}
+            <Link className="font-medium underline underline-offset-4" to="/knowledge#kurallar">{t('adCampaigns.errors.rulesLink')}</Link>
+          </>
+        )}
       </p>
     );
   }

@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { ANY_CHANNEL, KIND_GROUPS } from '@/api/types';
+import { KIND_GROUPS } from '@/api/types';
 import {
   Select,
   SelectContent,
@@ -17,9 +17,7 @@ export interface KindSelectProps {
   id?: string;
   label?: string;
   placeholder?: string;
-  /** Also offer `any`, the channel that stands for any channel (strategy channels). */
-  withAny?: boolean;
-  /** Only these kind keys (e.g. the strategy's own channels); every kind when left out. */
+  /** Only these kind keys; every kind when left out. */
   only?: readonly string[];
   disabled?: boolean;
   className?: string;
@@ -34,7 +32,6 @@ export function KindSelect({
   id,
   label,
   placeholder,
-  withAny,
   only,
   disabled,
   className,
@@ -48,9 +45,6 @@ export function KindSelect({
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent className="max-h-80">
-        {withAny && allowed(ANY_CHANNEL) && (
-          <SelectItem value={ANY_CHANNEL}>{t('strategy.anyChannel')}</SelectItem>
-        )}
         {KIND_GROUPS.map((group) => {
           const kinds = kindsInGroup(group).filter((k) => allowed(k.key));
           if (kinds.length === 0) return null;

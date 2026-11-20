@@ -1,16 +1,11 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Info } from 'lucide-react';
-import { addChannel } from '@/api/strategy';
 import type { Stop } from '@/api/social';
 import { POST_FORMATS, type PostFormat } from '@/api/posts';
 import { kindLabel } from '@/lib/capabilities';
-import { can } from '@/lib/roles';
-import { useSession } from '@/auth/useSession';
 import { Button, cn } from '@/components/ui';
-import { ErrorCallout } from '@/components/ErrorCallout';
 import { placeHref } from './location';
 
 /** The kinds a post goes out on: the accounts whose stops the panel says. */
@@ -32,37 +27,11 @@ export function stopText(t: TFunction, kind: string, stop: Stop): string {
     case 'reconnect':
     case 'paused':
     case 'braked':
-    case 'no_approved_strategy':
-    case 'channel_not_in_strategy':
-    case 'no_hypothesis':
+    case 'knowledge_empty':
     case 'posting_screen':
     case 'approval':
       return t(`stops.${stop.code}`, { platform });
   }
-}
-
-/** One action: prepares the strategy draft that adds the account's channel, then points to its approval. */
-function PrepareStrategy({ kind }: { kind: string }) {
-  const { t } = useTranslation();
-  const client = useQueryClient();
-  const prepare = useMutation({
-    mutationFn: () => addChannel(kind),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['strategy'] }),
-  });
-  if (prepare.isSuccess) {
-    return (
-      <span role="status" className="text-success">
-        {t('stops.act.prepared')}{' '}
-        <Link className="underline" to="/strategy">{t('stops.act.toApprove')}</Link>
-      </span>
-    );
-  }
-  return (
-    <>
-      <Button size="sm" variant="outline" loading={prepare.isPending} onClick={() => prepare.mutate()}>{t('stops.act.prepare_strategy')}</Button>
-      <ErrorCallout error={prepare.error} />
-    </>
-  );
 }
 
 /**
@@ -87,8 +56,6 @@ export function StopList({
   label?: string;
 }) {
   const { t } = useTranslation();
-  // Preparing the draft is the consultation's (`team.manage`); anyone else is pointed to it.
-  const strategy = can(useSession().data, 'team.manage');
   // A content with no video for TikTok already says TikTok takes only video: once is enough.
   const shown = stops.some((s) => s.code === 'media_missing') ? stops.filter((s) => s.code !== 'only_format') : stops;
   if (!shown.length) return null;
@@ -100,10 +67,8 @@ export function StopList({
         return here
           ? <span className="text-muted-foreground">{t('stops.note.resumeHere')}</span>
           : <Link className="text-primary underline" to={placeHref({ account: capabilityId })}>{t('stops.act.resume')}</Link>;
-      case 'approve_strategy':
-        return <Link className="text-primary underline" to="/strategy">{t('stops.act.approve_strategy')}</Link>;
-      case 'prepare_strategy':
-        return strategy ? <PrepareStrategy kind={kind} /> : <Link className="text-primary underline" to="/strategy">{t('stops.act.approve_strategy')}</Link>;
+      case 'open_knowledge':
+        return <Link className="text-primary underline" to="/knowledge">{t('stops.act.open_knowledge')}</Link>;
       case 'add_material':
         return onAddMaterial
           ? <Button size="sm" variant="outline" onClick={onAddMaterial}>{t(stop.format === 'tiktok_video' ? 'stops.act.add_video' : 'stops.act.add_material')}</Button>

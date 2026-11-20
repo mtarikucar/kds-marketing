@@ -6,12 +6,12 @@ import { isApiError } from '@/api/client';
 import { errorMessage } from '@/lib/errors';
 
 /**
- * A gate the person can open is a next step, not a failure: retrying cannot help, the strategy
- * page or the billing page can.
+ * A gate the person can open is a next step, not a failure: retrying cannot help, Bilgi bankası
+ * (a frame exists once one card has text) or the billing page can.
  */
 const GATES = {
   MODULE_NOT_INSTALLED: { body: 'gates.moduleBody', link: 'gates.moduleLink', to: '/modules' },
-  STRATEGY_REQUIRED: { body: 'gates.strategyBody', link: 'gates.strategyLink', to: '/strategy' },
+  STRATEGY_REQUIRED: { body: 'gates.knowledgeBody', link: 'gates.knowledgeLink', to: '/knowledge' },
   CAPABILITY_REQUIRED: { body: 'gates.capabilityBody', link: 'gates.capabilityLink', to: '/connect' },
   WORKSPACE_INACTIVE: { body: 'gates.inactiveBody', link: 'gates.inactiveLink', to: '/billing' },
 } as const;

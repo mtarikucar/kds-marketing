@@ -97,7 +97,7 @@ export function StudioError({ error, onRetry }: { error: unknown; onRetry?: () =
   const reason = isApiError(error) ? String(error.details.reason ?? error.message) : '';
   const key: StudioKey =
     code === 'STRATEGY_REQUIRED'
-      ? 'noStrategy'
+      ? 'noKnowledge'
       : code === 'BUDGET_CAP'
         ? 'cap'
         : code === 'WORKSPACE_INACTIVE'
@@ -114,9 +114,9 @@ export function StudioError({ error, onRetry }: { error: unknown; onRetry?: () =
   return (
     <div role="alert" className="space-y-2 rounded-md bg-danger-subtle p-3 text-sm">
       <p>{t(`studio.${key}`)}</p>
-      {key === 'noStrategy' ? (
-        <Link className="underline" to="/strategy">
-          {t('studio.openStrategy')}
+      {key === 'noKnowledge' ? (
+        <Link className="underline" to="/knowledge">
+          {t('studio.openKnowledge')}
         </Link>
       ) : key === 'connectorUnavailable' ? (
         <Link className="underline" to="/capabilities">

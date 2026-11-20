@@ -9,7 +9,7 @@ export function useModules() {
   return useQuery({ queryKey: modulesKey(workspaceId), queryFn: getModules, enabled: !!workspaceId });
 }
 const BUILTIN_PATHS: Record<string, string> = {
-  inbox: '/inbox', strategy: '/strategy', content: '/content', social: '/social', ads: '/ads', materials: '/content', people: '/people',
+  inbox: '/inbox', strategy: '/knowledge', content: '/content', social: '/social', ads: '/ads', materials: '/content', people: '/people',
   prospects: '/prospects', outreach: '/outreach', calls: '/calls',
 };
 /** The library and the content share one page and one menu entry (design 2026-11-18). */

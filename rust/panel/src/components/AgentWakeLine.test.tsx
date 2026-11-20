@@ -76,7 +76,7 @@ describe('AgentWakeLine', () => {
     const next = at(40 * MIN);
     show(schedule({ next_expected_at: next }));
     const shown = await line();
-    expect(shown).toHaveTextContent(`Ajan saat başı uğruyor; sıradaki ${wakeTime(next, 'tr')}. Hemen başlasın isterseniz: Şimdi çalıştır`);
+    expect(shown).toHaveTextContent(`Ajan saat başı uğruyor; sıradaki ${wakeTime(next, 'tr')}. Hemen başlasın istersen: Şimdi çalıştır`);
     expect(within(shown).getByRole('button', { name: 'Şimdi çalıştır' })).toBeEnabled();
   });
 
@@ -85,7 +85,7 @@ describe('AgentWakeLine', () => {
     show(schedule({ run_now: { api_key_id: KEY, after } }));
     const shown = await line();
     expect(within(shown).getByRole('button', { name: 'Şimdi çalıştır' })).toBeDisabled();
-    expect(shown).toHaveTextContent(`${wakeTimeIn(after, 'tr', 'abl')} sonra çalıştırabilirsiniz.`);
+    expect(shown).toHaveTextContent(`${wakeTimeIn(after, 'tr', 'abl')} sonra çalıştırabilirsin.`);
   });
 
   it('says nothing of running now without the permission to', async () => {
@@ -99,7 +99,7 @@ describe('AgentWakeLine', () => {
     const next = at(2 * 60 * MIN);
     show(schedule({ has_address: false, run_now: null, interval_minutes: 180, next_expected_at: next }));
     const shown = await line();
-    expect(shown).toHaveTextContent(`Ajan 3 saatte bir uğruyor; sıradaki ${wakeTime(next, 'tr')}. Hemen başlaması için ajanlar sayfasından bir çağrı adresi ekleyin.`);
+    expect(shown).toHaveTextContent(`Ajan 3 saatte bir uğruyor; sıradaki ${wakeTime(next, 'tr')}. Hemen başlaması için ajanlar sayfasından bir çağrı adresi ekle.`);
     expect(within(shown).getByRole('link', { name: 'ajanlar sayfasından' })).toHaveAttribute('href', '/agents');
   });
 
@@ -118,13 +118,13 @@ describe('AgentWakeLine', () => {
     expect(await line()).toHaveTextContent(`Ajan 30 dakikada bir uğruyor; ${wakeTimeIn(expected, 'tr', 'loc')} bekleniyordu, gecikti.`);
     first.unmount();
     show(schedule({ next_expected_at: null, has_address: false, run_now: null }));
-    expect(await line()).toHaveTextContent('Ajan henüz uğramadı. Hemen başlaması için ajanlar sayfasından bir çağrı adresi ekleyin.');
+    expect(await line()).toHaveTextContent('Ajan henüz uğramadı. Hemen başlaması için ajanlar sayfasından bir çağrı adresi ekle.');
   });
 
   it('says a refused address must be connected again', async () => {
     show({ state: 'refused', api_key_id: KEY });
     const shown = await line();
-    expect(shown).toHaveTextContent('Ajanın çağrı adresi reddedildi; ajanlar sayfasından yeniden bağlayın.');
+    expect(shown).toHaveTextContent('Ajanın çağrı adresi reddedildi; ajanlar sayfasından yeniden bağla.');
     expect(within(shown).getByRole('link', { name: 'ajanlar sayfasından' })).toHaveAttribute('href', '/agents');
   });
 
@@ -158,7 +158,7 @@ describe('AgentWakeLine', () => {
       [`POST /api/agents/${KEY}/wake/run`]: withStatus(409, { code: 'CONFLICT', message: 'the agent was woken a moment ago', details: { reason: 'rate_limited', retry_at: retry } }),
     });
     await user.click(within(await line()).getByRole('button', { name: 'Şimdi çalıştır' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(`Ajan az önce çağrıldı; ${wakeTimeIn(retry, 'tr', 'abl')} sonra yeniden deneyebilirsiniz.`);
+    expect(await screen.findByRole('alert')).toHaveTextContent(`Ajan az önce çağrıldı; ${wakeTimeIn(retry, 'tr', 'abl')} sonra yeniden deneyebilirsin.`);
   });
 });
 

@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
+  BookOpen,
   Bot,
-  Compass,
   Home,
   Plus,
   Layers,
@@ -55,7 +55,7 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
   const core: NavItem[] = [
     { to: '/', label: t('nav.home'), Icon: Home },
-    { to: '/strategy', label: t('nav.strategy'), Icon: Compass },
+    { to: '/knowledge', label: t('nav.knowledge'), Icon: BookOpen },
   ];
   const management: NavItem[] = [
     { to: '/budget', label: t('nav.budget'), Icon: Wallet },

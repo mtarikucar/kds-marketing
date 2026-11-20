@@ -10,6 +10,7 @@ import { Button, cn, Input, Progress, toast } from '@/components/ui';
 import { formatNumber, formatRelative, formatWhen } from '@/lib/format';
 import { useInFlight } from '@/lib/leads';
 import { ProspectStatusBadge, recorderText, useLeadsKey, useLeadsNames, useLeadsRefresh } from '../LeadsShared';
+import { useKnowledge } from '../knowledge/queries';
 import { useTaskCopy, type TaskCopy } from './copy';
 import { briefLine, languageName, placeText, targetShare, taskName, taskState, type TaskState } from './words';
 
@@ -214,6 +215,19 @@ function Newest({ item }: { item: ListedTask }) {
 }
 
 /** What a task found, on the row's end: the count (of its target, for a one-off task) and the qualified. */
+/**
+ * Where a standing task's brief is changed: the knowledge base's "Kimi arıyoruz" card (design
+ * 2026-11-19 §4.12), opened in its editor when the read names it.
+ */
+function KnowledgeLink({ copy }: { copy: TaskCopy }) {
+  const card = useKnowledge().data?.cards.find((c) => c.key === 'who_we_seek');
+  return (
+    <Link className="font-medium text-primary underline underline-offset-4" to={card ? `/knowledge?card=${encodeURIComponent(card.id)}` : '/knowledge'}>
+      {copy('editKnowledge')}
+    </Link>
+  );
+}
+
 function Numbers({ item, copy }: { item: ListedTask; copy: TaskCopy }) {
   const { kind } = item.task;
   const n = (v: number) => formatNumber(v, copy.language);
@@ -296,7 +310,7 @@ export function TaskRow({
           {task.kind.type === 'standing' && (
             <p className="text-sm text-muted-foreground">
               {copy('standing')}{' '}
-              <Link className="font-medium text-primary underline underline-offset-4" to="/strategy">{copy('editStrategy')}</Link>
+              <KnowledgeLink copy={copy} />
             </p>
           )}
           <Newest item={item} />

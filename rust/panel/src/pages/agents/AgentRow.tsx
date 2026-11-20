@@ -19,7 +19,7 @@ const RECENT = 3;
 const QUIET = new Set(['mcp.tool_call', 'work.checkin', 'agent.connected']);
 
 const NEED_WORD: Record<NeedKey, AgentCopyKey> = {
-  content: 'needContent', materials: 'needMaterials', social: 'needSocial', ads: 'needAds', research: 'needResearch', inbox: 'needInbox',
+  content: 'needContent', materials: 'needMaterials', social: 'needSocial', ads: 'needAds', research: 'needResearch', inbox: 'needInbox', knowledge: 'needKnowledge',
 };
 
 /** A group of the opened row: a small heading and what it says. */
