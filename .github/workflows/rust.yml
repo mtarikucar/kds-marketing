@@ -180,40 +180,31 @@ jobs:
           make-default: false
       - name: CI build profile
         run: printf '%s\n' "$CI_CARGO_CONFIG" >> "$CARGO_HOME/config.toml"
-      # Shared by the three partitions and rust-release-binary, which build the same test tree;
-      # only partition 1 saves it.
+      # Shared by the three partitions and rust-release-binary, which build the same test tree.
+      # Partition 2 saves it: partition 1 runs the most tests and partition 3 the extra steps.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
           shared-key: rust-test
           env-vars: ImageOS CI_CARGO_CONFIG
-          save-if: ${{ matrix.partition == 1 }}
+          save-if: ${{ matrix.partition == 2 && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design/')) }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9
-      # The service is a throwaway: commits and CREATE/DROP DATABASE stop waiting for the disk.
-      # No test asserts durability (the restore drill below runs its own cluster).
-      - name: Throwaway PostgreSQL without fsync
-        if: matrix.partition != 2
-        run: |
-          docker exec ${{ job.services.postgres.id }} psql -U postgres -v ON_ERROR_STOP=1 \
-            -c "ALTER SYSTEM SET fsync = off" \
-            -c "ALTER SYSTEM SET synchronous_commit = off" \
-            -c "ALTER SYSTEM SET full_page_writes = off" \
-            -c "SELECT pg_reload_conf()"
       - id: nextest
         name: cargo nextest run --locked --workspace --no-fail-fast
         run: >-
           cargo nextest run --locked --workspace --no-fail-fast
           --partition count:${{ matrix.partition }}/3
           -E 'not (binary_id(jeeta::m4_deployment) & test(=production_build_refuses_test_loopback))'
-      # nextest does not run documentation tests; `cargo test` ran them with the rest, so they run
-      # whether or not a test above failed.
+      # Partition 3 gets the fewest tests (`count` gives each binary's remainder to 1 and 2), so it
+      # also runs these two. nextest does not run documentation tests; `cargo test` ran them with
+      # the rest, so they run whether or not a test above failed.
       - name: cargo test --locked --workspace --doc
-        if: ${{ matrix.partition == 1 && !cancelled() && steps.nextest.outcome != 'skipped' }}
+        if: ${{ matrix.partition == 3 && !cancelled() && steps.nextest.outcome != 'skipped' }}
         run: cargo test --locked --workspace --doc
       - name: Synthetic productisation smoke (no external provider traffic)
-        if: matrix.partition == 1
+        if: matrix.partition == 3
         run: make smoke-productisation
 
   # A whole-workspace build unifies the dev-only `test-loopback` feature into jt_outbound, so the
@@ -487,7 +478,7 @@ jobs:
           workspaces: rust
           key: release-production
           env-vars: ImageOS
-          save-if: true
+          save-if: ${{ github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design/')) }}
       - uses: pnpm/action-setup@v4
         with:
           version: 9
