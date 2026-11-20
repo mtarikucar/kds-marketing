@@ -38,13 +38,19 @@ function visibleText(): string {
   return texts.join('\n').toLocaleLowerCase('tr');
 }
 
-/** The internal words and "siz" forms in `text`, each with a little of what surrounds it. */
+/**
+ * The internal words and "siz" forms in `text` (lowercased as Turkish reads it), each with a little
+ * of what surrounds it. An ASCII capital I lowercases to a dotless ı in Turkish ("ICP" → "ıcp",
+ * "STRATEJI" → "stratejı"), so the internal words are also looked for with every ı read as i (no
+ * Turkish word turns into one of them that way; the same length keeps the positions).
+ */
 function offences(text: string): string[] {
   const cleaned = text.replace(TIKTOK_DRAFTS, '');
+  const dotted = cleaned.replace(/ı/gu, 'i');
   const found: string[] = [];
-  for (const pattern of [INTERNAL, SIZ]) {
+  for (const [pattern, within] of [[INTERNAL, dotted], [SIZ, cleaned]] as const) {
     const global = new RegExp(pattern.source, 'gu');
-    for (const m of cleaned.matchAll(global)) found.push(cleaned.slice(Math.max(0, m.index - 30), m.index + 30));
+    for (const m of within.matchAll(global)) found.push(within.slice(Math.max(0, m.index - 30), m.index + 30));
   }
   return found;
 }
@@ -66,7 +72,7 @@ function answers(data: KnowledgeOut): FetchRoutes {
     'GET /api/agents/wakes': { agents: [], needs: { content: none, materials: none, social: none, ads: none, research: none, inbox: none, knowledge: late } },
     'GET /api/studio/overview': {
       hypotheses: [{ id: 'h1', title: 'Atölyeden kısa videolar', segment_key: 'genel' }],
-      learned: { arms: [{ arm: { id: 'a1', key: { hypothesis_id: 'h1', lane: 'organic', channel: 'instagram', content_type: 'reel' } }, evidence: [{ id: 'm1', status: 'measured', raw_metrics: {} }] }], hypotheses: [{ hypothesis_id: 'h1', derived_confidence: 0.3 }] },
+      learned: { arms: [{ arm: { id: 'a1', key: { hypothesis_id: 'h1', lane: 'organic', channel: 'instagram', content_type: 'reel' } }, evidence: [{ id: 'm1', status: 'complete', publication_id: 'p1', raw_metrics: {} }] }], hypotheses: [{ hypothesis_id: 'h1', derived_confidence: 0.3 }] },
     },
     [`GET /api/knowledge/cards/${CARD_PRODUCTS}/history`]: {
       revisions: (['note', 'proposal', 'owner', 'backfill', 'resync', 'system'] as const).map((cause, i) => ({
@@ -122,6 +128,7 @@ describe('the owner’s words on Bilgi bankası', () => {
     seen.push(visibleText());
 
     expect(seen.flatMap(offences)).toEqual([]);
+    // Four mounts and three dialogs: more than the default five seconds on a busy runner.
   }, 30_000);
 
   it('holds none on an empty knowledge base either, with or without the texts waiting as proposals', async () => {
@@ -141,6 +148,8 @@ describe('the owner’s words on Bilgi bankası', () => {
 
   it('catches an internal word, a "siz" form, and lets TikTok’s drafts and "kolay" through', () => {
     expect(offences("bu olay için · onayınızı bekliyor")).toHaveLength(2);
+    // Written in capitals with an ASCII I, as the page lowercases them.
+    expect(offences('Hedef ICP · STRATEJI · HİPOTEZ'.toLocaleLowerCase('tr'))).toHaveLength(3);
     expect(offences("tiktok'ta taslak · kolay · tiktok'taki taslaklarına gönderildi")).toEqual([]);
   });
 });

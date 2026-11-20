@@ -13,16 +13,25 @@ export function interestLevel(confidence: number): 'high' | 'medium' | 'low' {
   return confidence >= 0.66 ? 'high' : confidence >= 0.4 ? 'medium' : 'low';
 }
 
+/**
+ * The posts a topic's evidence measured: each post (or ad set binding) once, whatever the number
+ * of its windows (24 h, 72 h, 7 days) or days, and only by a complete reading (not a missing or
+ * failed one).
+ */
+export function measuredPosts(evidence: studio.Learned['arms'][number]['evidence']): number {
+  return new Set(evidence.filter((e) => e.status === 'complete').map((e) => e.publication_id ?? e.binding_id ?? e.id)).size;
+}
+
 /** One line per topic that has measured posts: its title, how much interest, how many were measured. */
 export function learnedLines(data: studio.Overview | undefined): { id: string; title: string; level: 'high' | 'medium' | 'low' | null; measured: number }[] {
   if (!data) return [];
   return data.hypotheses
     .filter((h) => h.segment_key !== OWNER_REQUEST_SEGMENT)
     .flatMap((h) => {
-      const evidence = new Set(data.learned.arms.filter((a) => a.arm.key.hypothesis_id === h.id).flatMap((a) => a.evidence.map((e) => e.id)));
-      if (evidence.size === 0) return [];
+      const measured = measuredPosts(data.learned.arms.filter((a) => a.arm.key.hypothesis_id === h.id).flatMap((a) => a.evidence));
+      if (measured === 0) return [];
       const derived = data.learned.hypotheses.find((x) => x.hypothesis_id === h.id)?.derived_confidence ?? h.derived_confidence;
-      return [{ id: h.id, title: h.title, level: typeof derived === 'number' ? interestLevel(derived) : null, measured: evidence.size }];
+      return [{ id: h.id, title: h.title, level: typeof derived === 'number' ? interestLevel(derived) : null, measured }];
     });
 }
 

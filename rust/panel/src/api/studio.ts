@@ -61,7 +61,15 @@ export interface Binding {
 export interface Learned {
   arms: {
     arm: Arm;
-    evidence: { id: string; status: string; raw_metrics: Record<string, number | null> }[];
+    /** `jt_studio::Measurement`: one reading of a post (`publication_id`) or of an ad set binding's day. */
+    evidence: {
+      id: string;
+      status: 'complete' | 'missing' | 'failed';
+      publication_id?: string | null;
+      binding_id?: string | null;
+      window?: 'hours24' | 'hours72' | 'days7';
+      raw_metrics: Record<string, number | null>;
+    }[];
   }[];
   hypotheses: { hypothesis_id: string; derived_confidence: number | null }[];
   lane_performance: { lane: LaneKind; reward: number | null; attribution: string | null }[];
