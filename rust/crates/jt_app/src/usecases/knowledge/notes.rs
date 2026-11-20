@@ -521,20 +521,31 @@ pub async fn note_file(deps: &Deps, ctx: &Ctx, input: NoteFileInput) -> Result<N
         outcome.goals = added;
     }
 
-    // Proposals: this connection's own.
+    // Proposals: this connection's own, made for this note (after it was written) and still
+    // waiting for the owner. A closed one would close the note while nothing waits in
+    // "Ajanin onerileri" (design §4.8).
     for (i, id) in input.proposals.iter().enumerate() {
-        let own = r.knowledge().proposal(*id).await?.is_some_and(|p| {
+        let Some(p) = r.knowledge().proposal(*id).await?.filter(|p| {
             p.proposed_by
                 == Proposer::Agent {
                     connection_id: connection,
                 }
-        });
-        if !own {
+                && p.proposed_at >= note.created_at
+        }) else {
             return Err(refused(
                 ErrorCode::NotFound,
                 "no_such_proposal",
-                "no such proposal of this agent",
+                "no such proposal of this agent made for this note",
                 json!({ "field": format!("proposals[{i}]") }),
+            ));
+        };
+        if !p.is_pending() || p.expires_at <= ctx.now {
+            return Err(refused(
+                ErrorCode::Conflict,
+                "proposal_closed",
+                "this proposal no longer waits for the owner: make a new one with \
+                 jeeta.strategy.proposal_create",
+                json!({ "field": format!("proposals[{i}]"), "status": p.status.key() }),
             ));
         }
         if !outcome.proposals.contains(id) {

@@ -75,9 +75,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (jeeta.strategy.knowledge_get revision) and parts, the derivations you \
                           answer: posting (audience, objective, topics; needs content.work) and \
                           prospecting (prospecting: icp, rubric, segments; needs \
-                          prospects.work). Send only what changed: a topic, segment or ICP entry \
-                          that stays is sent exactly as knowledge_get frame has it (same id, \
-                          key and words); a part listed with nothing else is acknowledged as \
+                          prospects.work). Send only what changed: a topic that stays is sent with \
+                          the same id, title, segment_key, angle and metric as knowledge_get \
+                          frame.topics has it (leave out has_posts, and send cadence only for \
+                          its organic lane); a segment or ICP entry that stays keeps its key and \
+                          words; a part listed with nothing else is acknowledged as \
                           unchanged (applied false) and clears its knowledge_derive item. \
                           Topics: send every topic that should stay, with its id; one left out \
                           gets no new post, is listed under closing while it has planned posts \
@@ -122,8 +124,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           note's own files or links onto a card you file, by its index in \
                           cards), rules (a prohibition the owner states), goals (a goal the \
                           owner states), proposals (ids of proposals you made with \
-                          jeeta.strategy.proposal_create for what you inferred and the owner did \
-                          not say). summary is one line in Turkish the owner reads under the \
+                          jeeta.strategy.proposal_create for this note, after it was written, \
+                          for what you inferred and the owner did not say; each still waiting \
+                          for the owner). summary is one line in Turkish the owner reads under the \
                           note. A note asking for a post (post_request) is refused \
                           not_available for now: dismiss it saying the owner asks for posts on \
                           Paylasimlar. Dismiss ({dismiss: {reason}}, a reason in Turkish that \
@@ -132,7 +135,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           alone: a note asking to change them is dismissed with a reason that \
                           sends the owner to Kurallar. Refusals: CONFLICT filing_removes_text \
                           (keep what the owner wrote), card_changed (read the card again and \
-                          file again), note_withdrawn, not_claimed (claim it again). A filing \
+                          file again), note_withdrawn, not_claimed (claim it again), \
+                          proposal_closed (the owner decided it or it expired); NOT_FOUND \
+                          no_such_proposal (not yours, or made before the note). A filing \
                           that changes a card the frame is derived from makes a \
                           knowledge_derive item: call jeeta.work.pending again after it. \
                           [risk: WRITE]",

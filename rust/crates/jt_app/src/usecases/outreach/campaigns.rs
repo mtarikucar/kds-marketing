@@ -234,7 +234,7 @@ pub async fn campaigns_save(
             refused(
                 ErrorCode::Forbidden,
                 "strategy_required",
-                "a campaign is made under an approved strategy",
+                "a campaign is made under a frame (the knowledge base has a card)",
                 json!({}),
             )
         })?;

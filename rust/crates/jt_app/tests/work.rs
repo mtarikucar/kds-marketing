@@ -171,7 +171,10 @@ async fn an_empty_knowledge_base_asks_the_person_who_keeps_it_for_a_card() {
         declare.hint
     );
     for i in &out.items {
-        assert!(i.hint.is_ascii() && !i.hint.is_empty(), "{i:?}");
+        assert!(
+            i.hint.is_ascii() && !i.hint.is_empty() && !i.hint.contains("  "),
+            "{i:?}"
+        );
     }
     // An agent's key, even with team.manage, is not asked to write the owner's cards.
     let key = w.agent(&["workspace.read", "team.manage"]).await;

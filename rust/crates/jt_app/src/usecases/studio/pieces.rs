@@ -567,7 +567,7 @@ async fn unchanged(
     if super::library::person(ctx).is_none() && person_keeps(r, s).await? {
         return Err(AppError {
             code: crate::error::ErrorCode::Conflict,
-            message: "a person approved this piece as it is: leave it. Only a person's request                       for a change (Düzenleme iste) lets an agent replace it"
+            message: "a person approved this piece as it is: leave it. Only a person's request for a change (Duzenleme iste) lets an agent replace it"
                 .into(),
             details: json!({"reason":"approved_piece","slot_id":s.id,"revision":s.revision}),
         });

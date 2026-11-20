@@ -695,7 +695,7 @@ async fn the_owner_is_asked_for_a_first_card_and_for_each_proposal() {
     assert!(out.knowledge.frame.is_some());
     assert!(!out.items.iter().any(|i| i.kind == WorkKind::KnowledgeEmpty));
     for i in &out.items {
-        assert!(i.hint.is_ascii(), "{i:?}");
+        assert!(i.hint.is_ascii() && !i.hint.contains("  "), "{i:?}");
     }
 }
 
@@ -918,4 +918,89 @@ async fn a_post_request_outcome_waits_for_the_composer() {
         (e.code, reason(&e), e.details["field"].as_str()),
         (ErrorCode::Validation, "not_available", Some("post_request"))
     );
+}
+
+/// A note is filed as "Onerilere eklendi" only with a proposal this connection made for it that
+/// still waits for the owner (design §4.8): one made before the note is refused `no_such_proposal`,
+/// one the owner skipped `proposal_closed`; a fresh pending one files it.
+#[tokio::test]
+async fn a_note_is_filed_into_proposals_only_while_they_wait() {
+    let w = derived_world().await;
+    let (_, content) = agent(&w, "content", &["workspace.read", "content.work"]).await;
+    let earlier = Ctx {
+        now: FIXED_NOW - Duration::minutes(5),
+        ..content.clone()
+    };
+    let old = propose(&w, &earlier, "old", "Eski bir öneri.").await;
+    let n = note_add(&w.deps, &w.owner_ctx, note("n1", "Kargo süresini yaz."))
+        .await
+        .unwrap();
+    let claim = note_claim(
+        &w.deps,
+        &content,
+        NoteClaimInput {
+            note_id: n.id,
+            expected_revision: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let skipped = propose(&w, &content, "skipped", "Kargo üç günde gelir.").await;
+    jt_app::usecases::knowledge::proposals::proposal_skip(&w.deps, &w.owner_ctx, skipped.id)
+        .await
+        .unwrap();
+    let fresh = propose(&w, &content, "fresh", "Kargo iki günde gelir.").await;
+    let file = |key: &'static str, id| {
+        note_file(
+            &w.deps,
+            &content,
+            NoteFileInput {
+                note_id: n.id,
+                claim_token: claim.claim_token.clone(),
+                request_key: Some(key.into()),
+                summary: Some("Önerilere eklendi.".into()),
+                cards: Vec::new(),
+                attachments: Vec::new(),
+                rules: Vec::new(),
+                goals: Vec::new(),
+                post_request: None,
+                proposals: vec![id],
+                dismiss: None,
+            },
+        )
+    };
+    let e = err(file("f-old", old.id).await);
+    assert_eq!(
+        (e.code, reason(&e), e.details["field"].as_str()),
+        (
+            ErrorCode::NotFound,
+            "no_such_proposal",
+            Some("proposals[0]")
+        )
+    );
+    let e = err(file("f-skipped", skipped.id).await);
+    assert_eq!(
+        (e.code, reason(&e), e.details["status"].as_str()),
+        (ErrorCode::Conflict, "proposal_closed", Some("skipped"))
+    );
+    assert!(e.message.is_ascii());
+    let filed = file("f-fresh", fresh.id).await.unwrap();
+    assert_eq!(filed.outcome.unwrap().proposals, [fresh.id]);
+}
+
+async fn propose(w: &World, at: &Ctx, key: &str, body: &str) -> jt_knowledge::Proposal {
+    proposal_create(
+        &w.deps,
+        at,
+        ProposalCreateInput {
+            request_key: key.into(),
+            kind: ProposalKind::CardNew,
+            card_id: None,
+            title: Some(format!("Kart {key}")),
+            body: body.into(),
+            reason: "Sahibi sordu.".into(),
+        },
+    )
+    .await
+    .unwrap()
 }

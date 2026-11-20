@@ -874,7 +874,7 @@ async fn pending_as_seen(
                         overdue: s.overdue,
                     },
                     priority: if s.overdue { 1 } else { 2 },
-                    hint: "This slot needs its piece: it has none, a person asked for a change, or                            the material check holds it. Read jeeta.studio.slot_get and submit                            the piece with jeeta.studio.piece_submit."
+                    hint: "This slot needs its piece: it has none, a person asked for a change, or the material check holds it. Read jeeta.studio.slot_get and submit the piece with jeeta.studio.piece_submit."
                         .into(),
                 }),
         );

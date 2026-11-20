@@ -24,6 +24,9 @@ async fn agent_absent_leaves_work_pending_and_overdue_visible() {
     let mut late = w.ctx.clone();
     late.now += Duration::days(2);
     let first = work::pending(&w.d, &late).await.unwrap();
+    for i in &first.items {
+        assert!(i.hint.is_ascii() && !i.hint.contains("  "), "{i:?}");
+    }
     assert!(first.items.iter().any(
         |i| matches!(i.kind,WorkKind::StudioSlot{slot_id,overdue:true} if slot_id==planned.id)
     ));
