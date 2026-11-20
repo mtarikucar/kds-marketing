@@ -1,7 +1,6 @@
-import { LegacyRedirect, MaterialsRedirect } from '@/layout/LegacyRedirect';
+import { LegacyRedirect } from '@/layout/LegacyRedirect';
 import { UsersPage } from '@/pages/UsersPage';
-import { ContentPage } from '@/pages/content/ContentPage';
-import { SocialPage } from '@/pages/social/SocialPage';
+import { PostsPage } from '@/pages/PostsPage';
 import { AdsPage } from '@/pages/ads/AdsPage';
 import { BillingPage } from '@/pages/BillingPage';
 import { OnboardingPage } from '@/pages/OnboardingPage';
@@ -116,13 +115,15 @@ export const routes: RouteObject[] = [
           { path: 'agents', element: <AgentsPage /> },
           { path: 'ledger', element: <LegacyRedirect to="/" /> },
           { path: 'users', element: <UsersPage /> },
-          // One page for the library and the contents (design 2026-11-18). It opens with either
-          // module: the library comes with content, social and ads; contents need content.
-          { path: 'content', element: <ModuleGate moduleId={['content', 'materials']}><ContentPage /></ModuleGate> },
-          { path: 'social', element: <ModuleGate moduleId="social"><SocialPage /></ModuleGate> },
+          // Paylaşımlar (design 2026-11-19 §2): one page for the posts, the contents they are made
+          // of and the library. It opens with any of the three modules (the library comes with
+          // content, social and ads); the old pages' addresses land on it with their query mapped.
+          { path: 'posts', element: <ModuleGate moduleId={['content', 'social', 'materials']}><PostsPage /></ModuleGate> },
+          { path: 'content', element: <LegacyRedirect page="content" /> },
+          { path: 'social', element: <LegacyRedirect page="social" /> },
           { path: 'ads', element: <ModuleGate moduleId="ads"><AdsPage /></ModuleGate> },
-          { path: 'materials', element: <MaterialsRedirect /> },
-          { path: 'studio', element: <LegacyRedirect /> },
+          { path: 'materials', element: <LegacyRedirect page="materials" /> },
+          { path: 'studio', element: <LegacyRedirect page="studio" /> },
         ],
       },
       { path: '*', element: <NotFoundPage /> },

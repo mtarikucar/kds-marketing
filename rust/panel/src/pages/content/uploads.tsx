@@ -9,10 +9,11 @@ import { Button, IconButton } from '@/components/ui';
 import { captureTime } from '@/lib/capture';
 import { useStudioKey } from '../StudioShared';
 import { materialsErrorText } from '../materials/MaterialsShared';
-import { placeHref } from './location';
+import { placeHref } from '../posts/location';
+import { POSTS_KEY } from '../posts/queries';
 
 /** What the file store takes (`studio.file_upload`), and up to which size. */
-const LIMITS: Record<string, number> = {
+export const LIMITS: Record<string, number> = {
   'image/jpeg': 25_000_000,
   'image/png': 25_000_000,
   'image/webp': 25_000_000,
@@ -29,6 +30,23 @@ interface Item {
   status: Status;
   fileId?: string;
   error?: unknown;
+}
+
+/** Whether the file store takes `file` (its type and size). */
+export function fileAccepted(file: File): boolean {
+  const limit = LIMITS[file.type];
+  return !!limit && file.size > 0 && file.size <= limit;
+}
+
+/** Puts `file` in the file store (`studio.file_upload`) under `key`; a retry with the same key replays. */
+export async function uploadFile(file: File, key: string): Promise<string> {
+  const out = await fileUpload({
+    filename: file.name || 'dosya',
+    mime: file.type,
+    request_key: key,
+    content: { kind: 'bytes_base64', data: await toBase64(file) },
+  });
+  return out.id;
 }
 
 function toBase64(file: File): Promise<string> {
@@ -48,12 +66,13 @@ export function useUploads() {
 }
 
 /**
- * The page's uploads (design 2026-11-18, the owner's rule): a button and a drop anywhere on the
- * page, several files at once, no form. Every file goes in unfiled (`studio.material_add` with
- * no olay, no genel, no share permission) and waits in "Analiz sırası"; the agent's analysis
- * describes it, labels it and files it. That holds wherever the person is looking when they drop.
+ * The library's uploads (design 2026-11-18, the owner's rule): a button, several files at once, no
+ * form, and with `dropAnywhere` a drop anywhere on the page. Every file goes in unfiled
+ * (`studio.material_add` with no olay, no genel, no share permission) and waits in the analysis
+ * queue; the agent's analysis describes it, labels it and files it. On Paylaşımlar a drop on the
+ * page goes to the composer instead (design 2026-11-19 §2.8), so Dosyalar' `Yükle` takes none.
  */
-export function UploadProvider({ enabled, children }: { enabled: boolean; children: ReactNode }) {
+export function UploadProvider({ enabled, dropAnywhere = true, children }: { enabled: boolean; dropAnywhere?: boolean; children: ReactNode }) {
   const { t } = useTranslation();
   const client = useQueryClient();
   const studioKey = useStudioKey();
@@ -69,16 +88,7 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
     async (item: Item) => {
       patch(item.key, { status: 'uploading', error: undefined });
       try {
-        const fileId =
-          item.fileId ??
-          (
-            await fileUpload({
-              filename: item.file.name || 'dosya',
-              mime: item.file.type,
-              request_key: item.key,
-              content: { kind: 'bytes_base64', data: await toBase64(item.file) },
-            })
-          ).id;
+        const fileId = item.fileId ?? (await uploadFile(item.file, item.key));
         item.fileId = fileId;
         const captured = await captureTime(item.file).catch(() => null);
         await m.materialAdd({
@@ -88,7 +98,7 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
           ...(captured ? { captured_at: captured.toISOString() } : {}),
         });
         patch(item.key, { status: 'added', fileId });
-        await client.invalidateQueries({ queryKey: studioKey });
+        await Promise.all([client.invalidateQueries({ queryKey: studioKey }), client.invalidateQueries({ queryKey: POSTS_KEY })]);
       } catch (error) {
         patch(item.key, { status: 'failed', error, fileId: item.fileId });
       }
@@ -107,14 +117,11 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
   const add = useCallback(
     (files: FileList | File[] | null) => {
       if (!enabled || !files?.length) return;
-      const fresh: Item[] = Array.from(files).map((file) => {
-        const limit = LIMITS[file.type];
-        return {
-          key: crypto.randomUUID(),
-          file,
-          status: limit && file.size > 0 && file.size <= limit ? 'waiting' : 'refused',
-        };
-      });
+      const fresh: Item[] = Array.from(files).map((file) => ({
+        key: crypto.randomUUID(),
+        file,
+        status: fileAccepted(file) ? 'waiting' : 'refused',
+      }));
       setItems((list) => [...list, ...fresh]);
       queue.current.push(...fresh.filter((i) => i.status === 'waiting'));
       void drain();
@@ -129,7 +136,7 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
 
   // The whole page takes a drop of files.
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !dropAnywhere) return;
     let depth = 0;
     const files = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
     const enter = (e: DragEvent) => {
@@ -165,7 +172,7 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
       window.removeEventListener('dragleave', leave);
       window.removeEventListener('drop', drop);
     };
-  }, [add, enabled]);
+  }, [add, enabled, dropAnywhere]);
 
   const busy = items.some((i) => i.status === 'waiting' || i.status === 'uploading');
   const added = items.filter((i) => i.status === 'added').length;
@@ -244,7 +251,7 @@ export function UploadProvider({ enabled, children }: { enabled: boolean; childr
             ))}
           </ul>
           {added > 0 && (
-            <Link className="inline-flex min-h-9 items-center text-sm text-primary underline" to={placeHref({ view: 'queue' })}>
+            <Link className="inline-flex min-h-9 items-center text-sm text-primary underline" to={placeHref({ files: true, queue: true })}>
               {t('content.upload.openQueue')}
             </Link>
           )}

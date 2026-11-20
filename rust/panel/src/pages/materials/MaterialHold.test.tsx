@@ -53,12 +53,12 @@ const base = {
 
 describe('Material check hold component', () => {
   it.each([
-    ['other_olay', 'Bu materyal başka bir olaya ait.'],
+    ['other_olay', 'Bu dosya başka bir kategoriye ait.'],
     ['out_of_season', 'Sezon penceresinin dışında.'],
     ['share_unset', 'Paylaşım izni verilmedi.'],
-    ['no_material', 'Bu parça hiçbir materyale dayanmıyor.'],
-    ['olay_unconfirmed', 'Bağlı olduğu olay henüz onaylanmadı.'],
-    ['names_other_olay', 'Metin başka bir olayın adını, yerini veya müşterisini anıyor.'],
+    ['no_material', 'Bu paylaşım hiçbir dosyaya dayanmıyor.'],
+    ['olay_unconfirmed', 'Bağlı olduğu kategori henüz onaylanmadı.'],
+    ['names_other_olay', 'Metin başka bir kategorinin adını, yerini ya da müşterisini anıyor.'],
   ])('says %s in plain Turkish', async (code, sentence) => {
     mockFetch({
       ...base,
@@ -66,11 +66,11 @@ describe('Material check hold component', () => {
     });
     renderMaterialHold();
     const hold = await screen.findByTestId('material-hold-s1');
-    expect(within(hold).getByText('Materyal kontrolü bu içeriği durduruyor')).toBeInTheDocument();
+    expect(within(hold).getByText('Dosya kontrolü bu içeriği durduruyor')).toBeInTheDocument();
     expect(within(hold).getByText(sentence, { exact: false })).toBeInTheDocument();
-    expect(within(hold).getByRole('link', { name: 'Materyali aç' })).toHaveAttribute(
+    expect(within(hold).getByRole('link', { name: 'Dosyayı aç' })).toHaveAttribute(
       'href',
-      '/content?file=m1',
+      '/posts?files=1&file=m1',
     );
   });
 
@@ -95,7 +95,7 @@ describe('Material check hold component', () => {
     // A hard finding is never released.
     expect(within(hold).queryByRole('button', { name: 'Metni bu hâliyle yayınla' })).not.toBeInTheDocument();
     await userEvent.click(within(hold).getByRole('link', { name: 'Çekim listesini aç' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/content'));
+    await waitFor(() => expect(`${router.state.location.pathname}${router.state.location.search}`).toBe('/posts?f=you'));
   });
 
   it('lets an owner release caption findings with the digest the check shows', async () => {
@@ -118,7 +118,7 @@ describe('Material check hold component', () => {
     });
     renderMaterialHold();
     const hold = await screen.findByTestId('material-hold-s1');
-    expect(within(hold).getByText(/Metindeki tarih olayın günlerinin dışında\. \(“16 kasım”\)/)).toBeInTheDocument();
+    expect(within(hold).getByText(/Metindeki tarih kategorinin günlerinin dışında\. \(“16 kasım”\)/)).toBeInTheDocument();
     await userEvent.click(await within(hold).findByRole('button', { name: 'Metni bu hâliyle yayınla' }));
     const dialog = await screen.findByRole('dialog', { name: 'Metin bu hâliyle yayınlansın mı?' });
     await userEvent.click(within(dialog).getByRole('button', { name: 'Yayınlanabilir' }));
@@ -139,7 +139,7 @@ describe('Material check hold component', () => {
     });
     renderMaterialHold();
     const hold = await screen.findByTestId('material-hold-s1');
-    expect(within(hold).getByText(/olayın yılı metinde geçmiyor/)).toBeInTheDocument();
+    expect(within(hold).getByText(/kategorinin yılı metinde geçmiyor/)).toBeInTheDocument();
     expect(within(hold).queryByRole('button', { name: 'Metni bu hâliyle yayınla' })).not.toBeInTheDocument();
   });
 });

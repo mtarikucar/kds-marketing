@@ -201,9 +201,9 @@
     "connect": "Connect an account",
     "empty": "No social accounts connected yet.",
     "back": "Back to accounts",
-    "paused": "Paused",
+    "paused": "Stopped",
     "locked": "Connection unavailable",
-    "pause": "Pause posting",
+    "pause": "Stop posting",
     "resume": "Resume posting",
     "period": "Period",
     "days": "{{count}} days",
@@ -219,17 +219,17 @@
     "strays": "Scheduled at the platform, not known to Jeeta",
     "straysHelp": "These posts are in the platform’s own scheduler but are not among the posts Jeeta left there: scheduled by hand, or left by a hand-over whose outcome was never learnt. Jeeta does not follow them or take them back; delete them on the platform’s own screen if they should not go out.",
     "noRecent": "Nothing published yet.",
-    "materials": "{{count}} materials",
+    "materials": "{{count}} files",
     "unknownAccount": "Social account",
     "noSuitableAccount": "No suitable account yet.",
     "blocked": {
-      "material_removed": "A file of this version was deleted. Ask for a revision with a new file.",
+      "material_removed": "A file of this post was deleted. Ask for changes with a new file.",
       "no_approved_strategy": "The knowledge base is empty; no post can be planned. It goes on by itself once you write in it.",
       "no_connected_account": "No social account is connected and working. Connect one or renew its connection.",
       "account_paused": "Posting is paused on the accounts that could take it. Resume one and the agent picks a time.",
-      "its_account_unavailable": "The account this version was made for cannot take a post now.",
+      "its_account_unavailable": "The account this post was made for cannot take a post now.",
       "format_not_supported": "None of the connected accounts takes this format.",
-      "media_not_accepted": "This version's files do not suit the account's platform (TikTok, for one, takes only video). Ask for a revision with a fitting file.",
+      "media_not_accepted": "This post's files do not suit the account's platform (TikTok, for one, takes only video). Ask for changes with a fitting file.",
       "hypothesis_does_not_post": "No topic posts on this account right now; it goes on by itself once the agents update the topics.",
       "knowledge_empty": "The knowledge base is empty; no post can be planned. It goes on by itself once you write in it.",
       "braked": "All posting is stopped; it goes on by itself once you resume."
@@ -258,16 +258,16 @@
     "noTitle": "No text yet",
     "noPiece": "This post’s text and visuals are not ready yet.",
     "missingPost": "This post is not in the lists",
-    "missingVersion": "This version no longer waits for a time: it was given one, or its content changed.",
-    "fixPaused": "Open the paused account",
+    "missingVersion": "This post no longer waits for a time: it was given one, or its content changed.",
+    "fixPaused": "Open the stopped account",
     "onAccount": "To {{account}}",
     "scheduleAtSuggestion": "Give the time: {{at}}",
     "suggestionsHelp": "Suggested: the account’s usual posting time, on the first days with no post of this kind.",
     "otherTime": "Another time",
     "scheduled": "Time given; the post is in the queue.",
-    "delivered": "Package delivered: {{at}}",
+    "delivered": "Content prepared: {{at}}",
     "agentGivesTime": "On its next run the agent gives it an account and a time; give it yourself if you do not want to wait. The posting rules still apply.",
-    "pausedSwitch": "Pause",
+    "pausedSwitch": "Stop",
     "needsApproval": "Every post waits for approval",
     "active": "Posting on",
     "today": "Today",
@@ -302,17 +302,17 @@
       "tiktok_other": "TikTok posts to finish",
       "failed_one": "post not sent",
       "failed_other": "posts not sent",
-      "times_one": "version waits for a time",
-      "times_other": "versions wait for a time",
-      "blocked_one": "version no account can take",
-      "blocked_other": "versions no account can take"
+      "times_one": "post waits for a time",
+      "times_other": "posts wait for a time",
+      "blocked_one": "post no account can take",
+      "blocked_other": "posts no account can take"
     },
     "filtered": {
       "approvals": "Only posts waiting for approval.",
       "tiktok": "Only TikTok posts to finish.",
       "failed": "Only posts that could not be sent.",
-      "times": "Only versions waiting for a time.",
-      "blocked": "Only versions no account can take."
+      "times": "Only posts waiting for a time.",
+      "blocked": "Only posts no account can take."
     },
     "refusal": {
       "lead_too_short": "closer than the preparation lead",
@@ -321,12 +321,12 @@
       "cap_per_day": "the account’s daily limit is full that day",
       "spacing": "too close to another post on the account",
       "format_unsupported": "the account does not take this format",
-      "media_count": "the number of materials does not fit the format",
-      "media_type": "a material’s type does not fit the format",
-      "version_already_scheduled": "this version already has a time",
+      "media_count": "the number of files does not fit the format",
+      "media_type": "a file’s type does not fit the format",
+      "version_already_scheduled": "this post already has a time",
       "area_redo_open": "a change was asked for in the content",
-      "version_made_for_another_account": "the version was made for another account",
-      "account_paused": "posting is paused on the account"
+      "version_made_for_another_account": "the post was made for another account",
+      "account_paused": "posting is stopped on the account"
     },
     "rules": {
       "limits": "Daily limits",
@@ -348,14 +348,14 @@
       "format": "{{format}}: preparation starts {{lead}} hours ahead; it may go out up to {{grace}} hours late",
       "floor_one": "After {{count}} day with no post on a channel, one general post is asked for",
       "floor_other": "After {{count}} days with no post on a channel, one general post is asked for",
-      "debounce_one": "A plan is asked for {{count}} minute after materials stop arriving",
-      "debounce_other": "A plan is asked for {{count}} minutes after materials stop arriving",
+      "debounce_one": "A plan is asked for {{count}} minute after files stop arriving",
+      "debounce_other": "A plan is asked for {{count}} minutes after files stop arriving",
       "horizon_one": "Posts are planned at most {{count}} day ahead",
       "horizon_other": "Posts are planned at most {{count}} days ahead",
       "horizonInvalid": "The horizon must be 1–90 days and no shorter than any format’s preparation lead.",
       "providerOn": "On platforms with a scheduler, a post is left with the platform’s own scheduler before its time",
       "providerOff": "Jeeta sends every post at its time; the platform’s scheduler is not used",
-      "paused": "Accounts with posting paused: {{accounts}}. The pause is on the account’s own view.",
+      "paused": "Accounts with posting stopped: {{accounts}}. Stop and resume them in Accounts.",
       "stale": "The settings changed meanwhile; the current values are shown. Make your change again."
     },
     "needsScreen": "Every post waits for the TikTok screen",
@@ -2772,76 +2772,76 @@
       "corporate_ref": "Corporate reference"
     },
     "role": {
-      "anchor": "Anchor material",
+      "anchor": "Anchor file",
       "support": "Supporting visual"
     },
     "finding": {
-      "erased": "This material was deleted.",
+      "erased": "This file was deleted.",
       "share_unset": "No share permission was given.",
-      "not_shareable": "This material is marked not shareable.",
+      "not_shareable": "This file is marked not shareable.",
       "sensitive_needs_human": "It shows something that needs permission; an owner or manager must give the share permission.",
       "product_only_shows_person": "Marked product only, but it shows a face, a name or a child, or names a person; nothing hides them yet.",
       "quality": "Its quality is not marked “publishable”.",
-      "olay_missing": "Its event was not found.",
-      "olay_unconfirmed": "Its event is not confirmed yet.",
+      "olay_missing": "Its category was not found.",
+      "olay_unconfirmed": "Its category is not confirmed yet.",
       "out_of_season": "Outside the season window.",
-      "use_archive": "Last season's material: usable only as last year's content (archive).",
-      "archive_not_season": "Only season or special-day material can be used as an archive.",
+      "use_archive": "Last season's file: usable only as last year's content (archive).",
+      "archive_not_season": "Only a season or special-day file can be used as an archive.",
       "not_freed": "It was not made “usable as general” for general content.",
-      "other_olay": "This material belongs to another event.",
-      "genel_generic_only": "A general material can only be used in content about no specific event.",
+      "other_olay": "This file belongs to another category.",
+      "genel_generic_only": "A general file can only be used in content about no specific category.",
       "ai_not_anchor": "An AI image cannot anchor content; it can only be a supporting visual.",
-      "ai_olay_past": "The event is over, so this AI image can no longer announce it.",
-      "no_material": "This piece rests on no material.",
-      "no_eligible_material": "This piece shows no eligible anchor material.",
-      "names_other_olay": "The text names another event's title, place or client.",
-      "names_material_context": "In general content, the text names the title, place or client of the material's event.",
-      "date_outside_olay": "The text's date is outside the event's days.",
-      "date_in_generic": "In general content, the text names a day of the material's event.",
-      "archive_year_missing": "In last year's content, the event's year is missing from the text.",
-      "client_named_product_only": "The client is named although the material is product-only.",
-      "source_permission_restricted": "The material this visual was made from has no share permission.",
-      "material_not_in_area": "This material was not added to the production area.",
-      "material_not_found": "The material was not found.",
+      "ai_olay_past": "The category's dates are over, so this AI image can no longer announce it.",
+      "no_material": "This post rests on no file.",
+      "no_eligible_material": "This post shows no eligible anchor file.",
+      "names_other_olay": "The text names another category's title, place or client.",
+      "names_material_context": "In general content, the text names the title, place or client of the file's category.",
+      "date_outside_olay": "The text's date is outside the category's days.",
+      "date_in_generic": "In general content, the text names a day of the file's category.",
+      "archive_year_missing": "In last year's content, the category's year is missing from the text.",
+      "client_named_product_only": "The client is named although the file is product-only.",
+      "source_permission_restricted": "The file this visual was made from has no share permission.",
+      "material_not_in_area": "This file was not added to the content.",
+      "material_not_found": "The file was not found.",
       "media_count": "This format does not take this many images or videos.",
       "media_type": "This format and account do not take this kind of file.",
       "account_refused": "The chosen account is not ready to post or does not take this format.",
-      "hypothesis_not_in_approved_strategy": "The content is not tied to a goal of the approved strategy.",
-      "unknown": "The material check holds this piece ({{code}})."
+      "hypothesis_not_in_approved_strategy": "The post is not tied to one of the agents' topics.",
+      "unknown": "A check holds this post ({{code}})."
     },
     "error": {
       "owner_or_manager_human": "Only an owner or manager can decide this, in the panel.",
       "human_required": "A person must decide this in the panel.",
       "share_required": "Choose the share permission.",
-      "olay_or_genel": "Choose an event, or make the material general.",
+      "olay_or_genel": "Choose a category, or make the file general.",
       "file_has_material": "This file is already in the library.",
-      "duplicate_material_file": "These bytes are already a material in the library (or were one, then deleted): one photo is one material.",
-      "material_erased": "This material was deleted; it cannot change.",
-      "genel_stays_freed": "A general material stays usable as general; move it to an event first to take that back.",
-      "ai_material": "Only a real material can be made usable as general.",
-      "already_confirmed": "This event is already confirmed.",
+      "duplicate_material_file": "These bytes are already a file in the library (or were one, then deleted): one photo is one file.",
+      "material_erased": "This file was deleted; it cannot change.",
+      "genel_stays_freed": "A general file stays usable as general; move it to a category first to take that back.",
+      "ai_material": "Only a real file can be made usable as general.",
+      "already_confirmed": "This category is already confirmed.",
       "already_resolved": "This request is already closed.",
       "closes_itself": "This request closes itself once its condition holds.",
       "not_a_monday": "A week starts on a Monday.",
       "request_key_taken": "This request was already added.",
       "depicts_required": "An AI image must say what it shows.",
-      "not_a_material": "Every visual of a piece must be a material of the library.",
-      "no_eligible_material": "This piece shows no eligible anchor material.",
-      "subject_required": "Choose what the piece is about.",
-      "material_refused": "One of the chosen materials cannot be used here:",
+      "not_a_material": "Every visual of a post must be a file of the library.",
+      "no_eligible_material": "This post shows no eligible anchor file.",
+      "subject_required": "Choose what the post is about.",
+      "material_refused": "One of the chosen files cannot be used here:",
       "out_of_range": "The year must be between 2000 and 2100.",
       "revision_changed": "The piece changed while you looked; refresh and try again.",
       "slot_not_ready": "Only a ready piece can be published with its text as it is.",
-      "hard_findings_not_releasable": "Material problems cannot be released: change the material or the piece.",
+      "hard_findings_not_releasable": "File problems cannot be released: change the file or the content.",
       "no_caption_findings": "There is no text finding to release.",
       "findings_changed": "The findings changed while you looked; refresh and look again.",
       "stale": "This record changed while you looked; refresh and try again.",
-      "material_revision_changed": "The material changed. Load the current details and try again.",
-      "analysis_in_progress": "An agent is reviewing this material. Try again once analysis finishes.",
+      "material_revision_changed": "The file changed. Load the current details and try again.",
+      "analysis_in_progress": "An agent is reviewing this file. Try again once the review finishes.",
       "analysis_claim_expired": "The analysis session expired. Queue it again.",
       "analysis_not_pending": "The analysis state changed. Load the current details.",
       "production_failed": "Production could not finish. Review the instructions and create a new request.",
-      "source_changed": "The source material changed. Create a new request with the current material.",
+      "source_changed": "The source file changed. Create a new request with the current file.",
       "production_not_pending": "The production request changed. Load the current details.",
       "production_claim_expired": "The production session expired. Review the request.",
       "story_image_jpeg_only": "A story image must be a JPEG: save the photo as JPEG and upload it again.",
@@ -2854,7 +2854,7 @@
     "invalid": {
       "media": "The file was refused: it must be JPEG, PNG, WebP, GIF (up to 25 MB) or MP4 (up to 200 MB).",
       "title": "The title must be 1–120 characters.",
-      "dates": "The end cannot be before the start; an event lasts at most 366 days.",
+      "dates": "The end cannot be before the start; a category lasts at most 366 days.",
       "place": "The place can be at most 120 characters.",
       "notes": "Notes can be at most 2000 characters.",
       "client": "The client / organisation can be at most 120 characters.",
@@ -2868,7 +2868,7 @@
       "week_start": "A week must start on a Monday.",
       "year": "The year must be between 2000 and 2100.",
       "people": "The people list is invalid (at most 50).",
-      "binding": "A real material becomes general only by being made usable as general.",
+      "binding": "A real file becomes general only by being made usable as general.",
       "share": "Only a person can give this share permission.",
       "revision": "The record changed; refresh and try again.",
       "request_key": "The request key is invalid; refresh the page and try again."
@@ -2886,23 +2886,23 @@
       "place": "Place",
       "organization": "Client / organisation",
       "notes": "Notes",
-      "oneDayHint": "Leave the end empty for a one-day event.",
+      "oneDayHint": "Leave the end empty for a one-day category.",
       "awaiting": "Awaiting confirmation",
       "confirm": "Confirm",
-      "new": "New event",
+      "new": "New category",
       "edit": "Edit",
-      "create": "Create the event",
+      "create": "Create the category",
       "save": "Save"
     },
     "editor": {
       "origin": "Origin",
       "real": "Real footage",
       "aiBy": "AI ({{generator}})",
-      "binding": "Event",
-      "unknownOlay": "Unknown event",
+      "binding": "Category",
+      "unknownOlay": "Unknown category",
       "captured": "Taken",
       "added": "Added",
-      "erasedHelp": "This material was deleted: its file is gone, its title and tags cleared. Its record stays only to show where it was used.",
+      "erasedHelp": "This file was deleted: its bytes are gone, its title and tags cleared. Its record stays only to show where it was used.",
       "tags": "Tags and quality",
       "suggestedHelp": "These tags are an agent's suggestion; no one has reviewed them yet. Check and confirm them.",
       "confirmTags": "Confirm the tags",
@@ -2913,34 +2913,34 @@
       "permissionManagerOnly": "Only an owner or manager can change the share permission.",
       "savePermission": "Save the permission",
       "free": "Usable as general",
-      "freeHelp": "A material usable as general may also appear in content about no specific event; never in another event's content.",
+      "freeHelp": "A file usable as general may also appear in content about no specific category; never in another category's content.",
       "freedAt": "Usable as general ({{at}})",
       "makeFree": "Make usable as general",
       "unfree": "Take back",
-      "genelStaysFreed": "A general material stays usable as general; move it to an event first to take that back.",
-      "bind": "Move to another event",
-      "bindHelp": "If the material was tied to the wrong event, choose the right one.",
-      "bindTo": "Event",
+      "genelStaysFreed": "A general file stays usable as general; move it to a category first to take that back.",
+      "bind": "Move to another category",
+      "bindHelp": "If the file was tied to the wrong category, choose the right one.",
+      "bindTo": "Category",
       "move": "Move",
-      "delete": "Delete the material",
+      "delete": "Delete the file",
       "deleteHelp": "The file is deleted; this cannot be undone.",
-      "deleteTitle": "Delete this material?",
+      "deleteTitle": "Delete this file?",
       "deleteKvkk": "As KVKK requires, the file itself (its bytes) is deleted and its title, tags and people are cleared. Its record stays as evidence of the content it was used in.",
       "deleteUsed": "Posts already published stay on their provider: remove them yourself from the “Where it was used” links.",
       "deleteConfirm": "Delete",
       "deleteCancel": "Cancel",
       "workbench": {
-        "sections": "Material sections",
+        "sections": "File sections",
         "review": "Tags and people",
         "publishing": "Permission and location",
         "history": "Usage history",
         "reviewHelp": "Review the content and the people shown. Save each section separately.",
-        "publishingHelp": "Decide where this material can be used. Sharing permission and event assignment are separate decisions."
+        "publishingHelp": "Decide where this file can be used. Sharing permission and category assignment are separate decisions."
       }
     },
     "people": {
       "title": "People shown",
-      "help": "The people the material shows. When a person's data is erased, the materials showing them are erased too (KVKK).",
+      "help": "The people the file shows. When a person's data is erased, the files showing them are erased too (KVKK).",
       "none": "No one added.",
       "unnamed": "Person",
       "remove": "Remove",
@@ -2958,8 +2958,8 @@
     "calendar": {
       "year": "Year",
       "needsDates": "Dates needed",
-      "undated_one": "{{count}} day of {{year}} has no dates; its material is not used until they're entered.",
-      "undated_other": "{{count}} days of {{year}} have no dates; their material is not used until they're entered.",
+      "undated_one": "{{count}} day of {{year}} has no dates; its file is not used until they're entered.",
+      "undated_other": "{{count}} days of {{year}} have no dates; their files are not used until they're entered.",
       "off": "Off",
       "edited": "Edited",
       "leadIs": "Prepared {{days}} days ahead",
@@ -2987,13 +2987,13 @@
       }
     },
     "policy": {
-      "title": "Material rules",
+      "title": "File rules",
       "lead": "Lead (days)",
-      "leadHelp": "How many days before a season or event materials are asked for.",
+      "leadHelp": "How many days before a season or category files are asked for.",
       "reuse": "Reuse gap (days)",
-      "reuseHelp": "The same material is not shown again within this many days.",
+      "reuseHelp": "The same file is not shown again within this many days.",
       "recap": "Recap period (days)",
-      "recapHelp": "For this many days after an event ends, it comes first for recap content.",
+      "recapHelp": "For this many days after a category ends, it comes first for recap content.",
       "aiStandalone": "A visual the agent made may be shared on its own",
       "aiStandaloneHelp": "When on, the agent can prepare content from a visual it made that shows no person, without a real capture; such content may not name a specific event, place or client. When off, every piece of content shows at least one real capture, and the agent's visual is used only beside it.",
       "save": "Save the rules",
@@ -3006,17 +3006,17 @@
       "dismiss": "Not needed"
     },
     "hold": {
-      "title": "The material check is holding this content",
-      "noDetails": "The material check holds this content.",
-      "fixMaterial": "Fix the material (its permission, its event) or the content; these cannot be released.",
+      "title": "The file check is holding this content",
+      "noDetails": "The file check holds this content.",
+      "fixMaterial": "Fix the file (its permission, its category) or the content; these cannot be released.",
       "fixCaption": "Fix the text; or an owner or manager may let it go out as it is.",
-      "openMaterial": "Open the material",
+      "openMaterial": "Open the file",
       "shoots_one": "{{count}} open request on the shot list.",
       "shoots_other": "{{count}} open requests on the shot list.",
       "openShoots": "Open the shot list",
       "release": "Publish the text as it is",
       "releaseTitle": "Publish the text as it is?",
-      "releaseHelp": "These findings are released for this revision of the content only. If the text or the findings change, the check runs again.",
+      "releaseHelp": "These findings are released for the content as it is now only. If the text or the findings change, the check runs again.",
       "releaseConfirm": "Publish as it is"
     },
     "slot": {
@@ -3041,21 +3041,21 @@
       "addLabel": "Add",
       "removeLabel": "Remove label {{label}}",
       "uploadTitle": "Upload, then organize together",
-      "uploadHelp": "Your connected agent reviews images and suggests a description, labels and a group. Choosing an event is optional; you can edit the results later.",
-      "eventOptional": "Link to an event (optional)",
+      "uploadHelp": "Your connected agent reviews images and suggests a description, labels and a group. Choosing a category is optional; you can edit the results later.",
+      "eventOptional": "Link to a category (optional)",
       "shareHelp": "Shareable means available for content creation. Uploading does not publish anything automatically.",
       "optionalTags": "Set labels and quality myself",
-      "pendingHelp": "Analysis starts when your connected agent next runs and picks up the job. While the agent is offline, materials wait for analysis.",
+      "pendingHelp": "The review starts when your connected agent next runs and picks up the job. While the agent is offline, files wait for review.",
       "title": "Content details",
       "description": "What is in this image?",
       "group": "Group",
-      "groupHelp": "Brings similar materials together. It does not confirm that an event took place.",
-      "materialTitle": "Material name",
+      "groupHelp": "Brings similar files together. It does not confirm that an event took place.",
+      "materialTitle": "File name",
       "capturedAt": "Capture date and time (Istanbul)",
       "captureHelp": "Separate from upload time. Left empty when reliable capture information is unavailable.",
       "save": "Save details",
       "retry": "Queue analysis again",
-      "noAnalysis": "This material has not been queued for analysis.",
+      "noAnalysis": "This file has not been queued for review.",
       "pending": "Waiting for agent analysis",
       "running": "Agent is reviewing",
       "completed": "Analysis complete",
@@ -3073,20 +3073,20 @@
       "ungrouped": "Not grouped yet",
       "library": "Library",
       "libraryHelp": "Find images by group; open a material to review and edit its details.",
-      "noResults": "No materials match this search.",
+      "noResults": "No files match this search.",
       "conflict": "These details changed while you were editing. Your draft is preserved. Load the latest values before editing again.",
       "reload": "Discard draft and load current details"
     },
     "production": {
-      "title": "Create a new image from this material",
-      "help": "Request an edit, crop or poster. Production begins when your connected agent picks up the job. The original stays intact; the result is saved as a separate material.",
+      "title": "Create a new image from this file",
+      "help": "Request an edit, crop or poster. Production begins when your connected agent picks up the job. The original stays intact; the result is saved as a separate file.",
       "kind": "What should we create?",
       "edit": "Edit the image",
       "crop": "Crop and reframe",
       "poster": "Create a poster",
       "instructions": "Describe the result you want",
       "submit": "Send production request",
-      "open": "Open the created material",
+      "open": "Open the created file",
       "status": {
         "pending": "Waiting for agent",
         "running": "Agent is working",
@@ -3095,7 +3095,7 @@
         "cancelled": "Cancelled"
       },
       "queued": "Request queued. Progress appears here when your connected agent picks it up.",
-      "sourceChanged": "The source changed. Create a new request using the current material."
+      "sourceChanged": "The source changed. Create a new request using the current file."
     }
   },
   "leads": {
@@ -3802,7 +3802,7 @@
     "settings": {
       "title": "Posting settings",
       "help": {
-        "none": "No approval needed: the material check, the truth check and these limits are the safety.",
+        "none": "No approval needed: the file check, the truth check and these limits are the safety.",
         "all": "Every post waits for your approval; these limits apply as well.",
         "some_one": "Every post on {{accounts}} waits for your approval; the other accounts need none.",
         "some_other": "Every post on {{accounts}} waits for your approval; the other accounts need none.",
@@ -3825,7 +3825,7 @@
       "saved": "Saved.",
       "invalid": "Check the values: hours 0–23, daily limits 1–100, horizon 1–90 days, grace and spacing at most 24 hours.",
       "providerScheduling": "Use the platform's own scheduler",
-      "providerSchedulingHelp": "When on, a post is left ahead of its time with a platform that has a scheduler (for now a Facebook Page: text, link and single-photo posts) and shows as scheduled there. A brake, a pause or “Request changes” takes it back from the platform. When off, Jeeta publishes every post at its time.",
+      "providerSchedulingHelp": "When on, a post is left ahead of its time with a platform that has a scheduler (for now a Facebook Page: text, link and single-photo posts) and shows as scheduled there. Stopping all posting, stopping the account or “Ask for changes” takes it back from the platform. When off, Jeeta publishes every post at its time.",
       "invalidTz": "Time zone not recognised (e.g. Europe/Istanbul).",
       "managerOnly": "Only an owner or manager changes these settings."
     }
@@ -4038,7 +4038,7 @@
     "title": "Content",
     "help": "Drop your files; the agent files them under their event and makes the content. You only look at what waits for you.",
     "genel": "General",
-    "genelHelp": "Files and contents that belong to no particular event",
+    "genelHelp": "Files and contents that belong to no particular category",
     "unknownOlay": "Unknown event",
     "folderSummary": "{{files}} files · {{areas}} contents · {{published}} published",
     "newIn": "New content · {{olay}}",
@@ -4224,13 +4224,13 @@
       "active": "Active",
       "ended": "Ended",
       "always": "Ongoing",
-      "proposedTitle": "The agent proposed this event",
+      "proposedTitle": "The agent proposed this category",
       "proposedHelp": "Its files are not used in contents until you confirm it. Confirm it if it is right; otherwise edit it.",
       "proposedHelpOther": "Its files are not used in contents until it is confirmed. An owner or manager will confirm it.",
-      "newHelp": "An event an owner or manager opens starts confirmed; anyone else's waits for confirmation.",
-      "editHelp": "A change applies to all of the event's files and contents.",
+      "newHelp": "A category an owner or manager opens starts confirmed; anyone else's waits for confirmation.",
+      "editHelp": "A change applies to all of the category's files and contents.",
       "problem": {
-        "title": "Give the event a title.",
+        "title": "Give the category a title.",
         "dates": "Enter a start date; the end cannot be before it.",
         "occasion": "Choose the calendar day."
       },
@@ -4261,7 +4261,7 @@
     },
     "queue": {
       "title": "Analysis queue",
-      "help": "Files that were uploaded and are not in an event yet, or whose analysis runs. After its analysis each file goes into an event.",
+      "help": "Files that were uploaded and are not in a category yet, or whose review runs. After its review each file goes into a category.",
       "empty": "The queue is empty",
       "emptyHelp": "Every file is in a folder.",
       "stage": {
@@ -4271,18 +4271,18 @@
         "failed": "Analysis failed"
       },
       "line": {
-        "waiting": "Queued · its event is found when the agent looks",
+        "waiting": "Queued · its category is found when the agent looks",
         "waitingFiled": "Queued · in its folder, the agent will look",
-        "analysing": "The agent is looking: describing, labelling, finding its event",
+        "analysing": "The agent is looking: describing, labelling, finding its category",
         "analysingFiled": "The agent is looking: describing, labelling",
-        "needs_filing": "The agent could not place this file in an event. Choose a folder or delete the file.",
+        "needs_filing": "The agent could not place this file in a category. Choose a category or delete the file.",
         "failed": "The analysis did not complete; you can retry.",
         "noAgent": "No agent connected · analysed in turn once one connects"
       },
-      "fileInto": "Choose the event",
-      "choose": "Choose an event",
+      "fileInto": "Choose a category",
+      "choose": "Choose a category",
       "file": "File it",
-      "managerFiles": "An owner or manager chooses its event or deletes the file.",
+      "managerFiles": "An owner or manager chooses its category or deletes the file.",
       "erase": "Delete the file",
       "agent": {
         "none": "No connected agent can analyse files; they wait in the queue until one connects.",
@@ -4295,7 +4295,7 @@
       "title": "File",
       "help": "The file's description, labels, share permission and where it was used.",
       "open": "Open the file",
-      "unfiled": "Not in an event yet · in the analysis queue",
+      "unfiled": "Not in a category yet · waiting for review",
       "usedIn_one": "in {{count}} content",
       "usedIn_other": "in {{count}} contents",
       "usedInTitle": "Contents that use it",
@@ -4305,19 +4305,19 @@
     "upload": {
       "button": "Upload files",
       "drop": "Drop them, the agent does the rest",
-      "dropHelp": "Files go to the analysis queue; the agent files each under its event.",
+      "dropHelp": "Files go into the review queue; the agent files each under its category.",
       "tray": "Uploads",
       "sending_one": "Uploading {{count}} file",
       "sending_other": "Uploading {{count}} files",
-      "sent_one": "{{count}} file is in the analysis queue",
-      "sent_other": "{{count}} files are in the analysis queue",
-      "openQueue": "Open the analysis queue",
+      "sent_one": "{{count}} file is in the review queue",
+      "sent_other": "{{count}} files are in the review queue",
+      "openQueue": "Open the files being reviewed",
       "unnamed": "Unnamed file",
       "status": {
         "refused": "This file type or size is not taken (JPEG, PNG, WebP, GIF up to 25 MB; MP4 up to 200 MB).",
         "waiting": "Queued",
         "uploading": "Uploading",
-        "added": "In the analysis queue"
+        "added": "In the review queue"
       }
     },
     "settings": {
@@ -4364,12 +4364,12 @@
     "title": "Before posting",
     "blocking": "Stops posting",
     "reconnect": "The {{platform}} connection cannot post right now.",
-    "paused": "Posting is paused on this account.",
+    "paused": "Posting is stopped on this account.",
     "braked": "All posting is stopped.",
     "media_missing_video": "{{platform}} takes only video; this content has no video.",
     "media_missing": "This content has no file {{platform}} takes ({{format}}).",
     "only_format_video": "{{platform}} takes only video.",
-    "posting_screen": "You complete every {{platform}} post on the {{platform}} screen before it goes out.",
+    "posting_screen": "You finish every {{platform}} post on the {{platform}} screen before it goes out.",
     "approval": "Every post waits for your approval before it goes out.",
     "lead": "A {{format}} is planned {{hours}} hours ahead at the earliest.",
     "act": {
@@ -4380,13 +4380,13 @@
       "open_knowledge": "Go to the knowledge base"
     },
     "note": {
-      "asked": "You are asked when it is time.",
+      "asked": "You are asked when its turn comes.",
       "time": "The time is chosen with it.",
-      "braked": "Turned back on in the posting settings.",
-      "resumeHere": "Resume with the switch above."
+      "braked": "It is resumed in Settings.",
+      "resumeHere": "Resume it with the switch above."
     },
     "connectedTitle": "Account connected",
-    "connectedBody": "What to know before anything is posted on it:",
+    "connectedBody": "What you should know before posts go out on this account:",
     "continue": "Continue",
     "accountLabel": "Before posting on {{account}}",
     "knowledge_empty": "The knowledge base is empty; the agents plan no post."
@@ -4583,6 +4583,368 @@
       "medium": "medium",
       "low": "low",
       "measured": "{{n}} posts measured"
+    }
+  },
+  "postsPage": {
+    "title": "Posts",
+    "subtitle": "Everything being prepared, waiting for you and live.",
+    "forbidden": "You are not allowed to see this page.",
+    "loadError": "Posts could not be loaded.",
+    "header": {
+      "files": "Files",
+      "accounts": "Accounts",
+      "settings": "Settings"
+    },
+    "agent": {
+      "ran": "The agent ran {{ago}}."
+    },
+    "brake": {
+      "line": "All posting is stopped.",
+      "other": "Nothing goes out until your manager resumes posting.",
+      "paused": "All posting is stopped; it goes out on time once you resume."
+    },
+    "composer": {
+      "region": "New post",
+      "label": "What shall we post?",
+      "placeholder": "E.g. Bulk gift figures for companies for New Year, TikTok only",
+      "file": "File",
+      "send": "Send",
+      "files": "Attached files",
+      "unnamed": "Unnamed file",
+      "uploading": "Uploading",
+      "refused": "This file is not taken (JPEG, PNG, WebP, GIF up to 25 MB; MP4 up to 200 MB)",
+      "failed": "Upload failed",
+      "retry": "Try again",
+      "remove": "Remove {{name}}",
+      "tooMany": "At most {{n}} files.",
+      "tooLong": "At most {{n}} characters.",
+      "sent": "Your request was received.",
+      "wakesNow": "The agent starts now.",
+      "wakesAt": "The agent starts around {{at}}.",
+      "noModule": "The content module is not installed.",
+      "addModule": "Add module",
+      "platformMissing": "Your {{platform}} account is not connected; this request cannot go there.",
+      "drop": "Drop to attach to your request",
+      "stops": {
+        "knowledge_empty": "The agents do not know you yet. Write a few lines in the knowledge base first; your request starts then.",
+        "braked": "All posting is stopped; your request is prepared but does not go out until you resume.",
+        "no_account": "No account is connected to post on; the content is prepared but goes out only once you connect one.",
+        "no_content_agent": "No agent is connected to prepare content.",
+        "agent_sleeps": "The agent has no wake address; it starts on its next run ({{at}}).",
+        "agent_late": "The agent was expected at {{at}} and is late."
+      },
+      "advice": {
+        "approval": "It comes to you for approval",
+        "posting_screen": "You finish TikTok yourself",
+        "video_only": "Your accounts take only video; without a video the agent makes one from an image"
+      }
+    },
+    "actions": {
+      "toKnowledge": "Go to the knowledge base",
+      "resume": "Resume",
+      "connect": "Connect an account",
+      "connectAgent": "Connect an agent",
+      "addAddress": "Add a wake address",
+      "approve": "Approve",
+      "tiktok": "Finish on TikTok",
+      "redo": "Ask for changes",
+      "retry": "Prepare again",
+      "cancel": "Cancel",
+      "addFile": "Add a file",
+      "addPhoto": "Add a photo",
+      "notNeeded": "Not needed",
+      "permit": "Allow",
+      "withoutFile": "Go on without this file",
+      "anotherPhoto": "Add another photo",
+      "useAnyway": "Use it anyway",
+      "acceptHeld": "Accept anyway",
+      "release": "Post anyway",
+      "reconnect": "Reconnect",
+      "dismiss": "Let it go",
+      "done": "I finished it",
+      "pickTime": "Pick a time",
+      "pickMyself": "Let me pick the time"
+    },
+    "days": {
+      "region": "Special days",
+      "none": "You have no photo for {{day}} ({{date}})",
+      "analysing": "{{day}}: your photo is being checked.",
+      "needs_permission": "{{day}}: your photo shows a {{found}}; allow it to be posted.",
+      "unchecked": "{{day}}: confirm your photo may be posted.",
+      "quality": "{{day}}: the agent found this photo unfit to post.",
+      "add": "Add a photo",
+      "skip": "Skip this year",
+      "another": "Add another photo",
+      "skipped": "Nothing will be posted for {{day}} this year.",
+      "undo": "Undo",
+      "more_one": "{{count}} more special day",
+      "more_other": "{{count}} more special days"
+    },
+    "found": {
+      "face": "face",
+      "name": "name",
+      "child": "child",
+      "logo": "logo",
+      "company": "company name"
+    },
+    "chips": {
+      "label": "Filter",
+      "all": "All",
+      "you": "Waiting for you"
+    },
+    "stages": {
+      "hazirlik": "Preparation",
+      "fikir": "Idea",
+      "metin": "Text",
+      "gorsel": "Visual",
+      "paket": "Adaptation",
+      "onay": "Approval",
+      "yayin": "Publishing",
+      "sonuc": "Result"
+    },
+    "table": {
+      "label": "Posts table",
+      "post": "Post",
+      "channel": "Channel",
+      "progress": "Progress",
+      "status": "Status",
+      "publish": "Goes out",
+      "agentPicks": "The agent will choose",
+      "dots": "Progress: {{n}} of 8 steps done",
+      "more": "Show more"
+    },
+    "status": {
+      "failed": "Not posted",
+      "tiktok_draft": "TikTok draft",
+      "waiting_you": "Waiting for you",
+      "paused": "Stopped",
+      "revising": "Being changed",
+      "preparing": "Being prepared",
+      "scheduling": "Being scheduled",
+      "scheduled": "Scheduled",
+      "published": "Live",
+      "tiktokSent": "Sent to TikTok"
+    },
+    "format": {
+      "story": "Story",
+      "feed_post": "Post",
+      "carousel": "Carousel",
+      "reel": "Reels",
+      "tiktok_video": "Video",
+      "seconds": "{{format}} · {{n}} s",
+      "secondsShort": "{{format}} {{n}} s",
+      "images_one": "{{format}} · one image",
+      "images_other": "{{format}} · {{count}} images",
+      "imagesShort_one": "{{format}} one image",
+      "imagesShort_other": "{{format}} {{count}} images"
+    },
+    "time": {
+      "today": "Today {{time}}",
+      "tomorrow": "Tomorrow {{time}}"
+    },
+    "sub": {
+      "claimed": "An agent is working on it · {{stage}}",
+      "queuedNow": "Queued · the agent starts now",
+      "queuedNext": "Queued · the agent starts on its next run ({{at}})",
+      "queuedNextUnknown": "Queued · the agent starts on its next run",
+      "queuedLate": "Queued · the agent was expected at {{at}} and is late",
+      "starts": "Preparation starts on {{date}}",
+      "files_analysing": "Your files are being checked"
+    },
+    "waits": {
+      "approval": {
+        "status": "Waiting for your approval",
+        "sentence": "It waits for your approval before it goes out."
+      },
+      "posting_screen": {
+        "status": "To finish on TikTok",
+        "sentence": "You finish TikTok's posting screen yourself."
+      },
+      "capture": {
+        "status": "Waiting for a photo",
+        "sentence": "The agent asks for a photo or video for this: “{{request}}”"
+      },
+      "files_permission": {
+        "status": "Waiting for permission",
+        "sentence": "Your file shows a {{found}}; allow it to be posted.",
+        "unchecked": "Confirm your files may be posted."
+      },
+      "files_quality": {
+        "status": "File not fit",
+        "sentence": "The agent found this file unfit to post: {{reason}}.",
+        "plain": "The agent found this file unfit to post.",
+        "needs_crop": "it needs cropping",
+        "unusable": "it cannot be used"
+      },
+      "delivery_held": {
+        "status": "Stuck",
+        "sentence": "The agent prepared it three times but it did not pass the check: {{reason}}.",
+        "plain": "The agent prepared it three times but it did not pass the check."
+      },
+      "check_hold": {
+        "status": "Held",
+        "sentence": "A check stopped it at posting time: {{reason}}.",
+        "plain": "A check stopped it at posting time."
+      },
+      "failed": {
+        "status": "Not posted",
+        "sentence": "{{channel}} did not take this post: {{reason}}.",
+        "recovered": "{{channel}} did not take this post: the connection was renewed, you can have it prepared again."
+      },
+      "tiktok_draft": {
+        "status": "TikTok draft",
+        "sentence": "It went to your TikTok drafts; you post it in the TikTok app yourself."
+      },
+      "no_account": {
+        "status": "No account",
+        "sentence": "No account is connected to post on."
+      },
+      "no_account_for_platform": {
+        "status": "No account",
+        "sentence": "Your {{platform}} account is not connected."
+      },
+      "account_unavailable": {
+        "status": "Connection lost",
+        "sentence": "The {{account}} connection does not work right now."
+      },
+      "account_paused": {
+        "status": "Account stopped",
+        "sentence": "Posting is stopped on {{account}}."
+      },
+      "media": {
+        "status": "File does not fit",
+        "sentence": "{{platform}} does not take this file in this format (TikTok takes only video, for example)."
+      },
+      "material_removed": {
+        "status": "File deleted",
+        "sentence": "A file of this post was deleted."
+      },
+      "knowledge_empty": {
+        "status": "Knowledge base empty",
+        "sentence": "The agents do not know you yet: the knowledge base is empty."
+      },
+      "no_agent": {
+        "status": "No agent",
+        "sentence": "No agent is connected to do this work."
+      },
+      "pick_time": {
+        "status": "Waiting for a time",
+        "sentence": "No agent is there to pick its time."
+      },
+      "need_photo": {
+        "status": "Waiting for a photo",
+        "sentence": "{{request}}"
+      }
+    },
+    "reasons": {
+      "auth": "the connection's permission ran out",
+      "permission": "the account may not post",
+      "rate_limited": "the platform did not take it for now",
+      "refused": "the platform did not accept the content",
+      "other": "the platform could not be reached",
+      "missed_grace": "its time passed"
+    },
+    "panel": {
+      "label": "Selected post",
+      "request": "Your request",
+      "channel": "Channel",
+      "date": "Date",
+      "format": "Format",
+      "category": "Category",
+      "genel": "General",
+      "publishedAt": "Published · {{at}}",
+      "openPost": "Open the post",
+      "ai": "The image was made with AI; it is not a real order.",
+      "same": "From the same content:",
+      "gone": "This post is no longer in the list.",
+      "close": "Close",
+      "back": "Posts",
+      "changed": "This post changed meanwhile; showing it as it is now.",
+      "approved": "Approved. It goes out {{at}}.",
+      "approvedNow": "Approved.",
+      "cancelled": "Cancelled.",
+      "undo": "Undo",
+      "sentToAgent": "Passed to the agent.",
+      "redoNote": "The change you asked for: {{note}}",
+      "loadError": "This post could not be loaded.",
+      "managerReconnect": "A manager has to reconnect this account."
+    },
+    "redo": {
+      "title": "What should change?",
+      "placeholder": "E.g. Make it shorter, leave out the price",
+      "siblings_one": "This content has {{count}} more post ({{list}}); it is prepared again too.",
+      "siblings_other": "This content has {{count}} more posts ({{list}}); they are prepared again too.",
+      "published": "Posts already live stay as they are.",
+      "retryText": "The post could not be sent; prepare the same again.",
+      "send": "Send",
+      "cancel": "Never mind"
+    },
+    "cancel": {
+      "title": "Cancel it?",
+      "post": "The {{post}} post will not go out. Other posts of the same content stay.",
+      "version": "This post will never be scheduled.",
+      "content": "This content will not be prepared.",
+      "reason": "Why? (optional)",
+      "defaultReason": "Cancelled by the owner",
+      "confirm": "Cancel it",
+      "back": "Never mind"
+    },
+    "empty": {
+      "knowledge": "No posts yet. Fill in the knowledge base first so the agents get to know you.",
+      "plain": "No posts yet. Write above what you want to post; the agent prepares the rest.",
+      "you": "Nothing is waiting for you.",
+      "showAll": "Show all",
+      "stage": "No post at this stage."
+    },
+    "files": {
+      "title": "Files",
+      "help": "The file library and the files being checked.",
+      "file": "File",
+      "upload": "Upload",
+      "all": "All",
+      "queue": "Being checked",
+      "unshared": "Waiting for permission",
+      "category": "Category",
+      "allCategories": "All",
+      "addCategory": "Add a category",
+      "edit": "Edit",
+      "proposed": "Categories waiting for approval",
+      "empty": "No files here.",
+      "grid": "Files",
+      "retry": "Try again",
+      "state": {
+        "waiting": "Queued",
+        "analysing": "Being checked",
+        "needs_filing": "Choose its place",
+        "failed": "Not checked · Try again",
+        "unshared": "Waiting for permission"
+      }
+    },
+    "accounts": {
+      "title": "Accounts",
+      "help": "Connected accounts, their posting switches and numbers.",
+      "empty": "No account is connected.",
+      "switch": "Posting on",
+      "approval": "Posts on this account come to me for approval",
+      "rulesAll": "Every post comes to you for approval (Rules)",
+      "tiktok": "Every post waits for TikTok's screen",
+      "replies": "Comment replies come to you for approval",
+      "change": "Change",
+      "numbers": "Numbers",
+      "status": {
+        "on": "Posting on",
+        "paused": "Stopped",
+        "broken": "Connection unavailable"
+      }
+    },
+    "settings": {
+      "title": "Settings",
+      "help": "Posting rules, special days and file use.",
+      "rules": "Posting rules",
+      "days": "Special days",
+      "files": "File use",
+      "brake": "Stop all posting",
+      "brakeHelp": "While it is on nothing goes out; switching it off lets the agent give the waiting posts a time again."
     }
   }
 }

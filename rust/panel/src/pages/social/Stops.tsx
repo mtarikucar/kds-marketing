@@ -6,7 +6,7 @@ import type { Stop } from '@/api/social';
 import { POST_FORMATS, type PostFormat } from '@/api/posts';
 import { kindLabel } from '@/lib/capabilities';
 import { Button, cn } from '@/components/ui';
-import { placeHref } from './location';
+import { placeHref } from '../posts/location';
 
 /** The kinds a post goes out on: the accounts whose stops the panel says. */
 export const SOCIAL_KINDS = ['x', 'instagram', 'facebook_page', 'tiktok', 'linkedin_member', 'linkedin_page'] as const;
@@ -66,7 +66,7 @@ export function StopList({
       case 'resume':
         return here
           ? <span className="text-muted-foreground">{t('stops.note.resumeHere')}</span>
-          : <Link className="text-primary underline" to={placeHref({ account: capabilityId })}>{t('stops.act.resume')}</Link>;
+          : <Link className="text-primary underline" to={placeHref({ accounts: true, account: capabilityId })}>{t('stops.act.resume')}</Link>;
       case 'open_knowledge':
         return <Link className="text-primary underline" to="/knowledge">{t('stops.act.open_knowledge')}</Link>;
       case 'add_material':

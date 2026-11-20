@@ -130,7 +130,7 @@ export function studioItems(summary: WeeklySummary, words: Words, now: Date): Ag
   const who = words.moduleAgent('social');
   return [
     ...summary.published.map((p): AgendaItem => ({
-      id: `studio-pub-${p.publication_id}`, at: p.published_at, module: 'social', who, href: `/social?slot=${encodeURIComponent(p.slot_id)}`,
+      id: `studio-pub-${p.publication_id}`, at: p.published_at, module: 'social', who, href: `/posts?slot=${encodeURIComponent(p.slot_id)}`,
       title: words.published(words.format(p.format)), status: 'done',
     })),
     ...summary.planned.map((p): AgendaItem => {
@@ -138,13 +138,13 @@ export function studioItems(summary: WeeklySummary, words: Words, now: Date): Ag
       const late = new Date(p.publish_at) < now;
       const format = words.format(p.format);
       return {
-        id: `studio-slot-${p.slot_id}`, at: p.publish_at, module: 'social', who, href: `/social?slot=${encodeURIComponent(p.slot_id)}`,
+        id: `studio-slot-${p.slot_id}`, at: p.publish_at, module: 'social', who, href: `/posts?slot=${encodeURIComponent(p.slot_id)}`,
         title: p.state === 'ready' ? words.ready(format) : preparing ? words.preparing(format) : words.toPublish(format),
         status: late ? 'overdue' : preparing || p.state === 'ready' ? 'active' : 'planned',
       };
     }),
     ...summary.cancelled.map((p): AgendaItem => ({
-      id: `studio-cancel-${p.slot_id}`, at: p.at, module: 'social', who, href: `/social?slot=${encodeURIComponent(p.slot_id)}`,
+      id: `studio-cancel-${p.slot_id}`, at: p.at, module: 'social', who, href: `/posts?slot=${encodeURIComponent(p.slot_id)}`,
       title: words.dropped(words.format(p.format)), status: 'cancelled',
     })),
   ];

@@ -37,30 +37,30 @@ export function workItemText(t: TFunction, item: WorkItem, tiktokWaiting = false
 export function workItemLink(item: WorkItem, tiktokWaiting = false): string | null {
   if (tiktokWaiting) {
     const id = socialSlotId(item);
-    if (id) return `/social?tiktok=${encodeURIComponent(id)}`;
+    if (id) return `/posts?slot=${encodeURIComponent(id)}&tiktok=${encodeURIComponent(id)}`;
   }
   switch (item.kind) {
     case 'ads_campaign_proposal':
     case 'ads_campaign_held':
       return `/ads?campaign=${encodeURIComponent(item.campaign_id)}`;
     case 'studio_slot':
-      return `/social?slot=${encodeURIComponent(item.slot_id)}`;
+      return `/posts?slot=${encodeURIComponent(item.slot_id)}`;
     case 'studio_approval':
-      return 'slot' in item.target ? `/social?slot=${encodeURIComponent(item.target.slot)}` : '/ads?tab=external';
+      return 'slot' in item.target ? `/posts?slot=${encodeURIComponent(item.target.slot)}` : '/ads?tab=external';
     case 'studio_budget_move':
       return '/ads?tab=external';
     case 'studio_shoot_request':
-      return '/content';
+      return `/posts?need=${encodeURIComponent(item.shoot_request_id)}`;
     case 'studio_post_request':
-      return '/social?tab=posts';
+      return '/posts';
     case 'content_area':
     case 'content_material_request':
     case 'content_area_held':
-      return `/content?content=${encodeURIComponent(item.project_id)}`;
+      return `/posts?content=${encodeURIComponent(item.project_id)}`;
     case 'studio_material_analysis':
-      return `/content?view=queue&file=${encodeURIComponent(item.material_id)}`;
+      return `/posts?files=1&queue=1&file=${encodeURIComponent(item.material_id)}`;
     case 'studio_material_production':
-      return '/content';
+      return '/posts?files=1';
     case 'reply_due':
     case 'reopen_question':
       return `/inbox/${encodeURIComponent(item.conversation_id)}`;

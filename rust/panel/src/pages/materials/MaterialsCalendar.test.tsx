@@ -32,7 +32,7 @@ const calendar = {
   policy: { lead_days: 21, reuse_days: 14, recap_days: 30, ai_standalone: true },
 };
 const answers = { ...materialsAnswers, 'GET /api/studio/calendar': calendar };
-const open = () => renderAt('/content?tab=calendar&year=2027');
+const open = () => renderAt('/posts?settings=1&section=days&year=2027');
 
 describe('Materyaller · Takvim', () => {
   it('shows "tarih girilmeli" for the undated lunar holidays and the dated windows', async () => {
