@@ -27,7 +27,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           them qualified or promoted now, found_today those recorded today (the \
                           workspace's local day), last_found_at when the newest was recorded \
                           (null while none). A task's kind is standing (icp_key: one per ICP \
-                          entry of the approved strategy, kept by Jeeta) or ad_hoc \
+                          entry of the frame, derived from the card who_we_seek, kept by Jeeta \
+                          and carried across frames while its entry stays) or ad_hoc \
                           (target_count), with its brief (segment_key, sectors, areas, signals, \
                           exclusions, size_hint, language, note), rubric_digest, daily_cap, \
                           status and claim. Answers {items, next}: pass next.before_at and \
@@ -52,10 +53,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Ask for research beyond the standing tasks: an ad-hoc task with a \
                           brief {sectors (1 to 10), areas [{city, district?}] (1 to 20), \
                           signals and exclusions (up to 10 each), size_hint, language, note, \
-                          segment_key? (one of the strategy's audience)}, target_count (1 to \
+                          segment_key? (one of the frame's audience)}, target_count (1 to \
                           500) and daily_cap (1 to 500). It closes itself once target_count \
                           prospects are recorded for it. CONFLICT prospecting_off while the \
-                          approved strategy has no ICP entry. A request_key replays the task it \
+                          knowledge base has no ICP yet: derive it (knowledge_derive, part \
+                          prospecting). A request_key replays the task it \
                           created for 24 hours. Answers {task, remaining_today}. [risk: WRITE]",
             permissions: &[Permission::ProspectsWork],
             schema: create_schema,
@@ -77,7 +79,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "research.tasks_close",
             description: "Close an open ad-hoc research task (task_id) with outcome done or \
                           canceled and a note (up to 1000 characters). A standing task follows \
-                          its ICP entry and is never closed by hand (CONFLICT standing_task); \
+                          its ICP entry and is never closed by hand (CONFLICT standing_task: \
+                          change the card who_we_seek instead); \
                           CONFLICT task_closed when it is closed already. Answers {task, \
                           remaining_today}. [risk: WRITE]",
             permissions: &[Permission::ProspectsWork],
@@ -125,7 +128,7 @@ fn create_schema() -> Schema {
             "brief": {
                 "type": "object",
                 "properties": {
-                    "segment_key": { "type": "string", "pattern": "^[a-z0-9_]{2,32}$", "description": "One of the strategy's audience segments." },
+                    "segment_key": { "type": "string", "pattern": "^[a-z0-9_]{2,32}$", "description": "One of the frame's audience segments." },
                     "sectors": { "type": "array", "minItems": 1, "maxItems": 10, "items": text(80, "A sector, in the workspace's words.") },
                     "areas": {
                         "type": "array",

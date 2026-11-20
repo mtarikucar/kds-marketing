@@ -110,7 +110,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           research_task_ids, cities, sectors, min_score) | explicit (up to 500 \
                           person ids)}, schedule {start_at, window {tz, from, to, days}}, \
                           throttle {per_hour 1 to 60, per_day 1 to 500}, click_tracking, \
-                          evergreen, segment_key}. Needs an approved strategy. Check the audience \
+                          evergreen, segment_key}. Needs a frame (the knowledge base has a card). Check the audience \
                           with jeeta.outreach.audience_preview first. [risk: WRITE]",
             permissions: &[Permission::OutreachWork],
             schema: campaigns_save_schema,

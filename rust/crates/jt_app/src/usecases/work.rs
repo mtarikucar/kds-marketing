@@ -1,14 +1,21 @@
 //! What is pending for the workspace, and the agent's check-in (spec B11): `work.pending`,
 //! `work.checkin` and `work.set_checkin_interval`.
 //!
-//! **Pending work** is the agent's entry point: the strategy's state, the items to act on (most
-//! urgent first) and whether the agent is overdue. It is exempt from the strategy gate, and from
-//! the workspace-status check while the workspace awaits payment (not while it is suspended),
-//! since an agent asks it before any strategy exists. The items:
+//! **Pending work** is the agent's entry point: the knowledge base's state, the items to act on
+//! (most urgent first) and whether the agent is overdue. It is exempt from the strategy gate, and
+//! from the workspace-status check while the workspace awaits payment (not while it is
+//! suspended), since an agent asks it before the knowledge base has a card. `strategy` is kept,
+//! reduced, for older routines (design 2026-11-19 D23): `missing` without a frame, `{approved:
+//! {number}}` with one. The items:
 //!
-//! - `ConsultStrategy` (priority 1): no strategy at all, or a draft open (not submitted);
-//! - `ApproveStrategy` (1): a submitted draft, for a caller who may approve it (the role owner or
-//!   manager, and `team.manage`, as `strategy.approve` asks);
+//! - `KnowledgeEmpty` (priority 1): no live card has text (design 2026-11-19 §4.5.1), for a person
+//!   holding `team.manage`: nothing is planned, delivered or sent until the owner writes one;
+//! - `KnowledgeDerive` (2): a card the posting part of the frame is derived from changed after
+//!   its last derivation, for an agent holding `content.work`; the prospecting part's, for one
+//!   holding `prospects.work` (§4.10.4). Listed at once, with no quiet delay (§4.10.9);
+//! - `KnowledgeNote` (2): each open note of the owner's no other agent holds a live claim on, for
+//!   an agent with any work permission (§4.8);
+//! - `KnowledgeProposal` (3): each pending proposal, for a person holding `team.manage`;
 //! - `ReconnectConnector` (1): each capability reached through a connector that reads
 //!   `unreachable` because its provider no longer accepts its login (a probe failed with `Auth`:
 //!   `connector_public.reconnect_required`);
@@ -30,7 +37,7 @@
 //! - `StudioShootRequest` (3): each open request of the çekim listesi, for a caller with
 //!   `materials.work`, with or without an approved strategy (the materials library needs none);
 //! - `StudioPostRequest` (2): each open package request (olay-driven publishing), for a
-//!   caller with `social.work` while a strategy is approved;
+//!   caller with `social.work` while a frame exists;
 //! - `StudioSlot` (1 when overdue, else 2): each Studio slot to prepare or send; a planned post
 //!   only from its preparation start;
 //! - `DeclareFirstCapability` (3): no capability that is not retired; with the items to verify
@@ -38,7 +45,7 @@
 //! - `ResearchDue` (3): each open research task that may still record prospects today, and
 //!   `ProspectsToScore` (3): `new` prospects without a score under the current rubric, and
 //!   `ProspectsToPromote` (3): qualified prospects not promoted yet, only for a
-//!   caller holding `prospects.work` while the approved strategy has prospecting on (spec
+//!   caller holding `prospects.work` while the frame has prospecting on (spec
 //!   2026-10-30-leads-pool-outreach-design.md §3.17);
 //! - `OwnerlessJourneys` (2): every open journey without an owner, whatever the cause (nobody
 //!   eligible, the manual mode, a v1 import, a manager's unassignment), with the longest-open
@@ -46,7 +53,7 @@
 //!   only for a caller holding `inbox.manage` (spec §3.9: no journey is silently ownerless);
 //! - `PersonalizationDue` (2): a campaign's enrollments due within a day whose next step misses
 //!   a `custom.*` value, `CampaignBlocked` (2): a campaign paused for its bounces, complaints,
-//!   mailbox or strategy, `CampaignApproval` (2): a campaign waiting for approval (a person with
+//!   mailbox or the knowledge gate, `CampaignApproval` (2): a campaign waiting for approval (a person with
 //!   `outreach.manage` only), and `PromotedNotContacted` (3): promoted prospects nobody wrote to
 //!   in two days, for a caller holding `outreach.work` (leads spec §3.17, D69;
 //!   `usecases::outreach::work`).
@@ -54,11 +61,13 @@
 //! Only the items the workspace's status lets be acted on are listed: each item is cleared by a
 //! use case ([`WorkKind::cleared_by`]), and an item whose use case the workspace-status check
 //! would refuse (`WORKSPACE_INACTIVE`) is left out. So while the workspace awaits payment only
-//! the strategy's items are listed (`strategy.*` runs then; capabilities, connections and events
+//! the knowledge base's items are listed (`strategy.*` runs then; capabilities, connections and events
 //! wait for the payment, though webhooks keep storing events meanwhile, which are listed once it
 //! is active).
 //!
-//! Each item carries a hint in English, for the agent; the panel shows its own copy.
+//! Each item carries a hint in English, for the agent; the panel shows its own copy. No item
+//! asks an agent to redo what a person already approved: a post a person approved stays as it
+//! is unless a person asked for a change, and the hints say so.
 //!
 //! **Check-in.** The agent calls `jeeta.work.checkin` on its own schedule, at least once per
 //! check-in interval (learned from its own check-ins, else
@@ -72,8 +81,9 @@
 //! very call that ends its lateness.
 
 use jt_capability::{Capability, CapabilityId, EffectiveStatus, Reach};
+use jt_knowledge::frame::DerivePart;
 use jt_ledger::Actor;
-use jt_strategy::{Gap, StrategyVersionId};
+use jt_strategy::StrategyVersionId;
 use jt_tenancy::{AgentConnectionId, Permission};
 use serde::Serialize;
 use serde_json::json;
@@ -82,7 +92,6 @@ use time::{Duration, OffsetDateTime};
 use super::calls::bridge::VOICE_BRIDGE_KIND;
 use super::capabilities::CapabilityOut;
 use super::devices::PHONE_KIND;
-use super::strategy::{self, StrategyOut};
 use super::{Deps, agents, connector, events, invalid, ledger_entry, wake};
 use crate::catalog::status_exemption;
 use crate::ctx::Ctx;
@@ -112,33 +121,39 @@ const CHECKIN: &str = CHECKIN_ACTION;
 /// What is pending for the workspace, as the caller sees it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PendingOut {
+    /// Where the knowledge base stands (design 2026-11-19 §5.2).
+    pub knowledge: KnowledgeState,
+    /// Deprecated, removed with the consultation tools: `"missing"` without a frame,
+    /// `{"approved": {"number": n}}` with one.
     pub strategy: StrategyState,
     /// Most urgent first (priority 1 first), in a stable order within a priority.
     pub items: Vec<WorkItem>,
     pub agent: AgentState,
 }
 
-/// Where the workspace's strategy stands. An open or submitted draft is what is pending, so it
-/// is shown even while an approved version is in force.
+/// Where the knowledge base stands, as agents read it first.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct KnowledgeState {
+    /// No live card has text (design §4.5.1): nothing is planned, delivered or sent.
+    pub empty: bool,
+    /// The knowledge base's revision (what `jeeta.strategy.frame_apply` names as `kb_revision`).
+    pub revision: u64,
+    /// The number of the frame in force; none before the first card text.
+    pub frame: Option<i32>,
+    /// The derivations a card change waits for.
+    pub derive_due: Vec<DerivePart>,
+}
+
+/// The frame's state in the shape older routines read the strategy's (deprecated): no draft is
+/// ever pending (the knowledge base has none).
 ///
-/// On the wire, a state without fields is its name (`"missing"`) and one with fields an object
-/// under its name (`{"draft_open": {"gaps": [...]}}`,
-/// `{"submitted": {"version_id": "…", "submitted_at": "…"}}`, `{"approved": {"number": 2}}`).
+/// On the wire `"missing"`, or `{"approved": {"number": 2}}`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StrategyState {
-    /// No version approved and no draft.
+    /// No frame yet: the knowledge base has no card text.
     Missing,
-    /// A draft is being worked out; `gaps` is everything that stops it from being approved today.
-    DraftOpen { gaps: Vec<Gap> },
-    /// A draft awaits approval: the draft and when it was submitted, which approving it sends
-    /// back (`strategy.approve` refuses a draft that changed since).
-    Submitted {
-        version_id: StrategyVersionId,
-        #[serde(with = "time::serde::rfc3339")]
-        submitted_at: OffsetDateTime,
-    },
-    /// Version `number` is in force and no draft is open.
+    /// Frame `number` is in force.
     Approved { number: i32 },
 }
 
@@ -268,10 +283,23 @@ pub enum WorkKind {
     TaskDue {
         task_id: jt_inbox::TaskId,
     },
-    /// Start the consultation, or continue the open draft's.
-    ConsultStrategy,
-    /// Approve the submitted draft.
-    ApproveStrategy,
+    /// The knowledge base is empty: the owner writes a card (a person with `team.manage`).
+    KnowledgeEmpty,
+    /// A card a part of the frame is derived from changed at `kb_revision`: derive `part` again
+    /// and apply it with `jeeta.strategy.frame_apply`.
+    KnowledgeDerive {
+        kb_revision: u64,
+        part: DerivePart,
+    },
+    /// The owner told the agents something: claim the note and file it.
+    KnowledgeNote {
+        note_id: jt_knowledge::KnowledgeNoteId,
+        expected_revision: u64,
+    },
+    /// An agent proposed a change to the knowledge base: the owner adds or skips it.
+    KnowledgeProposal {
+        proposal_id: jt_knowledge::KnowledgeProposalId,
+    },
     /// Verify an agent or device capability, for the first time or again (`stale`).
     VerifyCapability {
         capability_id: CapabilityId,
@@ -384,8 +412,10 @@ impl WorkKind {
             WorkKind::ApproveReply { .. } => "inbox.public.approve",
             WorkKind::EnableComments { .. } => "connector.reconnect",
             WorkKind::TaskDue { .. } => "inbox.tasks.complete",
-            WorkKind::ConsultStrategy => "strategy.start_consultation",
-            WorkKind::ApproveStrategy => "strategy.approve",
+            WorkKind::KnowledgeEmpty => "strategy.card_update",
+            WorkKind::KnowledgeDerive { .. } => "strategy.frame_apply",
+            WorkKind::KnowledgeNote { .. } => "strategy.note_claim",
+            WorkKind::KnowledgeProposal { .. } => "strategy.proposal_accept",
             WorkKind::VerifyCapability { .. } => "capability.verify",
             WorkKind::DeclareFirstCapability => "capability.declare",
             WorkKind::ConnectConnector { .. } => "connector.start_oauth",
@@ -424,8 +454,8 @@ pub struct AgentState {
 // Use cases
 // ---------------------------------------------------------------------------------------------
 
-/// What is pending for the workspace at `ctx.now`, as the caller sees it (only a caller who may
-/// approve the strategy is asked to). Needs `workspace.read`.
+/// What is pending for the workspace at `ctx.now`, as the caller sees it (each item only to a
+/// caller who can clear it). Needs `workspace.read`.
 pub async fn pending(deps: &Deps, ctx: &Ctx) -> Result<PendingOut, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     pending_as_seen(deps, ctx, None).await
@@ -438,8 +468,33 @@ async fn pending_as_seen(
     ctx: &Ctx,
     seen_now: Option<OffsetDateTime>,
 ) -> Result<PendingOut, AppError> {
-    let strategy = strategy::versions(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    // The frame and the knowledge base. Reading never seeds (seeding archives an older routine's
+    // draft, design §5.4): before the seed, the knowledge base is empty exactly when no frame
+    // exists (the seed gives cards text only from an approved version, §4.3.1).
+    let frame = repos.strategy().current_approved().await?;
+    let settings = repos.knowledge().settings().await?;
+    let knowledge = {
+        let empty = match &settings {
+            Some(_) => jt_knowledge::is_empty(&repos.knowledge().cards().await?),
+            None => frame.is_none(),
+        };
+        let mut derive_due = Vec::new();
+        if let (Some(s), Some(_)) = (&settings, &frame) {
+            if s.posting_due() {
+                derive_due.push(DerivePart::Posting);
+            }
+            if s.prospecting_due() {
+                derive_due.push(DerivePart::Prospecting);
+            }
+        }
+        KnowledgeState {
+            empty,
+            revision: settings.as_ref().map_or(0, |s| s.revision),
+            frame: frame.as_ref().map(|v| v.number),
+            derive_due,
+        }
+    };
     let capabilities: Vec<CapabilityOut> = repos
         .capabilities()
         .list(CapabilityFilter::default())
@@ -477,23 +532,25 @@ async fn pending_as_seen(
     .iter()
     .any(|p| ctx.permissions.contains(p))
         && status_exemption("studio.pending").allows(status)
-        && strategy.approved.is_some()
+        && frame.is_some()
     {
         Some(super::studio::work::pending_in(repos.as_mut(), ctx).await?)
     } else {
         None
     };
-    // The pool's work, for who works it, while the approved strategy has prospecting on.
+    // The pool's work, for who works it, while the frame has prospecting on.
     let pool = if ctx.permissions.contains(&Permission::ProspectsWork)
         && status_exemption("prospects.create").allows(status)
     {
-        match repos.strategy().current_approved().await? {
-            Some(v) => Some(super::prospects::playbook::pending_in(repos.as_mut(), ctx, &v).await?),
+        match &frame {
+            Some(v) => Some(super::prospects::playbook::pending_in(repos.as_mut(), ctx, v).await?),
             None => None,
         }
     } else {
         None
     };
+    // The knowledge base's own items (design §5.2), each only to a caller who can clear it.
+    let knowledge_items = knowledge_items(repos.as_mut(), ctx, &knowledge).await?;
     // Ownerless and stalled journeys, for who may assign them.
     let distribution = if ctx.permissions.contains(&Permission::InboxManage)
         && status_exemption("inbox.journeys.assign_owner").allows(status)
@@ -560,7 +617,7 @@ async fn pending_as_seen(
                 analyses.push(WorkItem {
                     kind: WorkKind::StudioMaterialAnalysis { material_id: material.id, expected_revision: material.revision, unfiled },
                     priority: 2,
-                    hint: if unfiled { UNFILED_ANALYSIS_HINT.into() } else { "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.get and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. A person's upload may wake you; otherwise poll jeeta.work.checkin on your own schedule.".into() },
+                    hint: if unfiled { UNFILED_ANALYSIS_HINT.into() } else { "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.knowledge_get (products_prices, who_we_are) and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. A person's upload may wake you; otherwise poll jeeta.work.checkin on your own schedule.".into() },
                 });
             }
         }
@@ -595,7 +652,8 @@ async fn pending_as_seen(
             .list_areas(false, None, None)
             .await?
         {
-            if agent && work && p.needs_agent(ctx.now) {
+            // No area is offered before the first frame: its delivery could not be accepted.
+            if agent && work && frame.is_some() && p.needs_agent(ctx.now) {
                 projects.push(WorkItem {
                     kind: WorkKind::ContentArea {
                         project_id: p.id,
@@ -645,7 +703,7 @@ async fn pending_as_seen(
     if ctx.agent_connection_id.is_some()
         && ctx.permissions.contains(&Permission::SocialWork)
         && status_exemption("social.version_schedule").allows(status)
-        && strategy.approved.is_some()
+        && frame.is_some()
     {
         for package in super::social::schedule::waiting(deps, repos.as_mut(), ctx.now).await? {
             for v in package.versions.iter().filter(|v| !v.accounts.is_empty()) {
@@ -678,7 +736,7 @@ async fn pending_as_seen(
             let id = c.id;
             match c.state_at(ctx.now) {
                 state @ (CampaignState::Queued | CampaignState::Rejected)
-                    if ads_agent && c.needs_agent(ctx.now) && strategy.approved.is_some() =>
+                    if ads_agent && c.needs_agent(ctx.now) && frame.is_some() =>
                 {
                     let rejected = (state == CampaignState::Rejected)
                         .then(|| c.clone().present(ctx.now).state.and_then(|s| s.note))
@@ -693,7 +751,7 @@ async fn pending_as_seen(
                         hint: ADS_PLAN_HINT.into(),
                     });
                 }
-                CampaignState::Live if ads_agent && strategy.approved.is_some() => {
+                CampaignState::Live if ads_agent && frame.is_some() => {
                     let looked = c
                         .moves
                         .last()
@@ -735,8 +793,11 @@ async fn pending_as_seen(
     }
     drop(repos);
 
-    let state = strategy_state(&strategy);
-    let mut items = strategy_items(&state, may_approve(ctx));
+    let state = match &frame {
+        Some(v) => StrategyState::Approved { number: v.number },
+        None => StrategyState::Missing,
+    };
+    let mut items = knowledge_items;
     if let Some(p) = inbox {
         items.extend(p.ours.into_iter().map(|c| WorkItem {
             kind: WorkKind::ReplyDue {
@@ -950,7 +1011,7 @@ async fn pending_as_seen(
                     reason,
                 },
                 priority: 2,
-                hint: "The campaign was paused for its bounces, complaints, mailbox or strategy: \
+                hint: "The campaign was paused for its bounces, complaints or mailbox: \
                        read jeeta.outreach.report and the campaign, fix the cause (the audience, \
                        the mailbox), then resume or cancel it with \
                        jeeta.outreach.campaigns_control."
@@ -1021,6 +1082,7 @@ async fn pending_as_seen(
     });
     items.sort_by_key(|item| item.priority);
     Ok(PendingOut {
+        knowledge,
         strategy: state,
         items,
         agent,
@@ -1128,62 +1190,146 @@ pub async fn set_checkin_interval(
 // Rules
 // ---------------------------------------------------------------------------------------------
 
-/// The draft's state when one is open (it is the pending work), else the approved version's, else
-/// missing.
-fn strategy_state(strategy: &StrategyOut) -> StrategyState {
-    match (&strategy.draft, &strategy.approved) {
-        (Some(draft), _) if let Some(submitted_at) = draft.submitted_at => {
-            StrategyState::Submitted {
-                version_id: draft.id,
-                submitted_at,
+/// At most this many open notes are listed in one check-in, newest first.
+const NOTES_LISTED: u32 = 50;
+
+/// The knowledge base's items (design 2026-11-19 §5.2), each listed only to a caller who can
+/// clear it (the `consult_strategy` item the strategy listed to every caller is not repeated):
+///
+/// - `knowledge_empty`: a person in person holding `team.manage`, while no live card has text;
+/// - `knowledge_derive`: an agent holding the part's work permission (`content.work` for
+///   posting, `prospects.work` for prospecting), while a frame exists and the part is due;
+/// - `knowledge_note`: an agent with any work permission, for each open note no other
+///   connection holds a live claim on (its own claim is listed again, to be filed);
+/// - `knowledge_proposal`: a person in person holding `team.manage`, for each pending proposal.
+async fn knowledge_items(
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    state: &KnowledgeState,
+) -> Result<Vec<WorkItem>, AppError> {
+    let mut items = Vec::new();
+    let connection = ctx.agent_connection_id;
+    let person = connection.is_none() && matches!(ctx.actor, Actor::Human { .. });
+    let manages = ctx.permissions.contains(&Permission::TeamManage);
+    if person && manages && state.empty {
+        items.push(WorkItem {
+            kind: WorkKind::KnowledgeEmpty,
+            priority: 1,
+            hint: KNOWLEDGE_EMPTY_HINT.into(),
+        });
+    }
+    if connection.is_some() && state.frame.is_some() {
+        for part in &state.derive_due {
+            let (permission, hint) = match part {
+                DerivePart::Posting => (Permission::ContentWork, DERIVE_POSTING_HINT),
+                DerivePart::Prospecting => (Permission::ProspectsWork, DERIVE_PROSPECTING_HINT),
+            };
+            if ctx.permissions.contains(&permission) {
+                items.push(WorkItem {
+                    kind: WorkKind::KnowledgeDerive {
+                        kb_revision: state.revision,
+                        part: *part,
+                    },
+                    priority: 2,
+                    hint: hint.into(),
+                });
             }
         }
-        (Some(draft), _) => StrategyState::DraftOpen {
-            gaps: draft.gaps.clone(),
-        },
-        (None, Some(approved)) => StrategyState::Approved {
-            number: approved.number,
-        },
-        (None, None) => StrategyState::Missing,
     }
+    if let Some(connection) = connection
+        && super::knowledge::WORK_PERMISSIONS
+            .iter()
+            .any(|p| ctx.permissions.contains(p))
+    {
+        let notes = repos
+            .knowledge()
+            .notes(Some(jt_knowledge::NoteStatus::Open), NOTES_LISTED)
+            .await?;
+        for note in notes {
+            let free = note
+                .live_claim(ctx.now)
+                .is_none_or(|c| c.connection_id == connection);
+            if free {
+                items.push(WorkItem {
+                    kind: WorkKind::KnowledgeNote {
+                        note_id: note.id,
+                        expected_revision: note.revision,
+                    },
+                    priority: 2,
+                    hint: KNOWLEDGE_NOTE_HINT.into(),
+                });
+            }
+        }
+    }
+    if person && manages {
+        let pending = repos
+            .knowledge()
+            .proposals(Some(jt_knowledge::ProposalStatus::Pending))
+            .await?;
+        items.extend(pending.into_iter().map(|p| {
+            WorkItem {
+                kind: WorkKind::KnowledgeProposal { proposal_id: p.id },
+                priority: 3,
+                hint:
+                    "An agent proposed a change to the knowledge base; the owner adds or skips it \
+                   in Bilgi bankasi."
+                        .into(),
+            }
+        }));
+    }
+    Ok(items)
 }
 
-/// Whether the caller may approve a submitted draft, as `strategy.approve` decides: the role
-/// owner or manager, and `team.manage`.
-fn may_approve(ctx: &Ctx) -> bool {
-    ctx.is_owner_or_manager() && ctx.permissions.contains(&Permission::TeamManage)
-}
+/// The person's item while the knowledge base is empty.
+const KNOWLEDGE_EMPTY_HINT: &str = "The knowledge base is empty: nothing is planned, delivered \
+    or sent until the owner writes at least one card in Bilgi bankasi (or adds a proposal \
+    waiting there).";
 
-/// The strategy's item, if any: consult while there is no strategy or a draft is open; approve a
-/// submitted draft, only for a caller who may.
-fn strategy_items(state: &StrategyState, may_approve: bool) -> Vec<WorkItem> {
-    let item = match state {
-        StrategyState::Missing => Some((
-            WorkKind::ConsultStrategy,
-            "No strategy yet: start the consultation with jeeta.strategy.start_consultation; \
-             jeeta.strategy.get explains the steps.",
-        )),
-        StrategyState::DraftOpen { .. } => Some((
-            WorkKind::ConsultStrategy,
-            "A strategy draft is open: continue the consultation with the owner, close its gaps \
-             (jeeta.strategy.get lists them) and submit it with jeeta.strategy.submit.",
-        )),
-        StrategyState::Submitted { .. } if may_approve => Some((
-            WorkKind::ApproveStrategy,
-            "A strategy draft awaits approval: go through it with the owner, read its assumptions \
-             to them (jeeta.strategy.get, draft.assumptions) and, once they confirm, approve it \
-             with jeeta.strategy.approve.",
-        )),
-        StrategyState::Submitted { .. } | StrategyState::Approved { .. } => None,
-    };
-    item.map(|(kind, hint)| WorkItem {
-        kind,
-        priority: 1,
-        hint: hint.to_owned(),
-    })
-    .into_iter()
-    .collect()
-}
+/// What the posting agent does when a card the posting part is derived from changed.
+const DERIVE_POSTING_HINT: &str = "The owner changed a card the posting work is derived from. \
+    Read jeeta.strategy.knowledge_get and derive from the cards (who_we_are, products_prices, \
+    customers, post_ideas, past_conversations and the owner's own cards) the audience \
+    (segments), the topics (what posts are about) and, when it changed, the objective. Send only \
+    what changed: a topic or segment that stays is sent exactly as frame.topics and \
+    frame.audience have it (same id, key, title, angle, metric); a reworded card is no reason to \
+    reword a topic; a topic whose meaning changed is a new topic (no id). At most 30 topics. A \
+    topic you leave out gets no new post, waits under frame.closing while it has planned posts \
+    (has_posts), and is retired after them: posts a person already approved stay as they are and \
+    go out as planned, so never resubmit or replace them. Apply with \
+    jeeta.strategy.frame_apply, parts [posting] and the kb_revision you read; when nothing \
+    changed send parts [posting] alone: it answers applied false and clears this item. \
+    Identity, channels, prohibitions, goals and budgets are not yours: the system takes them \
+    from the cards and the owner's rules.";
+
+/// What the research agent does when a card the prospecting part is derived from changed.
+const DERIVE_PROSPECTING_HINT: &str = "The owner changed whom the business looks for (cards \
+    who_we_seek, customers or the owner's own cards). Read jeeta.strategy.knowledge_get \
+    (frame.prospecting is the ICP and rubric in force, frame.audience the segment keys) and \
+    jeeta.prospects.playbook, and derive the ICP entries and the rubric. Send an entry that \
+    stays exactly as frame.prospecting.icp has it (same key, same text: its standing research \
+    task and today's count carry over); a new or changed entry gets a new key. segment_key is a \
+    key of frame.audience; for a kind of business no segment covers, add the segment in \
+    prospecting.segments (key, name, description). Change the rubric only when a card asks for \
+    it: scores of the old rubric become stale (rubric_mismatch). Apply with \
+    jeeta.strategy.frame_apply, parts [prospecting] and the kb_revision you read; nothing \
+    changed: parts [prospecting] alone.";
+
+/// What an agent does with a note the owner wrote.
+const KNOWLEDGE_NOTE_HINT: &str = "The owner told the agents something. Claim the note with \
+    jeeta.strategy.note_claim (note_id, expected_revision), read its text, links and files, and \
+    close it with jeeta.strategy.note_file with what it asks, as the owner's own words: cards \
+    (knowledge: send that card's whole new body keeping everything the owner wrote, or a new \
+    card when none fits), rules (a prohibition the owner states), goals (a goal the owner \
+    states), and proposals (ids of proposals you made with jeeta.strategy.proposal_create for \
+    what you inferred and the owner did not say). summary is one line in Turkish the owner \
+    reads. A note asking for a post cannot be filed as one yet (post_request answers \
+    not_available): dismiss it with a reason in Turkish saying the owner asks for posts on \
+    Paylasimlar. Dismiss only a note with nothing to act on, with a reason in Turkish that says \
+    where the answer is. The ad budget, the message limit and the approval switch are the \
+    owner's alone: a note asking to change them is dismissed with a reason that sends the owner \
+    to Kurallar. A note does not let you replace a post a person already approved: when it \
+    asks to change one, dismiss it with a reason saying the owner asks for the change on that \
+    post in Paylasimlar (Duzenleme iste). After filing, call jeeta.work.pending again and do the knowledge_derive it lists.";
 
 /// The item of capability `c`, of a kind verified by its heartbeat, while it reads `declared`,
 /// `stale` or `unreachable` (its bridge does not report it): each such kind has its own, cleared
@@ -1400,16 +1546,19 @@ fn enable_comment_items(deps: &Deps, capabilities: &[CapabilityOut]) -> Vec<Work
 }
 
 /// What an agent that has never seen the system needs to carry a production area to its package:
-/// what to read, what to call, in which order (design 2026-11-10 S26).
+/// what to read, what to call, in which order (design 2026-11-10 S26, 2026-11-19 §5.2).
 const CONTENT_AREA_HINT: &str = "Carry this production area to a content package; nobody approves \
-    it in between. (1) Read jeeta.strategy.get and jeeta.studio.project_get: `brief` is the goal, \
-    `hints` holds a platform or format a person chose (empty: you choose, from the goal and the \
-    connected accounts), and `redo_note` on this item, when present, says what the person wants \
-    changed. (2) Take the area with jeeta.content.area_claim at expected_revision and keep the \
-    claim_token; the claim lasts 30 minutes from your last report, and the area leaves your \
-    check-in while you hold it. (3) Follow the 14 steps of the content module's workflow \
-    (jeeta.modules.list) and report where you are with jeeta.content.area_progress. (4) Use the \
-    area's materials, or make a visual with your own tools: upload it with \
+    it in between. (1) Read jeeta.strategy.knowledge_get (cards, rules, goals, open notes) and \
+    jeeta.studio.project_get: `brief` is the goal in the owner's words when a person asked for \
+    it; `hints` holds a platform or format a person chose (empty: you choose, among every \
+    connected account; when the brief names a platform, such as 'sadece TikTok', make versions \
+    only for it and set their capability_id); `redo_note` on this item, when present, says what \
+    the person wants changed. Never cross the rules: the prohibitions are the owner's and bind \
+    every word you write. (2) Take the area with jeeta.content.area_claim at expected_revision \
+    and keep the claim_token; the claim lasts 30 minutes from your last report, and the area \
+    leaves your check-in while you hold it. (3) Follow the 14 steps of the content module's \
+    workflow (jeeta.modules.list) and report where you are with jeeta.content.area_progress. (4) \
+    Use the area's materials, or make a visual with your own tools: upload it with \
     jeeta.studio.file_upload, add it with jeeta.studio.material_add (genel true, origin \
     ai_generated with the name of the tool that made it, quality publishable, depicts [] and \
     share shareable; a visual showing a person, a name or a logo takes a person's permission \
@@ -1420,13 +1569,15 @@ const CONTENT_AREA_HINT: &str = "Carry this production area to a content package
     or client. When the work needs a real photo or video, ask with \
     jeeta.studio.project_request and give the area back with jeeta.content.area_release; it \
     returns to your check-in once the capture is there. (5) Deliver every platform version in \
-    one call to jeeta.content.area_deliver, each with a hypothesis_id of the approved strategy \
-    (your preference: where it does not post on the account the version gets, the post goes \
-    out under another of the strategy that does, or under the owner's request when a person \
-    asked for this content naming the account; never name the owner's request yourself); \
-    with no connected account leave capability_id out. A refusal lists, by version index, what \
-    to fix: fix it and deliver again with a new request_key. Three refusals in a row hand the \
-    area to a person. An accepted delivery finishes the area.";
+    one call to jeeta.content.area_deliver, each with a hypothesis_id: a topic id of \
+    jeeta.strategy.knowledge_get frame.topics the version is about (where it does not post on \
+    the account the version gets, the post goes out under another topic that does, or under the \
+    owner's request when a person asked for this content naming the account); never name the \
+    owner's request yourself. With no connected account leave capability_id out. A refusal \
+    lists, by version index, what to fix: fix it and deliver again with a new request_key. Three \
+    refusals in a row hand the area to a person. An accepted delivery finishes the area. Only \
+    this area is yours to redo: a post a person already approved stays as it is unless a person \
+    asked for a change.";
 
 /// What the agent analysing a material a person dropped with no olay does (design 2026-11-18 §3).
 const UNFILED_ANALYSIS_HINT: &str = "A person uploaded this material with no olay: analyse it and \
@@ -1444,8 +1595,10 @@ const UNFILED_ANALYSIS_HINT: &str = "A person uploaded this material with no ola
 const ADS_PLAN_HINT: &str = "An ad campaign waits for its plan. Read it with \
     jeeta.ads.campaign_get (its goal, its total budget in minor units, its start), then claim it \
     with jeeta.ads.campaign_claim (campaign_id, expected_revision); the answer carries a \
-    claim_token. Read the strategy (jeeta.strategy.get) for the paid hypotheses and the ad \
-    accounts (jeeta.capability.list, group ads). The ad account you choose decides the platform \
+    claim_token. Read jeeta.strategy.knowledge_get: the ad budget of its rules is the hard limit \
+    every campaign is held against, and frame.topics are the ids each ad names as hypothesis_id; \
+    a topic you run ads for needs a paid cadence: set it with jeeta.strategy.frame_apply \
+    paid_cadence (it retires nothing). Read the ad accounts (jeeta.capability.list, group ads). The ad account you choose decides the platform \
     (the campaign's own account when a person chose one), and the platform decides what a plan \
     carries: `platforms` in the campaign_get answer says it field by field. On Meta (meta_ads): \
     the Facebook Page (kind facebook_page), one shareable image of the library per ad \
@@ -1494,8 +1647,10 @@ const SOCIAL_SCHEDULE_HINT: &str = "A platform version of a finished content pac
     A refusal names the limit: choose another time. Every account the version lists may be \
     scheduled: where its choice names a human_gate, the post waits after scheduling for the \
     owner (their approval, or TikTok's posting screen) and goes out once they have done it; \
-    elsewhere it goes out at its time. The post goes out under the hypothesis its choice names \
-    (attribution); you choose none.";
+    elsewhere it goes out at its time. The post goes out under the topic its choice names \
+    (attribution); you choose none. A content a person asked for without naming an account may \
+    go out on any account it lists. A version a person already scheduled, approved or passed on \
+    TikTok's posting screen is theirs: never schedule it again or replace it.";
 
 /// Assignment limits the offered work, never a human's visibility or underlying permissions.
 async fn module_work_offered(

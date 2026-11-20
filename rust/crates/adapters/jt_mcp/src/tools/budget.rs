@@ -39,8 +39,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           count, value: a label such as spools} for consumables and agent \
                           quotas; {kind: minutes} for agent hours), a cap per period in that \
                           unit (minor units of a currency, so 100000 is 1000.00 TRY) and a \
-                          period (daily, weekly, monthly or total). Returns the item. \
-                          [risk: WRITE]",
+                          period (daily, weekly, monthly or total). The general ad budget may \
+                          not exceed the ad budget of the owner's rules (Kurallar, \
+                          jeeta.strategy.knowledge_get rules.ad_cap): above it is refused \
+                          (above_rules_cap). You may lower it; only the owner raises the \
+                          ceiling, in Kurallar. Returns the item. [risk: WRITE]",
             permissions: &[Permission::BudgetManage],
             schema: schema_for::<ItemCreateArgs>,
             run: items_create,
@@ -51,8 +54,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           currency) or period; a field left out stays, and at least one must be \
                           given. Its kind and unit never change. A cap below what was already \
                           spent in the period is allowed: the spend stays recorded and the item \
-                          reads over its cap. A retired item is not edited. Returns the item \
-                          with what was spent and what remains in its period. [risk: WRITE]",
+                          reads over its cap. A retired item is not edited. The general ad \
+                          budget may not exceed the ad budget of the owner's rules (Kurallar, \
+                          jeeta.strategy.knowledge_get rules.ad_cap): above it is refused \
+                          (above_rules_cap). You may lower it; only the owner raises the \
+                          ceiling, in Kurallar. Returns the item with what was spent and what \
+                          remains in its period. [risk: WRITE]",
             permissions: &[Permission::BudgetManage],
             schema: schema_for::<ItemUpdateArgs>,
             run: items_update,

@@ -83,7 +83,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.project_schedule",
-            description: "Schedule a project output using the existing canonical posting policy and strategy gate; this does not mark it published. [risk: WRITE]",
+            description: "Schedule a project output using the existing canonical posting policy and knowledge gate; this does not mark it published. [risk: WRITE]",
             permissions: jt_app::usecases::studio::permissions::for_use_case(
                 "studio.project_schedule",
             ),

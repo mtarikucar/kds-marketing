@@ -12,7 +12,7 @@
 //! | `rules` (1 to 10) | prohibitions appended, duplicates skipped |
 //! | `goals` (1 to 5) | goals appended, duplicates skipped |
 //! | `proposals` (1 to 5) | none: the proposals this connection made wait for the owner |
-//! | `post_request` | the content a person's note asks for: refused here (`VALIDATION` `not_available`) until the posts page's composer write exists |
+//! | `post_request` | the content a person's note asks for: refused here (`VALIDATION` `not_available`) until the posts page's composer write exists (the seam: `post_request_outcome`) |
 //!
 //! or dismisses it with a reason in Turkish. The ad budget, the message limit and the approval
 //! switch are never an outcome: a note asking to change them is dismissed, sending the owner to
@@ -44,7 +44,7 @@ use super::{
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::TenantRepos;
-use crate::usecases::{Deps, hash_token, ledger_entry};
+use crate::usecases::{Deps, hash_token, ledger_entry, wake};
 
 /// The request receipts' actions.
 const NOTE_ADD: &str = "strategy.note_add";
@@ -223,6 +223,14 @@ pub async fn note_add(deps: &Deps, ctx: &Ctx, input: NoteAddInput) -> Result<Not
     r.studio()
         .request_receipt(NOTE_ADD, &key, &payload, &json!(note.id))
         .await?;
+    // The agents that file notes (design §5.3): the posting agent and the research agent.
+    wake::request(
+        r.as_mut(),
+        ctx,
+        &[wake::KNOWLEDGE, wake::RESEARCH],
+        wake::WakeReason::KnowledgeNote,
+    )
+    .await?;
     ledger(
         r.as_mut(),
         ctx,
@@ -547,6 +555,11 @@ pub async fn note_file(deps: &Deps, ctx: &Ctx, input: NoteFileInput) -> Result<N
     });
     note.outcome = Some(outcome);
     r.knowledge().save_note(&note).await?;
+    // The cards it wrote are the note's person's change: the agents that derive from them are
+    // woken on their behalf, this filer's own key included (its next check-in lists the
+    // derivation, design §4.10.9).
+    kb.wake(r.as_mut(), ctx, Waking::For(note.created_by))
+        .await?;
     kb.save(r.as_mut()).await?;
     r.studio()
         .request_receipt(NOTE_FILE, &filing.key, &payload, &json!(note.id))
@@ -635,12 +648,8 @@ impl Filing {
             MAX_SUMMARY_CHARS,
         )
         .map_err(invalid)?;
-        if input.post_request.is_some() {
-            return Err(AppError::validation(
-                "a post request is not filed yet: dismiss the note, saying the owner asks for it \
-                 on Paylaşımlar",
-                json!({ "field": "post_request", "reason": "not_available" }),
-            ));
+        if let Some(request) = &input.post_request {
+            post_request_outcome(request)?;
         }
         if input.cards.len() > 3 {
             return Err(too_many("cards", 3));
@@ -699,6 +708,21 @@ impl Filing {
             goals,
         })
     }
+}
+
+/// SEAM (design §4.8, §7.4: the note's post-request outcome waits for PR 4's
+/// `content.post_request`). Until that use case exists, the outcome is refused with `VALIDATION`
+/// `not_available` before anything is read, and the agent dismisses the note saying the owner
+/// asks for posts on Paylaşımlar. Once PR 4 is merged, this becomes the call that opens the
+/// content as `content.post_request` does (`text` = the note's text, its image and MP4 files,
+/// `requested_by` = the note's person, `CONTENT` or `MATERIALS` woken on their behalf), inside
+/// [`note_file`]'s bundle, recording `NoteOutcome::post_request`.
+fn post_request_outcome(_request: &Value) -> Result<(), AppError> {
+    Err(AppError::validation(
+        "a post request is not filed yet: dismiss the note, saying the owner asks for posts on \
+         Paylaşımlar",
+        json!({ "field": "post_request", "reason": "not_available" }),
+    ))
 }
 
 /// The note's files and links `attachments` puts onto the card at index `card`: each must be

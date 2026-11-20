@@ -79,7 +79,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           sentence at most 600 characters. One live agent call per \
                           connection. Then loop jeeta.calls.listen and jeeta.calls.say. Every \
                           gate is checked again right before dialing: a refusal is CONFLICT \
-                          with details.reason one of workspace_inactive, strategy_required, \
+                          with details.reason one of workspace_inactive, strategy_required (the \
+                          knowledge gate: the knowledge base has no card yet), \
                           bridge_offline, bridge_busy, person_erased, person_merged, \
                           no_phone_identity, suppressed, journey_lost, consent_missing, \
                           no_relationship, no_recent_inbound, outside_work_hours, \

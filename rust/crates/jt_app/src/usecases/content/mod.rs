@@ -65,7 +65,7 @@ pub fn schema(name: &str) -> Value {
                 "material_ids":{"type":"array","minItems":1,"maxItems":jt_studio::MAX_POST_MATERIALS,"uniqueItems":true,"items":uuid,
                     "description":"The area's materials this version shows, in display order (material ids, not file ids)."},
                 "hypothesis_id":{"type":"string","format":"uuid",
-                    "description":"The hypothesis of the approved strategy (jeeta.strategy.get) this content serves."},
+                    "description":"The topic this content serves: a topic id of jeeta.strategy.knowledge_get frame.topics."},
                 "content_type":{"type":["string","null"],"maxLength":MAX_CONTENT_TYPE_CHARS,
                     "description":"One of the hypothesis's organic content types, when it names any; otherwise leave out."}
             },"required":["format","text","material_ids","hypothesis_id"]});

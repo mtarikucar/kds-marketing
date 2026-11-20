@@ -20,7 +20,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.ledger",
-            description: "Read tenant-filtered Studio evidence, also after strategy archive. [risk: READ]",
+            description: "Read tenant-filtered Studio evidence. [risk: READ]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.ledger"),
             schema: || Schema::try_from(schema::input("ledger")).expect("studio schema"),
             run: ledger,
@@ -55,7 +55,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.learned",
-            description: "Read hypothesis results and evidence, lane performance and spend versus caps. [risk: READ]",
+            description: "Read the results and evidence of each topic (hypothesis_id: a topic id of jeeta.strategy.knowledge_get frame.topics), lane performance and spend versus caps. [risk: READ]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.learned"),
             schema: || Schema::try_from(schema::input("learned")).expect("studio schema"),
             run: learned,
@@ -69,7 +69,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.file_upload",
-            description: "Store validated tenant media with a replay key; needs no approved strategy. A piece shows only materials: add the stored file to the library with jeeta.studio.material_add first. [risk: WRITE]",
+            description: "Store validated tenant media with a replay key; needs no frame. A piece shows only materials: add the stored file to the library with jeeta.studio.material_add first. [risk: WRITE]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.file_upload"),
             schema: || Schema::try_from(schema::input("file_upload")).expect("studio schema"),
             run: file_upload,
@@ -111,7 +111,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "studio.hypothesis_propose",
-            description: "Append one hypothesis to the strategy draft, requiring team.manage as well as content.work, social.work or ads.work. [risk: WRITE]",
+            description: "Retired soon: the strategy is the knowledge base now; read jeeta.strategy.knowledge_get and apply with jeeta.strategy.frame_apply. Append one hypothesis to the strategy draft, requiring team.manage as well as content.work, social.work or ads.work. [risk: WRITE]",
             permissions: jt_app::usecases::studio::permissions::for_use_case("studio.hypothesis_propose"),
             schema: || {
                 Schema::try_from(schema::input("hypothesis_propose")).expect("studio schema")
@@ -178,8 +178,8 @@ fn posting_definitions() -> Vec<ToolDef> {
              images; LinkedIn feed_post images or one video; TikTok tiktok_video one video), \
              publish_at (at least the format's lead ahead, within the horizon, outside the quiet \
              hours), material_ids (eligible for the subject at publish_at, one an anchor), \
-             subject, hypothesis_id (a live hypothesis whose organic cadence names a content \
-             type for the channel) and content_type (default the cadence's first). All or \
+             subject, hypothesis_id (a topic id of jeeta.strategy.knowledge_get frame.topics \
+             whose organic cadence names a content type for the channel) and content_type (default the cadence's first). All or \
              nothing: a refused package names each refused post's reason (VALIDATION \
              package_refused, details.items: index, reason) and writes nothing; caps and spacing \
              count every planned or published post. A valid package becomes planned slots at \
@@ -251,7 +251,7 @@ fn library_definitions() -> Vec<ToolDef> {
              panel. Read it before filing a material a person uploaded with no olay \
              (jeeta.studio.material_analysis_complete's filing): its kinds and dates tell you \
              which olay the files come from. Returns {olays: [{olay, materials}]}. Needs no \
-             approved strategy. [risk: READ]",
+             frame. [risk: READ]",
             || library_schema("olays_list"),
             olays_list,
         ),
@@ -351,7 +351,7 @@ fn library_definitions() -> Vec<ToolDef> {
         ),
         def(
             "studio.material_analysis_complete",
-            "Agent only: complete your unexpired analysis lease using claim_token and expected_revision. Read jeeta.strategy.get and material_intelligence_list to reuse existing groups and labels. Record a factual description, labels, optional title and grouping, and date_source; never infer capture/event dates from upload time and leave uncertain facts unknown; do not invent dates or infer share permission. Revision conflicts preserve manual edits: reread the material instead of overwriting them. filing (optional, only for a material a person uploaded with no olay: the work item's unfiled is true and the material's binding is {kind: unfiled}) files it with exactly one of: olay_id, an existing olay it comes from (jeeta.studio.olays_list); new_olay {kind, title, starts_on, ends_on, place, occasion, notes} when no olay fits (it is created; occasion is required for a season or special_day and absent otherwise); or genel true, only for an AI image (a real photo goes genel only by a person, FORBIDDEN human_required). Read jeeta.studio.olays_list first and name an existing olay with olay_id whenever one fits. A new_olay that is plainly an olay the workspace already has (the same kind, the same starts_on and ends_on, and the same occasion or the same title, case and spacing aside) opens nothing: the material is filed into that olay and its confirmation stays exactly as it is, so the photos of one event analysed one by one make one olay. An olay you open this way for a real material a person uploaded is confirmed by the owner's rule (the person supplied the files; the ledger records it as confirmed by that rule from their upload) only when that person could confirm an olay themselves at the time of filing (an owner or manager); for anyone else's upload, and for an AI image, it stays proposed until a person confirms it. Filing into an existing olay, proposed or not, never confirms it. Leave filing out when unsure: the material stays unfiled and a person files it. A filing on a material already filed is refused (CONFLICT material_already_filed). Returns {material, intelligence, olay, filed}: olay is the one the filing named, opened or reused; filed is existing (olay_id), opened (a new olay), reused (new_olay matched an olay the workspace has) or genel, absent without a filing. [risk: WRITE]",
+            "Agent only: complete your unexpired analysis lease using claim_token and expected_revision. Read jeeta.strategy.knowledge_get (products_prices, who_we_are) and material_intelligence_list to reuse existing groups and labels. Record a factual description, labels, optional title and grouping, and date_source; never infer capture/event dates from upload time and leave uncertain facts unknown; do not invent dates or infer share permission. Revision conflicts preserve manual edits: reread the material instead of overwriting them. filing (optional, only for a material a person uploaded with no olay: the work item's unfiled is true and the material's binding is {kind: unfiled}) files it with exactly one of: olay_id, an existing olay it comes from (jeeta.studio.olays_list); new_olay {kind, title, starts_on, ends_on, place, occasion, notes} when no olay fits (it is created; occasion is required for a season or special_day and absent otherwise); or genel true, only for an AI image (a real photo goes genel only by a person, FORBIDDEN human_required). Read jeeta.studio.olays_list first and name an existing olay with olay_id whenever one fits. A new_olay that is plainly an olay the workspace already has (the same kind, the same starts_on and ends_on, and the same occasion or the same title, case and spacing aside) opens nothing: the material is filed into that olay and its confirmation stays exactly as it is, so the photos of one event analysed one by one make one olay. An olay you open this way for a real material a person uploaded is confirmed by the owner's rule (the person supplied the files; the ledger records it as confirmed by that rule from their upload) only when that person could confirm an olay themselves at the time of filing (an owner or manager); for anyone else's upload, and for an AI image, it stays proposed until a person confirms it. Filing into an existing olay, proposed or not, never confirms it. Leave filing out when unsure: the material stays unfiled and a person files it. A filing on a material already filed is refused (CONFLICT material_already_filed). Returns {material, intelligence, olay, filed}: olay is the one the filing named, opened or reused; filed is existing (olay_id), opened (a new olay), reused (new_olay matched an olay the workspace has) or genel, absent without a filing. [risk: WRITE]",
             || library_schema("material_analysis_complete"),
             material_analysis_complete,
         ),

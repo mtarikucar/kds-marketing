@@ -302,6 +302,7 @@ pub async fn proposal_accept(
     p.decided_by = Some(person);
     p.applied_revision = Some(kb.settings.revision);
     r.knowledge().save_proposal(&p).await?;
+    kb.wake(r.as_mut(), ctx, Waking::InPerson).await?;
     kb.save(r.as_mut()).await?;
     ledger(r.as_mut(), ctx, "strategy.proposal_accepted", &p, json!({})).await?;
     r.commit().await?;

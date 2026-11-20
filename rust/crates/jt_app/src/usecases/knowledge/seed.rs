@@ -123,6 +123,7 @@ async fn seed_in(
         Cause::Seed
     };
     let mut kb = Locked {
+        revisions_at_lock: (settings.posting_revision, settings.prospecting_revision),
         settings,
         frame: approved.as_ref().map(|v| v.id),
         bumped: false,
