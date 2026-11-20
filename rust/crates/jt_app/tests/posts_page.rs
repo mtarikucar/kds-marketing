@@ -904,10 +904,12 @@ async fn a_special_day_photo_starts_its_content_at_once() {
     library::calendar_set(
         &w.d,
         &w.ctx,
-        input(json!({"key":"dukkan_gunu","year":year,"name":"Dükkan günü","kind":"special_day",
+        input(
+            json!({"key":"dukkan_gunu","year":year,"name":"Dükkan günü","kind":"special_day",
             "window_start":(today + time::Duration::days(3)).to_string(),
             "window_end":(today + time::Duration::days(4)).to_string(),
-            "lead_days":7,"enabled":true})),
+            "lead_days":7,"enabled":true}),
+        ),
     )
     .await
     .unwrap();
@@ -932,8 +934,10 @@ async fn a_special_day_photo_starts_its_content_at_once() {
     let out = content::files_add(
         &w.d,
         &w.ctx,
-        input(json!({"request_key":"day-1","target":{"kind":"special_day","key":"dukkan_gunu",
-            "year":year},"file_ids":[f.id]})),
+        input(
+            json!({"request_key":"day-1","target":{"kind":"special_day","key":"dukkan_gunu",
+            "year":year},"file_ids":[f.id]}),
+        ),
     )
     .await
     .unwrap();
@@ -955,7 +959,10 @@ async fn a_special_day_photo_starts_its_content_at_once() {
     assert!(olay.is_confirmed());
     assert_eq!(m.olay_id(), Some(olay.id));
     assert_eq!(
-        m.upload_for.as_ref().and_then(|u| u.day.as_ref()).map(|d| d.key.as_str()),
+        m.upload_for
+            .as_ref()
+            .and_then(|u| u.day.as_ref())
+            .map(|d| d.key.as_str()),
         Some("dukkan_gunu")
     );
     if let Some(day) = &out.day {
@@ -978,7 +985,10 @@ async fn a_special_day_photo_starts_its_content_at_once() {
         pending(&w, content_key).is_some_and(|(r, _)| r.contains(&WakeReason::ContentRequested))
     );
     let page = read(&w, &w.ctx, json!({})).await;
-    assert!(page.days.iter().all(|l| l.key != "dukkan_gunu"), "the line is gone");
+    assert!(
+        page.days.iter().all(|l| l.key != "dukkan_gunu"),
+        "the line is gone"
+    );
 }
 
 #[tokio::test]

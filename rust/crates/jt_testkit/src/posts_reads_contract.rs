@@ -62,7 +62,12 @@ pub async fn exercise(uow: &dyn UnitOfWork) {
         at: FIXED_NOW,
     };
     let mut r = uow.tenant(f.ws).await.unwrap();
-    assert!(r.studio_posts().acknowledge_post(post.slot_id, ack).await.unwrap());
+    assert!(
+        r.studio_posts()
+            .acknowledge_post(post.slot_id, ack)
+            .await
+            .unwrap()
+    );
     assert!(
         !r.studio_posts()
             .acknowledge_post(
@@ -88,7 +93,12 @@ pub async fn exercise(uow: &dyn UnitOfWork) {
     );
     drop(r);
     let mut r = uow.tenant(f.ws).await.unwrap();
-    let stored = r.studio_posts().get_post(post.slot_id).await.unwrap().unwrap();
+    let stored = r
+        .studio_posts()
+        .get_post(post.slot_id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.acknowledged, Some(ack));
     assert_eq!(
         jt_studio::PlannedPost {
