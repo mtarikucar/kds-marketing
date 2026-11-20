@@ -18,8 +18,10 @@
 //! - **The general ad budget** follows `ad_cap` (`cap` = its amount, in its period; created as
 //!   "Reklam bütçesi" when there is none; cap 0 for "Reklam yok"), as the person's own write, so
 //!   a lowering binds through `check_money`'s general check at once. `budget::check_general` holds
-//!   that item at or below `ad_cap` for everyone (`above_rules_cap`): only a person in person
-//!   with `budget.manage`, here, raises the ceiling (D2).
+//!   that item at or below `ad_cap`, and in its currency, for everyone (`above_rules_cap`,
+//!   `rules_cap_currency`): only a person in person with `budget.manage`, here, raises the
+//!   ceiling (D2). The ceiling keeps its currency: a save never takes another from the general
+//!   item, so no edit in Bütçe can turn the owner's number into another currency's.
 //! - **A lowering** runs the ads watch right after the commit (`ads::watch`), so a running
 //!   campaign whose period spend already reached the new cap stops now, not at the job's next
 //!   pass; the answer says how many (`stopped_campaigns`).
@@ -164,13 +166,10 @@ pub async fn rules_save(deps: &Deps, ctx: &Ctx, input: RulesInput) -> Result<Rul
         return Err(rules_changed(&kb.settings));
     }
     let now = &kb.settings;
-    let ad_cap = match &input.ad_budget {
-        None => None,
-        Some(c) => Some(cap(
-            c,
-            now.ad_cap.as_ref(),
-            general_currency(r.as_mut()).await?,
-        )),
+    let ad_cap = match (&input.ad_budget, &now.ad_cap) {
+        (None, _) => None,
+        (Some(c), Some(current)) => Some(cap(c, Some(current), None)),
+        (Some(c), None) => Some(cap(c, None, general_currency(r.as_mut()).await?)),
     };
     let message_cap = input
         .message_budget
@@ -276,9 +275,12 @@ const RULES_REASON: &str = "knowledge_rules";
 
 /// The live general ad budget follows the ad budget of the rules (design §4.6.2), as the
 /// person's write: its cap is the amount, in its period; with none, one is created ("Reklam
-/// bütçesi"); with no ad budget, its cap becomes 0 (it is kept, with its history). Locks the
-/// item: the last lock of design §4.10.13. Ledgered `budget.items.update` /
-/// `budget.items.create` with the reason `knowledge_rules`.
+/// bütçesi"); with no ad budget, its cap becomes 0 (it is kept, with its history). A general item
+/// in another currency than the ad budget's is left as it is: nothing is spent through it (the
+/// paid lane is in the ad budget's currency, and `check_money` takes the lane of the item's),
+/// and following it would put the owner's amount into another currency. Locks the item: the
+/// last lock of design §4.10.13. Ledgered `budget.items.update` / `budget.items.create` with the
+/// reason `knowledge_rules`.
 async fn follow_general(
     deps: &Deps,
     ctx: &Ctx,
@@ -340,6 +342,7 @@ async fn follow_general(
         .filter(live)
         .ok_or_else(|| AppError::conflict("the general ad budget changed meanwhile"))?;
     let (amount, period) = match cap {
+        Some(c) if item.unit != Unit::Currency(c.currency.clone()) => return Ok(()),
         Some(c) => (c.amount_minor, seed::item_period(c.period)),
         None => (0, item.period),
     };
@@ -422,6 +425,84 @@ pub async fn post_approval_set(
     let out = RulesOut::of(&kb.settings);
     r.commit().await?;
     Ok(out)
+}
+
+/// The knowledge base locked for `capability.set_policy` (see [`lock_for_policy`]), with the
+/// person acting.
+pub(crate) struct PolicyLock {
+    kb: super::Locked,
+    person: jt_tenancy::UserId,
+}
+
+/// Before `capability.set_policy` locks its capability (the settings come before the
+/// capabilities, design §4.10.13): the knowledge base, locked, for a person acting in person on
+/// a workspace whose post gate is seeded; none otherwise (before the seed the stored flag is
+/// still the gate, and an agent's policy write never moves post approval, §3.10.1).
+pub(crate) async fn lock_for_policy(
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+) -> Result<Option<PolicyLock>, AppError> {
+    let Ok(person) = person(ctx) else {
+        return Ok(None);
+    };
+    let frame = r.strategy().current_approved().await?;
+    let Some(settings) = r.knowledge().lock_settings().await? else {
+        return Ok(None);
+    };
+    if settings.post_gate_seeded_at.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(PolicyLock {
+        kb: super::Locked {
+            revisions_at_lock: (settings.posting_revision, settings.prospecting_revision),
+            settings,
+            frame: frame.map(|v| v.id),
+            bumped: false,
+        },
+        person,
+    }))
+}
+
+/// A person's `capability.set_policy` turning `c`'s stored flag to `required` (`c` as it was
+/// before), under `lock` (design §3.10.1, D1): post approval is the knowledge base's, so the
+/// policy dialog's "every action waits for a person" moves a social account into the approval
+/// list, and out of it when the person is an owner or a manager and the switch is off (as
+/// `post_approval_set` allows; otherwise its posts keep waiting, which errs safe). The flag
+/// itself keeps holding the account's comment replies. A `rules` revision row and
+/// `strategy.rules_changed`, in the caller's bundle. Nothing else changes anything here.
+pub(crate) async fn follow_policy(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    lock: PolicyLock,
+    c: &jt_capability::Capability,
+    required: bool,
+) -> Result<(), AppError> {
+    let PolicyLock { mut kb, person } = lock;
+    if !ORGANIC_KINDS.contains(&c.kind_key.as_str()) || c.policy.requires_human_approval == required
+    {
+        return Ok(());
+    }
+    let id = c.id.as_uuid();
+    let s = &mut kb.settings;
+    let listed = s.post_approval_accounts.contains(&id);
+    if required && !listed {
+        if s.post_approval_accounts.len() >= MAX_POST_APPROVAL_ACCOUNTS {
+            return Err(AppError::validation(
+                format!(
+                    "at most {MAX_POST_APPROVAL_ACCOUNTS} accounts wait for approval one by one:                      switch approval on for every post in Kurallar instead"
+                ),
+                json!({ "field": "requires_human_approval", "reason": "too_many" }),
+            ));
+        }
+        s.post_approval_accounts.push(id);
+    } else if !required && listed && !s.post_approval && ctx.is_owner_or_manager() {
+        s.post_approval_accounts.retain(|a| *a != id);
+    } else {
+        return Ok(());
+    }
+    s.rules_revision += 1;
+    record(deps, ctx, r, &mut kb, Subject::Rules, person).await
 }
 
 /// Saves the goals whole: at most 20 lines of at most 300 characters. A knowledge change no
@@ -507,8 +588,9 @@ fn owner_or_manager(ctx: &Ctx) -> Result<(), AppError> {
 }
 
 /// A ceiling as stored from what was written: the amount, the period given (else the one in
-/// force, else monthly), and the currency `unit` (the ad cap's: the live general ad budget's,
-/// design §4.6.2), else the one in force, else `TRY`.
+/// force, else monthly), and the currency of the one in force; a new one's is `unit` (the ad
+/// cap's: the live general ad budget's, design §4.6.2), else `TRY`. A save never changes a
+/// ceiling's currency.
 fn cap(input: &CapInput, current: Option<&Cap>, unit: Option<String>) -> Cap {
     Cap {
         amount_minor: input.amount_minor,
@@ -516,8 +598,9 @@ fn cap(input: &CapInput, current: Option<&Cap>, unit: Option<String>) -> Cap {
             .period
             .or(current.map(|c| c.period))
             .unwrap_or(Period::Monthly),
-        currency: unit
-            .or_else(|| current.map(|c| c.currency.clone()))
+        currency: current
+            .map(|c| c.currency.clone())
+            .or(unit)
             .unwrap_or_else(|| "TRY".to_owned()),
     }
 }

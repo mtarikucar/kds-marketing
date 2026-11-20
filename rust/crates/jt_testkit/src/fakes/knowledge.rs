@@ -170,6 +170,7 @@ impl KnowledgeRepo for MemTenant {
     }
 
     async fn lock_settings(&mut self) -> Result<Option<KnowledgeSettings>, AppError> {
+        self.tx.journal_lock("knowledge_settings");
         self.tx.lock_studio().await;
         Ok(self.settings_of())
     }

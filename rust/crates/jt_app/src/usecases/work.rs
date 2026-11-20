@@ -617,7 +617,7 @@ async fn pending_as_seen(
                 analyses.push(WorkItem {
                     kind: WorkKind::StudioMaterialAnalysis { material_id: material.id, expected_revision: material.revision, unfiled },
                     priority: 2,
-                    hint: if unfiled { UNFILED_ANALYSIS_HINT.into() } else { "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.knowledge_get (products_prices, who_we_are) and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. A person's upload may wake you; otherwise poll jeeta.work.checkin on your own schedule.".into() },
+                    hint: if unfiled { UNFILED_ANALYSIS_HINT.into() } else { "Claim this material with jeeta.studio.material_analysis_claim at expected_revision and inspect the actual short-lived preview with your own tools. Read jeeta.strategy.knowledge_get (products_prices, who_we_are) and jeeta.studio.material_intelligence_list to reuse existing groups and labels. Look for every face, name, child, client logo and corporate reference and mark each in depicts, then send sensitive_checked true: a file a person attached to a post becomes shareable by itself only when you checked and found none. Never infer capture or event dates from upload time; leave uncertain facts unknown. Complete or fail with your claim_token; never infer share permission or overwrite manual edits. A person's upload may wake you; otherwise poll jeeta.work.checkin on your own schedule.".into() },
                 });
             }
         }
@@ -1322,11 +1322,11 @@ const KNOWLEDGE_NOTE_HINT: &str = "The owner told the agents something. Claim th
     close it with jeeta.strategy.note_file with what it asks, as the owner's own words: cards \
     (knowledge: send that card's whole new body keeping everything the owner wrote, or a new \
     card when none fits), rules (a prohibition the owner states), goals (a goal the owner \
-    states), and proposals (ids of proposals you made with jeeta.strategy.proposal_create for \
-    what you inferred and the owner did not say). summary is one line in Turkish the owner \
-    reads. A note asking for a post cannot be filed as one yet (post_request answers \
-    not_available): dismiss it with a reason in Turkish saying the owner asks for posts on \
-    Paylasimlar. Dismiss only a note with nothing to act on, with a reason in Turkish that says \
+    states), post_request ({}: the owner asks for a post; it opens a content as if the owner \
+    wrote the note on the Paylasimlar page, the note's images and videos its files), and \
+    proposals (ids of proposals you made with jeeta.strategy.proposal_create for what you \
+    inferred and the owner did not say). summary is one line in Turkish the owner reads. \
+    Dismiss only a note with nothing to act on, with a reason in Turkish that says \
     where the answer is. The ad budget, the message limit and the approval switch are the \
     owner's alone: a note asking to change them is dismissed with a reason that sends the owner \
     to Kurallar. A note does not let you replace a post a person already approved: when it \
@@ -1571,13 +1571,13 @@ const CONTENT_AREA_HINT: &str = "Carry this production area to a content package
     or client. When the work needs a real photo or video, ask with \
     jeeta.studio.project_request and give the area back with jeeta.content.area_release; it \
     returns to your check-in once the capture is there. (5) Deliver every platform version in \
-    one call to jeeta.content.area_deliver, each with a hypothesis_id: a topic id of \
-    jeeta.strategy.knowledge_get frame.topics the version is about (where it does not post on \
-    the account the version gets, the post goes out under another topic that does, or under the \
-    owner's request when a person asked for this content naming the account); never name the \
-    owner's request yourself. With no connected account leave capability_id out. A refusal \
-    lists, by version index, what to fix: fix it and deliver again with a new request_key. Three \
-    refusals in a row hand the area to a person. An accepted delivery finishes the area. Only \
+    one call to jeeta.content.area_deliver. hypothesis_id: when a person asked for this area \
+    (requested_by), leave it out (the post is the owner's request); otherwise name the topic of \
+    jeeta.strategy.knowledge_get frame.topics the version is about; never name the owner's \
+    request. With no connected account leave capability_id out. A refusal lists, by version \
+    index, what to fix: fix it and deliver again with a new request_key. Three refusals in a row \
+    hand the area to a person. An accepted delivery finishes the area; when a person asked for \
+    it, the social agent is woken for its time. Only \
     this area is yours to redo: a post a person already approved stays as it is unless a person \
     asked for a change.";
 
@@ -1586,7 +1586,9 @@ const UNFILED_ANALYSIS_HINT: &str = "A person uploaded this material with no ola
     file it. Claim it with jeeta.studio.material_analysis_claim at expected_revision and inspect \
     the short-lived preview with your own tools; read jeeta.studio.olays_list for the olays it may \
     belong to (their kinds and dates) and jeeta.studio.material_intelligence_list to reuse groups \
-    and labels. Complete with jeeta.studio.material_analysis_complete and a filing: olay_id of the \
+    and labels. Look for every face, name, child, client logo and corporate reference and mark \
+    each in depicts, then send sensitive_checked true. Complete with \
+    jeeta.studio.material_analysis_complete and a filing: olay_id of the \
     existing olay it comes from, or new_olay (kind, title, starts_on, ends_on, and place, occasion \
     or notes when known) when none fits, or genel only for an AI image. Never infer event dates \
     from upload time; when you cannot tell where it belongs, complete without a filing and a \

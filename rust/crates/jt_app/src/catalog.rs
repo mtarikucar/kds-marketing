@@ -266,6 +266,15 @@ pub static CATALOG: &[UseCase] = &[
     twin("content.area_deliver", GateMode::Gated, "jeeta.content.area_deliver", ("POST", "/api/content/areas/{project_id}/delivery"), Write),
     panel_only("content.area_redo", Exempt, ("POST", "/api/content/areas/{project_id}/redo"), Write),
     panel_only("content.delivery_accept", GateMode::Gated, ("POST", "/api/content/areas/{project_id}/delivery/accept"), Write),
+    // Paylaşımlar (design 2026-11-19 "Paylaşımlar and Bilgi bankası" §3.1): a person's page, open
+    // before any frame exists.
+    panel_only("content.posts", Exempt, ("GET", "/api/content/posts"), Read),
+    panel_only("content.post_get", Exempt, ("GET", "/api/content/posts/{row_id}"), Read),
+    panel_only("content.post_request", Exempt, ("POST", "/api/content/post-requests"), Write),
+    panel_only("content.files_add", Exempt, ("POST", "/api/content/files"), Write),
+    panel_only("content.special_day_skip", Exempt, ("POST", "/api/content/special-days/{key}/{year}/skip"), Write),
+    panel_only("content.version_cancel", Exempt, ("POST", "/api/content/areas/{project_id}/versions/{version_id}/cancel"), Write),
+    panel_only("content.post_dismiss", Exempt, ("POST", "/api/content/posts/{row_id}/dismiss"), Write),
     twin("social.version_schedule", GateMode::Gated, "jeeta.social.version_schedule", ("POST", "/api/social/versions/schedule"), Write),
     twin("social.versions_waiting", Exempt, "jeeta.social.versions_waiting", ("GET", "/api/social/packages"), Read),
     twin("social.accounts_list", Exempt, "jeeta.social.accounts_list", ("GET", "/api/social/accounts"), Read),

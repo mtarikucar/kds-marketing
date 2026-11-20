@@ -369,7 +369,7 @@ pub async fn account_get(d: &Deps, ctx: &Ctx, q: AccountQuery) -> Result<Account
 
     // What is coming: is it going out by itself, and if not, what does it wait for.
     let knowledge = super::approval::rules(r.as_mut()).await?;
-    let control = r.studio_control().lock_control().await?;
+    let control = r.studio_control().read_control().await?;
     let stopped = control.is_braked(jt_strategy::LaneKind::Organic)
         || settings.paused_capability_ids.contains(&c.id);
     let mut upcoming = Vec::new();

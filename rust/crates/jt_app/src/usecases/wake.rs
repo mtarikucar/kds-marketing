@@ -47,6 +47,16 @@
 //! - `studio.brake` releasing the organic lane: `posting_resumed`, for `social.work` agents;
 //! - `connector.confirm_assets` and `capability.verify` making a social account postable that a
 //!   version waiting for a time can go out on: `account_connected`, for `social.work` agents;
+//! - Paylaşımlar (design 2026-11-19 §3.6): `content.post_request` (the composer),
+//!   `content_requested` for `content.work` agents, or with files `material_uploaded` for
+//!   `materials.work` agents; `content.files_add`, `material_uploaded`, and `capture_answered`
+//!   when a capture's files are all shared already; the last file a person attached to a content
+//!   getting its share (by rule in `studio.material_analysis_complete`, or by `İzin ver`), leaving
+//!   its sources or being deleted: `content_requested` (`capture_answered` for a capture's file),
+//!   on the uploader's behalf when the analysis shared it; a special day's file shared while its
+//!   preparation runs, which opens its content at once: `content_requested`;
+//!   `content.area_deliver` of a content a person asked for: `content_delivered`, for
+//!   `social.work` agents, on that person's behalf;
 //! - `agents.wake_now`: `manual`, for the one agent named.
 //!
 //! An action the system or an agent takes because a person asked (a frame applied from their
@@ -558,6 +568,68 @@ pub(crate) async fn reach(
         },
         next_at,
     })
+}
+
+/// For each of `needs`, how the agents that may take its work (its permission and module, as
+/// [`request`] decides) can be reached at `now` ([`AgentReach`]): one with a usable wake address
+/// is `ok`; else the soonest expected check-in, `late` once it passed; `none` when no agent takes
+/// it. Pure over the agents, the modules and the wake rows, each read once (design 2026-11-19
+/// "Paylaşımlar and Bilgi bankası" §3.2.4 step 9).
+pub(crate) async fn takers(
+    repos: &mut dyn TenantRepos,
+    now: OffsetDateTime,
+    needs: &[Need],
+) -> Result<Vec<AgentReach>, AppError> {
+    let agents = agents_in(repos).await?;
+    let offered = Offered::read(repos).await?;
+    let rows: BTreeMap<ApiKeyId, AgentWakeRow> = repos
+        .agent_connections()
+        .wakes()
+        .await?
+        .into_iter()
+        .map(|r| (r.api_key_id, r))
+        .collect();
+    let fallback = repos
+        .workspace_policy()
+        .get()
+        .await?
+        .agent_checkin_interval_minutes;
+    Ok(needs
+        .iter()
+        .map(|need| {
+            let taking: Vec<&Agent> = agents.iter().filter(|a| a.takes(need, &offered)).collect();
+            if taking.is_empty() {
+                return AgentReach {
+                    state: ReachState::None,
+                    next_at: None,
+                };
+            }
+            if taking
+                .iter()
+                .any(|a| rows.get(&a.key.id).is_some_and(AgentWakeRow::usable))
+            {
+                return AgentReach {
+                    state: ReachState::Ok,
+                    next_at: None,
+                };
+            }
+            let next_at = taking
+                .iter()
+                .filter_map(|a| {
+                    let row = rows.get(&a.key.id);
+                    next_expected(row, a.last_seen_at(), interval_of(row, fallback).0)
+                })
+                .min();
+            AgentReach {
+                state: if next_at.is_some_and(|at| at <= now) {
+                    ReachState::Late
+                } else {
+                    ReachState::Asleep
+                },
+                next_at,
+            }
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------------------------

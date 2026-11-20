@@ -761,9 +761,10 @@ impl VersionAccounts {
             None => (Vec::new(), Vec::new()),
         };
         let knowledge = super::approval::rules(r).await?;
+        // Read without the lock (§3.10.2): a write that needs it took it already.
         let braked = r
             .studio_control()
-            .lock_control()
+            .read_control()
             .await?
             .is_braked(jt_strategy::LaneKind::Organic);
         Ok(Self {
@@ -790,6 +791,13 @@ impl VersionAccounts {
         p: &ProductionProject,
         v: &PackageVersion,
     ) -> Option<(HypothesisId, Attribution)> {
+        // A version the server attributed to the owner's request (a person's content delivered
+        // without a topic, §3.5) goes out under it on every account the request covers, and on
+        // no other: it is never mixed into a topic.
+        if owner_request::is(ch.capability.workspace_id, v.hypothesis_id) {
+            return owner_request::names(p, &ch.capability)
+                .then_some((v.hypothesis_id, Attribution::OwnerRequest));
+        }
         if ch
             .options
             .iter()
@@ -826,6 +834,30 @@ impl VersionAccounts {
         v: &PackageVersion,
         now: OffsetDateTime,
     ) -> Result<(Vec<AccountChoice>, Option<&'static str>), AppError> {
+        if self.braked {
+            return Ok((Vec::new(), Some("braked")));
+        }
+        let known: BTreeMap<MaterialId, jt_studio::Material> = r
+            .studio_materials()
+            .get_materials(&v.material_ids)
+            .await?
+            .into_iter()
+            .map(|m| (m.id, m))
+            .collect();
+        self.of_known(d, r, p, v, &known, now).await
+    }
+
+    /// [`Self::of`] with the version's materials read already (`known`, by id; a material
+    /// missing from it counts as deleted): a read of many versions batches them.
+    pub(crate) async fn of_known(
+        &self,
+        d: &Deps,
+        r: &mut dyn TenantRepos,
+        p: &ProductionProject,
+        v: &PackageVersion,
+        known: &BTreeMap<MaterialId, jt_studio::Material>,
+        now: OffsetDateTime,
+    ) -> Result<(Vec<AccountChoice>, Option<&'static str>), AppError> {
         // Posting is stopped, the first reason: the social agent schedules nothing into a
         // stopped lane, so no freed post loops (design §3.10.2).
         if self.braked {
@@ -834,8 +866,8 @@ impl VersionAccounts {
         let mut mimes = Vec::new();
         let mut removed = false;
         for id in &v.material_ids {
-            match r.studio_materials().get_material(*id).await? {
-                Some(m) if m.erased_at.is_none() => mimes.push(m.mime),
+            match known.get(id) {
+                Some(m) if m.erased_at.is_none() => mimes.push(m.mime.clone()),
                 _ => removed = true,
             }
         }

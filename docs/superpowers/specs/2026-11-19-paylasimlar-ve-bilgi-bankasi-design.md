@@ -1148,6 +1148,12 @@ chain context, so sending waits for the approval), `social::accounts` (`requires
 `context.rs`) keep reading the stored flag: the switch and the list are about posts only, and the
 stored flag keeps its other meanings (comment replies, ad budget moves). An agent's
 `capability.set_policy` can therefore no longer lower a post approval (design 2026-11-19 O4).
+A person's `capability.set_policy` in person on a seeded workspace still moves it, so the policy
+dialog ("Her eylem insan onayı bekler") keeps holding or freeing the account's posts until Hesaplar
+replaces it: turning the stored flag on for a social account also puts the account into
+`post_approval_accounts`, and turning it off takes it out when the person is an owner or a manager
+and the switch is off (else its posts keep waiting, which errs safe); a `rules` revision row and
+`strategy.rules_changed`, the settings locked before the capability (§4.10.13).
 
 #### 3.10.2 Stops and blocked codes
 
@@ -1180,6 +1186,40 @@ requested in person (`ContentRequested`, or `CaptureAnswered` for a capture answ
 list empties with no shared file stays open (`need_photo` again). Until this lands, a deleted file
 could keep an area waiting for analysis forever (`needs_agent` false) with the row saying
 `Dosyaların inceleniyor`. The `material_removed` wait of `version` rows is unchanged.
+
+### 3.11 As built (PR 4)
+
+Where the build settled what this section left open, or departs from it:
+
+- **The acknowledgement is the planned post's** (`studio_posts.data.acknowledged {by, at}`, written
+  once by `PostRepo::acknowledge_post`), not the slot's, and the slot's revision does not move:
+  a slot's revision names its piece revision, which approvals and pieces are keyed by. The
+  dismiss route is `POST /api/content/posts/{row_id}/dismiss` (the router takes one parameter name
+  per position, shared with the read's `{row_id}`); its value is the slot id.
+- **A need's pending files** are the live materials whose `upload_for.shoot_request_id` names it
+  and whose share is unset: found by what they were attached for, as a day's are, not a field of
+  the shoot request.
+- `get_pieces` takes `(slot, revision)` pairs and answers `(slot, piece)` pairs.
+- The read's shapes add what the panel (PR 5) reads: `PostRow.tiktok_draft` (stays true once a
+  draft reads `published`), `PostDetail.listed` (`false` for a row no list holds),
+  `SpecialDayLine.files.permit` (each file's revision for `İzin ver` / `Yine de kullan`),
+  `Stop {code, at}` (`at` for `agent_sleeps` / `agent_late`); `RowActions.permit_files` also lists
+  a `files_quality` wait's files. `MediaSummary.video_seconds` is `null` until the analysis
+  records a length; `CancelFact.by_name` is empty. `AccountRef.expected_revision` is the posting
+  settings' revision, which `social.account_pause` checks. Sub-states, cancel refs, files
+  targets and dismiss refs are tagged by `kind`; a capture's dismiss ref carries the area's
+  revision.
+- A failed post's failure time is its scheduled time (the attempt's own time is not read).
+- `content.files_add` answers `{row, day}`: the row it changed, or the special day's line (absent
+  once the day's content shows as a row). `content.special_day_skip` answers the saved entry;
+  `content.version_cancel` `{project, archived}`; `content.post_dismiss` `{slot_id, kind,
+  acknowledged}`.
+- The calendar trigger a special day's shared file starts is `planner::calendar_for`, the
+  planner's calendar step for that day alone without the settle wait.
+- `ready::Reader`, `VersionAccounts` and `account_get` read the brake with `read_control`.
+- A note's `post_request` outcome stays refused (`not_available`) here; the composer's internals
+  are `content::compose::open_request_in` (the caller's transaction, waking on the note's person's
+  behalf) for PR 6 to call. PR 6 calls it (§5.7).
 
 ## 4. Bilgi bankası
 
@@ -1422,7 +1462,7 @@ body empty; the card stays (blank seeds show their placeholder, §4.11).
 
 | key | Title | Body generated from the source version's sections |
 |---|---|---|
-| `who_we_are` | Biz kimiz | `identity.positioning`, then `\n\nBizi farklı kılan: {identity.usp}` when `usp` is not empty |
+| `who_we_are` | Biz kimiz | `identity.positioning`, then `\n\nBizi farklı kılan: {identity.usp}` when `usp` is not empty and the positioning does not already hold that line (a frame's positioning is the card's whole text, D34) |
 | `products_prices` | Ürünler ve fiyat | `identity.product` |
 | `voice` | Ses tonu | `identity.voice` |
 | `customers` | Müşterilerimiz | `goals.objective` (when not empty) and a blank line, then one line per audience segment `• {name}: {description}` |
@@ -1453,9 +1493,12 @@ version is the source; a draft or no version gives none of them):
     214.285 a month → *G* 49.999), and the three then agree under `check_general`. *G* is locked
     (after the settings, §4.10.13) before anything is worked out from it, so an edit of it
     committed meanwhile is what is lowered, never raised back.
-  - Only *L*: `ad_cap` = *L*; a general item is created from it (`name = "Reklam bütçesi"`,
-    `kind = ad_budget`, unit the lane's currency, `cap = L.cap_minor`, `period = L.period`, ledger
-    `budget.items.create {reason: "knowledge_backfill"}`).
+  - Only *L*: `ad_cap` = *L*; a general item is created in its currency and period at 0
+    (`name = "Reklam bütçesi"`, `kind = ad_budget`, unit the lane's currency, `cap = 0`,
+    `period = L.period`, ledger `budget.items.create {reason: "knowledge_backfill"}`). Without a
+    general item no campaign could open (`no_general_ad_budget`), so creating it at the lane's cap
+    would have lifted ad spend from nothing to *L*; at 0 the owner opens it in Bütçe, up to
+    `ad_cap` (amended after the PR 2 review).
   - Only *G* (no paid lane, or `paid_enabled = false`): `ad_cap = null` (Kurallar reads `Reklam yok.`);
     *G* is left as it is (no lane: nothing can be spent on ads, exactly as today).
   - Neither: `ad_cap = null`.
@@ -1519,7 +1562,12 @@ own transaction:
    `seed`, `backfill` or `resync` is rewritten from the approved version with §4.3.2's mapping
    (`cause = resync`); a seed card the owner, a note or a proposal changed since is left as it is,
    and when the version's text for it differs, one `card_edit` proposal carries that text
-   (`proposed_by_component = 'strategy_resync'`, reason `Önceki sayfada onaylanan metin.`).
+   (`proposed_by_component = 'strategy_resync'`, reason `Önceki sayfada onaylanan metin.`). Only
+   the parts the routine changed count: a card whose text the frame in force before the approval
+   gives alike is neither rewritten nor proposed (the frame mirrors the cards, so a draft copied
+   from it reads them back, cut to the frame's 2000 characters), `accounts_channels` is built from
+   the draft's channels as the routine wrote them (step 1 makes the approved version's the
+   system's `[any]`), and no card is emptied (amended after the PR 2 review).
 3. Kurallar and Hedefler: prohibitions and goal lines the version adds are appended (never one
    removed, cause `resync`); `ad_cap` and `message_cap` are lowered to the version's lanes when those
    are lower, never raised (raising is the owner's, in Kurallar); the general item follows a lowered
@@ -1531,8 +1579,13 @@ own transaction:
 A workspace not yet seeded is seeded from the version just approved, in the same transaction.
 `strategy.archive` refuses on a seeded workspace with `CONFLICT use_brake` ("the knowledge base keeps
 the frame; stop posting with studio.brake"), so a frame never disappears under a written knowledge
-base (D10). The panel's `/api/strategy` write routes refuse with `CONFLICT use_knowledge_base` from
-PR 3 on (the page they served is gone); the MCP tools keep working, with this re-sync, until PR 7.
+base (D10). The panel's `/api/strategy` write routes (consultation, entries, sections, hypotheses,
+submit, approve, archive) refuse with `CONFLICT use_knowledge_base` once the workspace is seeded,
+from the second deploy (PR 2 + PR 3) on: the page they served is gone. Before the seed they still
+write, and the seed copies what they approve; every workspace is seeded at its first knowledge
+read or the first `knowledge_settle` tick. The MCP tools keep working, with this re-sync, until
+PR 7. (Amended at the PR 2 / PR 3 contract check: the refusal ships in PR 2, beside the HTTP suites
+that build the old consultation; the archive's `use_brake` is then the tools' answer.)
 
 ### 4.4 Cards
 
@@ -1627,9 +1680,13 @@ The owner's number is **`knowledge_settings.ad_cap`**: written only here (a pers
 nothing else crosses:
 
 - Save with an amount: `ad_cap = {amount_minor, period (given, else the current one, else monthly),
-  currency (the general item's unit, else TRY)}`. The live general item gets `cap = amount_minor`
-  and that period (`budget.items.update` internals, the person as actor); with none, one is created
-  (`name = "Reklam bütçesi"`, `kind = ad_budget`, `general = true`). `None` (no ads): `ad_cap = null`
+  currency (the current one; a new cap's is the general item's unit, else TRY)}`: a save never
+  changes a cap's currency, so no general item in another currency can turn the owner's number
+  into that currency's (amended after the PR 2 review). The live general item in that currency
+  gets `cap = amount_minor` and that period (`budget.items.update` internals, the person as
+  actor); with none, one is created (`name = "Reklam bütçesi"`, `kind = ad_budget`,
+  `general = true`); one in another currency is left as it is (nothing is spent through it: the
+  paid lane is in `ad_cap`'s currency). `None` (no ads): `ad_cap = null`
   and the general item's cap becomes 0 (it is kept: Bütçe's history stays).
 - In the same transaction, when a frame exists, the system writes the **mirror** (§4.10.2, cause
   `rules`): the frame's paid lane = `ad_cap` (`{lane: paid, period, cap_minor: amount, currency}`)
@@ -1642,7 +1699,9 @@ nothing else crosses:
 - **Agents cannot raise it.** `budget.rs` `check_general` compares a general item with `ad_cap`
   instead of the strategy's paid lane (same proration, refusal `VALIDATION {field: "cap", reason:
   "above_rules_cap", cap: <most allowed>}`), for every create, update, period change or
-  `general: true`, whoever makes it. So `jeeta.budget.items_update` and `items_create` (which need
+  `general: true`, whoever makes it; a general item in another currency than `ad_cap`'s is
+  `VALIDATION {field: "unit", reason: "rules_cap_currency", currency}`, so none sits outside the
+  ceiling. So `jeeta.budget.items_update` and `items_create` (which need
   only `budget.manage`, a scope an agent key may carry) can lower the general item, or raise it back
   up to `ad_cap`, never above; the lane never moves from Bütçe (Bütçe's writes run no mirror and take
   no frame lock). `ad_cap = null`: nothing to compare with, and nothing can be spent on ads (no
@@ -1805,7 +1864,8 @@ the caller's transaction; `cause` ∈ `derive` (an agent's `frame_apply`), `boot
    one is rechecked by `recheck_periods`), so every binding counts as live.
 3. **Topics** (cause `derive` with `topics`): for each topic given, its id when given (it must be a
    hypothesis of some version of this workspace: `VALIDATION topic_unknown`; the owner's request id:
-   `FORBIDDEN hypothesis_reserved`), else the id of a live topic of `previous` whose title is the
+   `FORBIDDEN hypothesis_reserved`), else the id of a live topic of `previous` that no entry of the
+   call names by its id and whose title is the
    same once case and whitespace are normalised, else a new id. `channel = "any"`. A **kept** topic
    sent without a cadence keeps its previous cadence; a **new** one without gets
    `default_organic_cadence(max(per_week, 1))` (`strategy.rs`, moved to `jt_knowledge`); a given
@@ -2252,7 +2312,7 @@ PR 6):
 | `jeeta.inbox.context` | adds `knowledge` (with open notes); prohibitions from the knowledge base; answers without a frame; "Read recent conversation context and the knowledge base" |
 | `jeeta.studio.slot_get` | `brand_rules` per §4.12 |
 | `jeeta.studio.overview` | goals from Hedefler |
-| `jeeta.studio.material_analysis_complete` | new input `sensitive_checked: bool` (default false); "read jeeta.strategy.knowledge_get (products_prices, who_we_are) to reuse groups and labels; look for every face, name, child, client logo and corporate reference and mark each in depicts, every named person in people, then send sensitive_checked true: a file a person attached to a post becomes shareable by itself only when you checked and found none" |
+| `jeeta.studio.material_analysis_complete` | new input `sensitive_checked: bool` (default false); "read jeeta.strategy.knowledge_get (products_prices, who_we_are) to reuse groups and labels; look for every face, name, child, client logo and corporate reference and mark each in depicts, then send sensitive_checked true: a file a person attached to a post becomes shareable by itself only when you checked and found none" |
 | `jeeta.studio.posts_propose`, `trend_record`, `judgment_record`, `jeeta.ads.plan_submit`, `campaign_move`, `jeeta.studio.adset_bind`, `project_schedule` | "hypothesis_id: a topic id of jeeta.strategy.knowledge_get frame.topics" in place of "of the approved strategy" |
 | `jeeta.prospects.playbook`, `score`, … ; `jeeta.research.tasks_*` | "the ICP and rubric of the frame, derived from the card who_we_seek"; `prospecting_off`: "the knowledge base has no ICP yet: derive it (knowledge_derive, part prospecting)"; changes "through jeeta.strategy.frame_apply (prospecting) when the card says so, else jeeta.strategy.proposal_create" |
 | `jeeta.budget.items_create`, `items_update` | "the general ad budget may not exceed the ad budget of the owner's rules (Kurallar, knowledge_get rules.ad_cap): above it is refused (above_rules_cap). You may lower it; only the owner raises the ceiling, in Kurallar." |
@@ -2467,7 +2527,7 @@ Every run:
      human_gate means the owner acts after scheduling (approval or TikTok's screen), not that you
      must not schedule there.
    - studio_material_analysis: look for faces, names, children, client logos and corporate
-     references and mark each in depicts, named people in people, then send sensitive_checked true;
+     references and mark each in depicts, then send sensitive_checked true;
      never set a share permission.
 3. When you learn something the cards do not say (a question customers keep asking, a topic that
    works), propose it with jeeta.strategy.proposal_create: one line of reason in Turkish.
@@ -2500,6 +2560,31 @@ Other routines: the inbox routine reads `jeeta.inbox.context.knowledge` (or
 can only lower the general item) and sets a topic's paid cadence with `jeeta.strategy.frame_apply`
 `paid_cadence` when it runs ads for a topic that has none. Nothing else changes for them.
 
+### 5.7 As built (PR 6)
+
+Where the build settled what this section and §4.8 left open, or departs from them:
+
+- **A note's post request** (`note_file` with `post_request: {}`, which takes no field of its own:
+  anything else is `VALIDATION post_request invalid`) calls `content::compose::open_request_in` in
+  the filing's transaction, after the knowledge locks and the cards' bootstrap (it takes the Studio
+  control lock, later in the order of §4.10.13). The note's images and MP4s (live files of the
+  workspace) are read before the transaction as the composer reads them; its PDFs, and a file
+  deleted since, are left out. Without the content module it is `CONFLICT module_not_installed`
+  before anything is written. The composer takes at most 2000 characters (`MAX_GOAL_CHARS`) while a
+  note takes 4000: a longer note is `VALIDATION note_too_long` (`field: post_request`; the agent
+  files it as a card or dismisses it). The note records `outcome.post_request = {area_id}`; the
+  ledger `strategy.note_filed` carries `post_request: area_id`. Materials are written with the
+  agent as `created_by` and the note's person as `freed.by` and `upload_for.by`; the content's
+  `requested_by` is the note's person, and the wake is `request_for` that person (`MATERIALS` with
+  files, else `CONTENT`).
+- `jeeta.studio.material_analysis_complete` has no `people` input (PR 4 built `depicts` and
+  `sensitive_checked` only); §5.1's row and §5.6's block say "mark each in depicts", without
+  "named people in people".
+- The knowledge wakes of §4.4 step 5 run through `knowledge::Locked::wake` (card create, update,
+  archive, an accepted proposal, a filing); `jt_archtest/tests/wake_triggers.rs` has its
+  `KNOWLEDGE` and `RESEARCH` rows, `note_add`'s two, and `every_knowledge_write_reaches_its_wake`,
+  which pins each write's call to it before its commit.
+
 ## 6. Every blocker and major touchpoint, resolved
 
 All 145 blocker (B) and major (M) touchpoints of the map, by area (A0 strategy, A1 content, social
@@ -2528,7 +2613,7 @@ A5 the agent contract, A6 the data model). Minor touchpoints fall under the same
 | A0.17 | M | `jt_app/src/usecases/inbox/context.rs:444-462; studio/work.rs:439-442; content/mod.rs:67-71` | `inbox.context` and `slot_get` read the knowledge base live (§4.12); delivery's `hypothesis_id` optional only for a person's request (§3.5). |
 | A0.18 | M | `jt_app/src/usecases/work.rs:121-143,387-388,1133-1186` | `KnowledgeState` and the four new kinds; consult/approve kinds removed (§5.2). |
 | A0.19 | M | `rust/crates/adapters/jt_mcp/src/tools/strategy.rs:26-380; jt_app/src/catalog.rs:435-448` | Six tools added, `get` re-described as the compatibility projection, nine plus `hypothesis_propose` removed in PR 7 (§5.1). |
-| A0.20 | M | `rust/crates/adapters/jt_panel_http/src/routes/strategy.rs:1-214; routes/mod.rs:250-260,1354-1413` | `GET /api/strategy` kept (compat twin); write routes refuse `use_knowledge_base` from PR 3 and are removed in PR 7; `/api/knowledge` routes added (§4.4–§4.9). |
+| A0.20 | M | `rust/crates/adapters/jt_panel_http/src/routes/strategy.rs:1-214; routes/mod.rs:250-260,1354-1413` | `GET /api/strategy` kept (compat twin); write routes refuse `use_knowledge_base` once seeded, from the second deploy (shipped in PR 2, §4.3.4), and are removed in PR 7; `/api/knowledge` routes added (§4.4–§4.9). |
 | A0.21 | M | `rust/panel/src/pages/StrategyPage.tsx; pages/strategy/{sections.tsx,HypothesesSection.tsx,BriefNavigation.tsx,queries.ts}; components/{ApproveDialog,ConsultationLog,GapList,Hypo…` | Replaced by the Bilgi bankası page (PR 3, §4.11); ApproveDialog, ConsultationLog, GapList, HypothesisTable, KindSelect, BriefNavigation, sections, HypothesesSection, api/strategy writes deleted; StrategyLearned becomes `Neler işe yarıyor`. |
 | A0.24 | M | `Tests: jt_app/tests/strategy.rs (2803 lines), jt_pg/tests/strategy_repos.rs (1476), jt_strategy/tests/rules.rs (1010), jt_panel_http/tests/strategy_http.rs (595), jt_testkit/src…` | Lifecycle tests rewritten for the frame engine and the compat projection; repo tests kept (versions are still written); fakes extended (§8). |
 | A1.1 | B | `rust/crates/jt_app/src/catalog.rs:231-254, 266, 268-269, 300, 337, 340-344 (GateMode::Gated rows) + rust/crates/jt_app/src/gate.rs:190-201 + rust/crates/adapters/jt_pg/src/strat…` | Predicate unchanged; with the bootstrap every workspace with a card has a frame, so the panel's actions run; `posting_policy_set` becomes Exempt (D12). |
@@ -2674,7 +2759,9 @@ A separate, idempotent ops script `rust/scripts/rollback/strip_new_wake_reasons.
 `set_config('app.platform', 'on', true)`) removes the wake codes newer than schema 45 from both
 `pending.reasons` and `last.reasons` of `agent_wakes` and nulls a pending wake left with no reason.
 It is needed only to go back to a binary older than PR 1 (which has no tolerant decoding); every
-other rollback target reads newer rows (§4.2).
+other rollback target reads newer rows (§4.2). A second one, `write_back_post_approval.sql` (PR 2,
+same conventions), writes post approval back onto the stored flags before going back to PR 1's
+binaries (§7.6).
 
 ### 7.2 What every existing workspace goes through
 
@@ -2683,7 +2770,7 @@ In order, the first time after PR 2's deploy; each step idempotent and ledgered:
 | Step | When | Workspace with an approved version | …and an open draft | Only a draft | Neither |
 |---|---|---|---|---|---|
 | Seed cards, rules, goals (§4.3) | first knowledge call, first `knowledge_settle` tick, or an old approval | from the approved version | from the approved; draft differences become proposals; draft archived | blank seeds; every draft part becomes a proposal; draft archived | blank seeds |
-| Caps and approval (§4.3.2) | with the seed | `ad_cap` = the lower of lane and general item (item lowered to it, or created from the lane); `message_cap` = the organic lane; switch and account list from the accounts' flags | same | no caps; account list from the flags | same |
+| Caps and approval (§4.3.2) | with the seed | `ad_cap` = the lower of lane and general item (item lowered to it, or created at 0 in the lane's currency when there is none); `message_cap` = the organic lane; switch and account list from the accounts' flags | same | no caps; account list from the flags | same |
 | Normalise the frame (§4.10.6) | first `knowledge_settle` tick after the seed | a new version: channels `any`, topics on `any`, lanes = caps, mix emptied, every topic kept, tasks carried | same | — (no frame) | — |
 | Bootstrap (§4.10.5) | at the owner's first card text or accepted card proposal | — | — | when the owner adds a proposal or writes a card | at the owner's first card |
 
@@ -2720,8 +2807,8 @@ script calling the same use cases as the owner), never through the old consultat
 | PR | Branch | Scope | Depends on | Ships alone because |
 |---|---|---|---|---|
 | 1 | `feat/knowledge-store` | 0046; `jt_knowledge` crate; `KnowledgeRepo` (pg, fake, six `TenantRepos` implementors); seed, card, rules, goals, notes and proposals use cases with their tests, **not registered** (no catalog row, route or tool yet); the tolerant reads of §4.2 (unknown `WakeReason` dropped, `VersionCancel.slot_id` optional) | — | nothing reachable reads or writes the new tables; the tolerant reads change no behaviour and make every later rollback safe |
-| 2 | `feat/knowledge-frame` | the knowledge use cases registered (panel routes, `jeeta.strategy.knowledge_get`, catalog rows); seeding; `knowledge::frame::apply` with the system causes (rules, bootstrap, normalize, close); `knowledge_settle`; the old-approval re-sync and `archive`'s refusal (§4.3.4); `rules_save` complete (`ad_cap`, `check_general` against it, mirror, hold; `message_cap`; post approval switch and list, `post_approval_set`; the effective gate §3.10.1); `validate_reservation` organic lane (D3); K5 carry and `plan()`'s frame lock; K6 removals (`channel_not_in_strategy`, `no_hypothesis`, strategy stop actions, `strategy.add_channel`, groups guard); `knowledge_empty` and `braked` codes; `posting_policy_set` and the four stops Exempt (D12); the compat projection of `strategy.get` (§5.4); `inbox.context`, `slot_get`, `overview`, `open_channels` read the knowledge base; the six wake reasons, the `KNOWLEDGE` need, `request_for`, the connect and brake wake sites; `recheck_periods`' retry; `STRATEGY_REQUIRED` message | 1 | the old panel keeps working (codes it does not know show its generic words; an approval on the old strategy page re-syncs the cards); agents' old tools keep working and re-sync; owner edits are visible to old routines at once through `strategy.get` |
-| 3 | `feat/knowledge-page` | panel `/knowledge` (§4.11), `/strategy` redirect, the `/api/strategy` write routes refusing `use_knowledge_base`, menu rename, onboarding step 2, `ModuleStatusLine`, `QueryState`, `StudioShared`, `lib/errors.ts`, Bütçe's ceiling line, home items and ledger copy, research and prospects copy, `knowledge` i18n namespace; `StrategyPage` and its components deleted | 2 | the server side is complete before it |
+| 2 | `feat/knowledge-frame` | the knowledge use cases registered (panel routes, `jeeta.strategy.knowledge_get`, catalog rows); seeding; `knowledge::frame::apply` with the system causes (rules, bootstrap, normalize, close); `knowledge_settle`; the old-approval re-sync and `archive`'s refusal (§4.3.4); `rules_save` complete (`ad_cap`, `check_general` against it, mirror, hold; `message_cap`; post approval switch and list, `post_approval_set`; the effective gate §3.10.1); `validate_reservation` organic lane (D3); K5 carry and `plan()`'s frame lock; K6 removals (`channel_not_in_strategy`, `no_hypothesis`, strategy stop actions, `strategy.add_channel`, groups guard); `knowledge_empty` and `braked` codes; `posting_policy_set` and the four stops Exempt (D12); the compat projection of `strategy.get` (§5.4); `inbox.context`, `slot_get`, `overview`, `open_channels` read the knowledge base; the six wake reasons, the `KNOWLEDGE` need, `request_for`, the connect and brake wake sites; `recheck_periods`' retry; `STRATEGY_REQUIRED` message; the `/api/strategy` write routes refusing `use_knowledge_base` once seeded (§4.3.4); the `strategy` module named Bilgi bankası and the content steps re-worded (§4.12); PDF uploads for the knowledge base (D17: `files.rs`, `material_add`'s `file_not_media`, piece media) | 1 | deployed with PR 3 (second deploy); the old panel's other pages keep working (codes they do not know show their generic words), while the old strategy page's writes are refused once the workspace is seeded; agents' old tools keep working and re-sync; owner edits are visible to old routines at once through `strategy.get` |
+| 3 | `feat/knowledge-page` | panel `/knowledge` (§4.11), `/strategy` redirect, menu rename, onboarding step 2, `ModuleStatusLine`, `QueryState`, `StudioShared`, `lib/errors.ts`, Bütçe's ceiling line, home items and ledger copy, research and prospects copy, `knowledge` i18n namespace; `StrategyPage` and its components deleted | 2 | the server side is complete before it |
 | 4 | `feat/posts-read` | `content.posts`, `content.post_get`, `content.post_request` (files, person-upload share rule, `pending_files`, wakes), `content.files_add` (every target with pending files), `content.special_day_skip`, `content.version_cancel`, `content.post_dismiss`; `material_delete` clearing pending files; `owner_request::names` and the person-request attribution (§3.5, delivery `hypothesis_id` optional for a person's area); `material_analysis_complete`'s `sensitive_checked`; `slot_cancel` person permission (D13); delivery wakes SOCIAL; `list_live_areas`, `find_area_by_version`, `get_pieces`, `get_materials`, `read_control`; `VersionCancel` written without a slot | 2 | new panel-only routes and additive agent inputs; the old pages unchanged |
 | 5 | `feat/posts-page` | panel `/posts` (§2), drawers, every redirect of §2.11, menu merge, link retargets (§2.13), `postsPage` i18n and the owner-word re-wording of the reused namespaces (§8.5); `ContentPage`, `SocialPage`, `RootView`, `ContentTree`, `OlayView` page shell, `QueueView` shell, `timeline.ts`, `data.ts`, `VersionRow`, unrouted `StudioProjects`, `ProjectPublications`, `ProjectProduction` and their harnesses deleted (`MaterialEditor`, `MaterialsCalendar`, `SettingsDialog`, `StudioTiktok`, `TiktokSlot`, `OlayForms`, `uploads.tsx` reused) | 3, 4 | links into `/knowledge` exist (PR 3) |
 | 6 | `feat/knowledge-agents` | MCP `frame_apply` (cause `derive`, `paid_cadence`), `note_claim`, `note_file` (every outcome), `note_release`, `proposal_create`; `work.pending` `knowledge` state and kinds; hints; every description of §5.5 ("Retired soon" on the old tools); playbook version 2 with the leads spec's Appendix A | 2 (4 for the note's post-request outcome) | additive for agents: old routines keep working through the compat projection and the old tools |
@@ -2762,9 +2849,9 @@ Run against jeetagrowth.com with the owner's workspace (MCP with an owner key, a
 | After | Rollback by | What is lost or stays |
 |---|---|---|
 | PR 1 | revert; 0046's down only if PR 2 was never deployed | nothing else changed |
-| PR 2 (+3) | revert the binaries to PR 1's (0046 stays). **Before switching**, for each workspace: set `requires_human_approval` on every postable social account when `post_approval` is on, else on each account of `post_approval_accounts` (ledgered `capability.set_policy {reason: "rollback"}`; this also holds comment replies on those accounts until a person changes it, which errs safe) | frames written stay (ordinary approved versions the older code reads); carried research tasks stay carried (valid); budget items stay lowered; the knowledge tables stay, unread; archived drafts stay archived (their text is in the proposals); new wake reasons are dropped on read (PR 1's tolerant decoding) |
-| PR 4 (+5) | revert to PR 3's binaries | versions cancelled without a slot are read by PR 1's tolerant decoding; composer materials keep their share and their `upload_for` field (ignored); `pending_files` is ignored, so such areas are offered to agents at once (a delivery with an unshared file is refused `share_unset`, as before) |
-| PR 3, PR 5 | revert (panel only) | none; the old pages come back with the server unchanged (PR 3's revert also lets `/api/strategy` writes through again, with the re-sync) |
+| PR 2 (+3) | revert the binaries to PR 1's (0046 stays). **Before switching**, run `rust/scripts/rollback/write_back_post_approval.sql` (idempotent, under `app.platform`): for each seeded workspace it sets `requires_human_approval` on every live social account when `post_approval` is on, else on each account of `post_approval_accounts` (ledgered `capability.set_policy {reason: "rollback"}`; this also holds comment replies on those accounts until a person changes it, which errs safe) | frames written stay (ordinary approved versions the older code reads); carried research tasks stay carried (valid); budget items stay lowered; the knowledge tables stay, unread; archived drafts stay archived (their text is in the proposals); new wake reasons are dropped on read (PR 1's tolerant decoding) |
+| PR 4 (+5) | revert to PR 3's binaries. **Before switching**, run `rust/scripts/rollback/clear_rule_shares.sql` (idempotent, under `app.platform`): it clears every share the person-upload rule gave (`share.rule = "person_upload"`, which PR 3 takes for an invalid row and refuses every write to), raising the material's revision, with one `studio.material.permission_set {reason: "rollback"}` per material (errs safe under D5: a person decides again, the publish gate holds a post showing it meanwhile) | versions cancelled without a slot are read by PR 1's tolerant decoding; composer materials keep their `upload_for` field (ignored) and a person's share; `pending_files` is ignored, so such areas are offered to agents at once (a delivery with an unshared file is refused `share_unset`, as before) |
+| PR 3, PR 5 | revert (panel only) | none; the old pages come back with the server unchanged (after PR 3's revert the old strategy page reads, but its writes stay refused on a seeded workspace: revert PR 2 with it to write there again, with the re-sync) |
 | PR 6 | revert | items and tools of agents go; the frame stays as last applied; nothing in the data depends on them |
 | PR 7 | revert | removed tools come back; nothing in the data depends on them |
 | to a binary older than PR 1 | only after reverting every later PR | run `strip_new_wake_reasons.sql` and 0046's down (its guard refuses while a slotless cancel exists: clear those first) |

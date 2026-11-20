@@ -8,7 +8,11 @@
 //! 2. after approving, `after` rewrites from the approved version each seed card no person has
 //!    changed since it was seeded or re-synced (`cause = resync`); a card the owner, a note or a
 //!    proposal changed is left as it is, and when the version's text differs, a `card_edit`
-//!    proposal (`strategy_resync`) carries it;
+//!    proposal (`strategy_resync`) carries it. Only the parts the routine changed count: a card
+//!    whose text the frame in force before the approval gives alike is left as it is (the frame
+//!    mirrors the cards, so its identity reads back the cards themselves, cut to the frame's
+//!    length), "Hesaplar ve kanallar" is built from the channels as the routine wrote them (the
+//!    approved version's are the system's `[any]`), and no card is emptied;
 //! 3. the prohibitions and the goal lines the version adds are appended (none removed); the ad
 //!    cap and the paid-message limit are lowered to the version's lanes when those are lower,
 //!    never raised, and the general ad budget follows a lowered ad cap;
@@ -25,7 +29,7 @@ use jt_knowledge::{
     ProposalKind, ProposalStatus, Proposer, RESYNC_COMPONENT, SEED_CARDS, SYSTEM_PROPOSAL_TTL,
     Subject, append_lines,
 };
-use jt_strategy::{LaneKind, Sections, StrategyVersion};
+use jt_strategy::{ChannelChoice, LaneKind, Sections, StrategyVersion};
 use jt_tenancy::UserId;
 
 use super::{Change, Locked, seed};
@@ -35,9 +39,22 @@ use crate::ports::TenantRepos;
 use crate::usecases::Deps;
 use crate::usecases::studio::owner_request;
 
-/// What [`prepare`] keeps for [`after`]: the caps after the version's lowering.
+/// What [`prepare`] keeps for [`after`]: the caps after the version's lowering, and what the
+/// cards are re-synced against.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Prepared {
+    pub caps: Caps,
+    /// The draft's channels as the routine wrote them, before the frame's `[any]` replaced them:
+    /// what "Hesaplar ve kanallar" is re-synced from.
+    pub channels: Vec<ChannelChoice>,
+    /// What the frame in force before the approval gives the seed cards (none without one): a
+    /// card is re-synced only where the approved version says something else.
+    pub before: Option<SeedParts>,
+}
+
+/// The caps an old approval leaves: those of the knowledge base, lowered to the version's lanes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Caps {
     pub ad_cap: Option<Cap>,
     pub message_cap: Option<Cap>,
 }
@@ -46,7 +63,7 @@ pub(crate) struct Prepared {
 /// ad cap to the paid lane brought to its period (none, or paid channels off: nothing for ads,
 /// so 0), the paid-message limit to the organic lane (a limit of its own where it had none).
 /// A lane of another currency than the cap's is not compared.
-pub(crate) fn lowered(settings: &KnowledgeSettings, sections: &Sections) -> Prepared {
+pub(crate) fn lowered(settings: &KnowledgeSettings, sections: &Sections) -> Caps {
     let lane = |kind: LaneKind| sections.budget_frame.lanes.iter().find(|l| l.lane == kind);
     let ad_cap = settings.ad_cap.as_ref().map(|cap| {
         let allowed = match lane(LaneKind::Paid).filter(|_| sections.paid_enabled) {
@@ -71,24 +88,37 @@ pub(crate) fn lowered(settings: &KnowledgeSettings, sections: &Sections) -> Prep
         }),
         (cap, _) => cap.clone(),
     };
-    Prepared {
+    Caps {
         ad_cap,
         message_cap,
     }
 }
 
-/// Step 1: writes `draft`'s system fields (design §4.3.4) and answers the lowered caps. The
-/// caller holds the draft lock; `draft` is updated as it was written.
+/// Step 1: writes `draft`'s system fields (design §4.3.4) and answers the lowered caps, with the
+/// routine's own channels and what `previous` (the frame in force) gives the cards. The caller
+/// holds the draft and frame locks; `draft` is updated as it was written.
 pub(crate) async fn prepare(
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
     draft: &mut StrategyVersion,
+    previous: Option<&StrategyVersion>,
     settings: &KnowledgeSettings,
 ) -> Result<Prepared, AppError> {
-    let prepared = lowered(settings, &draft.sections);
+    let before = match previous {
+        Some(v) => {
+            let topics = owner_request::without(ctx.workspace_id, r.hypotheses().list(v.id).await?);
+            Some(SeedParts::from_version(&v.sections, &topics))
+        }
+        None => None,
+    };
+    let prepared = Prepared {
+        caps: lowered(settings, &draft.sections),
+        channels: draft.sections.channels.clone(),
+        before,
+    };
     let caps = KnowledgeSettings {
-        ad_cap: prepared.ad_cap.clone(),
-        message_cap: prepared.message_cap.clone(),
+        ad_cap: prepared.caps.ad_cap.clone(),
+        message_cap: prepared.caps.message_cap.clone(),
         ..settings.clone()
     };
     let mut sections = draft.sections.clone();
@@ -142,10 +172,15 @@ pub(crate) async fn after(
         bumped: false,
     };
     let topics = owner_request::without(ctx.workspace_id, r.hypotheses().list(approved.id).await?);
-    let parts = SeedParts::from_version(&approved.sections, &topics);
+    // The channels as the routine wrote them: the approved version's are the system's `[any]`.
+    let mut sections = approved.sections.clone();
+    sections.channels = prepared.channels.clone();
+    let parts = SeedParts::from_version(&sections, &topics);
 
     // The seed cards no person changed since they were seeded follow the version; for the
-    // others, a proposal carries its text.
+    // others, a proposal carries its text. Only what the routine changed counts: a text the
+    // frame in force gave alike is the cards' own (the frame mirrors them), and no card is
+    // emptied.
     let cards = r.knowledge().cards().await?;
     let pending = r
         .knowledge()
@@ -159,7 +194,11 @@ pub(crate) async fn after(
             continue;
         };
         let text = parts.body(key);
-        if text == card.body {
+        let unchanged = prepared
+            .before
+            .as_ref()
+            .is_some_and(|b| b.body(key) == text);
+        if text == card.body || text.trim().is_empty() || unchanged {
             continue;
         }
         let newest = r
@@ -194,11 +233,9 @@ pub(crate) async fn after(
                 },
             )
             .await?;
-        } else if !text.trim().is_empty()
-            && !pending.iter().any(|p| {
-                p.kind == ProposalKind::CardEdit && p.card_id == Some(card.id) && p.body == text
-            })
-        {
+        } else if !pending.iter().any(|p| {
+            p.kind == ProposalKind::CardEdit && p.card_id == Some(card.id) && p.body == text
+        }) {
             r.knowledge()
                 .insert_proposal(&Proposal {
                     id: KnowledgeProposalId(deps.ids.uuid()),
@@ -238,10 +275,10 @@ pub(crate) async fn after(
         .unwrap_or_default();
         rules_changed |= !added.is_empty();
     }
-    let lowered_ad = prepared.ad_cap != kb.settings.ad_cap;
-    if lowered_ad || prepared.message_cap != kb.settings.message_cap {
-        kb.settings.ad_cap = prepared.ad_cap.clone();
-        kb.settings.message_cap = prepared.message_cap.clone();
+    let lowered_ad = prepared.caps.ad_cap != kb.settings.ad_cap;
+    if lowered_ad || prepared.caps.message_cap != kb.settings.message_cap {
+        kb.settings.ad_cap = prepared.caps.ad_cap.clone();
+        kb.settings.message_cap = prepared.caps.message_cap.clone();
         rules_changed = true;
     }
     if rules_changed {

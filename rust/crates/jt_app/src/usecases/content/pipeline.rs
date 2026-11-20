@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 /// The eight stages: five over the workflow's steps, then approval, publishing and results.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StageKey {
     /// Steps 1 to 3: goal, audience, platform and format.
@@ -530,6 +530,29 @@ impl PostReads {
             accounts,
             knowledge,
         })
+    }
+
+    /// The stored slot `id` among those read.
+    pub(crate) fn slot(&self, id: SlotId) -> Option<&Slot> {
+        self.slots.get(&id)
+    }
+
+    /// The approval of slot `id` at its revision, when one was given.
+    pub(crate) fn receipt(&self, id: SlotId) -> Option<&ApprovalReceipt> {
+        self.approvals.get(&id)
+    }
+
+    /// The publish attempts of slot `id` (a planned post has at most one).
+    pub(crate) fn attempts(&self, id: SlotId) -> &[PublishAttempt] {
+        self.attempts
+            .get(&id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    /// The account `id` of a slot read, when it is stored.
+    pub(crate) fn account(&self, id: CapabilityId) -> Option<&Capability> {
+        self.accounts.get(&id).and_then(Option::as_ref)
     }
 
     /// What the planned posts `posts` of one area are now, in their order: each version's slot,

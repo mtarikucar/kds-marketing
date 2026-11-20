@@ -366,7 +366,8 @@ async fn the_owners_strategy_seeds_its_texts_caps_and_nothing_to_derive() {
     assert!(!is_empty(&cards(&w).await));
     let r = revisions(&w, Subject::Card, Some(who.id)).await;
     assert_eq!(r[0].cause, Cause::Backfill);
-    // No general ad budget yet: one is made from the paid lane.
+    // No general ad budget yet: one is made in the paid lane's currency and period, at 0, so no
+    // campaign that could not open before opens now; the owner raises it in Bütçe.
     let items = budget::list_items(&w.deps, &w.owner_ctx).await.unwrap();
     let general: Vec<_> = items.iter().filter(|i| i.item.general).collect();
     assert_eq!(general.len(), 1);
@@ -376,7 +377,7 @@ async fn the_owners_strategy_seeds_its_texts_caps_and_nothing_to_derive() {
         (
             "Reklam bütçesi",
             BudgetKind::AdBudget,
-            500_000,
+            0,
             Period::Monthly,
             &Unit::Currency("TRY".into())
         )
@@ -508,7 +509,11 @@ async fn a_budget_edit_committed_while_seeding_is_never_raised_back() {
     assert!(t.knowledge().settings().await.unwrap().is_none());
     drop(t);
     assert!(seed::ensure(&w.deps, &w.owner_ctx).await.unwrap());
-    assert_eq!(general_cap(&w).await, 500_000, "made from the lane");
+    assert_eq!(
+        general_cap(&w).await,
+        0,
+        "made in the lane's currency, at 0"
+    );
 }
 
 #[tokio::test]
@@ -1314,8 +1319,13 @@ async fn the_rules_are_saved_whole_and_derive_nothing() {
     assert!(t.strategy().current_approved().await.unwrap().is_none());
 }
 
+/// The ad cap keeps its currency (design §4.6.2): a save never takes the general budget's unit
+/// for a cap in force, so no general item in another currency can turn the owner's number into
+/// that currency's; the general budget follows the cap only in the cap's currency, and Bütçe
+/// refuses to edit one counted in another (`rules_cap_currency`). Only a new cap takes the
+/// general budget's unit.
 #[tokio::test]
-async fn the_ad_caps_currency_is_the_general_budgets() {
+async fn the_ad_caps_currency_is_its_own_and_a_new_ones_the_general_budgets() {
     let w = world().await;
     budget::create_item(
         &w.deps,
@@ -1355,9 +1365,63 @@ async fn the_ad_caps_currency_is_the_general_budgets() {
     .await
     .unwrap();
     assert_eq!(
+        out.ad_cap
+            .as_ref()
+            .map(|c| (c.amount_minor, c.currency.as_str())),
+        Some((5_000, "TRY")),
+        "the cap's own currency, whatever the general budget is counted in"
+    );
+    let g = general_item(&w).await;
+    assert_eq!(
+        (g.cap, &g.unit),
+        (10_000, &Unit::Currency("USD".into())),
+        "a general budget in another currency is not followed"
+    );
+    // Bütçe edits it no more while it sits outside the ceiling; it can stop being general.
+    let e = err(budget::update_item(
+        &w.deps,
+        &w.owner_ctx,
+        g.id,
+        budget::UpdateBudgetItem {
+            cap: Some(1_000),
+            ..Default::default()
+        },
+    )
+    .await);
+    assert_eq!(e.code, ErrorCode::Validation, "{e:?}");
+    assert_eq!(e.details["reason"], "rules_cap_currency");
+    assert_eq!(e.details["currency"], "TRY");
+
+    // With no ad budget ("Reklam yok"), a new one takes the general budget's unit.
+    let s = settings(&w).await;
+    rules_save(
+        &w.deps,
+        &w.owner_ctx,
+        RulesInput {
+            ad_budget: None,
+            ..as_read(&s)
+        },
+    )
+    .await
+    .unwrap();
+    let s = settings(&w).await;
+    let out = rules_save(
+        &w.deps,
+        &w.owner_ctx,
+        RulesInput {
+            ad_budget: Some(CapInput {
+                amount_minor: 7_000,
+                period: None,
+            }),
+            ..as_read(&s)
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
         out.ad_cap.map(|c| c.currency),
         Some("USD".to_owned()),
-        "the general budget's unit (design §4.6.2)"
+        "a new cap: the general budget's unit (design §4.6.2)"
     );
 }
 
@@ -1679,11 +1743,12 @@ async fn a_filing_never_wipes_a_card_and_follows_its_claim() {
     let e = err(note_file(&w.deps, &agent, input.clone()).await);
     assert_eq!(reason(&e), "card_changed");
     input.cards = vec![];
-    input.post_request = Some(json!({}));
+    // A post request takes nothing of its own: the note is its text and files.
+    input.post_request = Some(json!({"text": "Başka bir metin"}));
     let e = err(note_file(&w.deps, &agent, input.clone()).await);
     assert_eq!(
-        (e.details["field"].as_str(), reason(&e)),
-        (Some("post_request"), "not_available")
+        (e.code, e.details["field"].as_str(), reason(&e)),
+        (ErrorCode::Validation, Some("post_request"), "invalid")
     );
     input.post_request = None;
     let e = err(note_file(&w.deps, &agent, input.clone()).await);

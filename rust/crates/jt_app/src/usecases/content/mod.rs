@@ -2,11 +2,16 @@
 //! start time to a checked content package. The server runs no model and produces nothing: it
 //! hands the area out, keeps the agent's place, and checks what is delivered.
 pub mod areas;
+pub mod compose;
 pub mod delivery;
+pub(crate) mod pending;
 pub mod pipeline;
+pub mod posts;
 pub mod views;
 pub use areas::{area_claim, area_progress, area_redo, area_release, open_by_system};
+pub use compose::{files_add, post_dismiss, post_request, special_day_skip, version_cancel};
 pub use delivery::{area_deliver, delivery_accept};
+pub use posts::{post_get, posts};
 pub use views::{analysis_queue, areas, olay_view, tree};
 
 use crate::ports::production_projects::{
@@ -65,10 +70,10 @@ pub fn schema(name: &str) -> Value {
                 "material_ids":{"type":"array","minItems":1,"maxItems":jt_studio::MAX_POST_MATERIALS,"uniqueItems":true,"items":uuid,
                     "description":"The area's materials this version shows, in display order (material ids, not file ids)."},
                 "hypothesis_id":{"type":"string","format":"uuid",
-                    "description":"The topic this content serves: a topic id of jeeta.strategy.knowledge_get frame.topics."},
+                    "description":"The topic this content is about: a topic id of jeeta.strategy.knowledge_get frame.topics. Required for an area an agent or the system opened. For an area a person asked for (requested_by) leave it out: the post is the owner's request and is measured on its own; name a topic only when the request is plainly that topic. Never the owner's request's id."},
                 "content_type":{"type":["string","null"],"maxLength":MAX_CONTENT_TYPE_CHARS,
                     "description":"One of the hypothesis's organic content types, when it names any; otherwise leave out."}
-            },"required":["format","text","material_ids","hypothesis_id"]});
+            },"required":["format","text","material_ids"]});
             (
                 json!({"claim_token":token,
                        "request_key":{"type":"string","minLength":1,"maxLength":200,

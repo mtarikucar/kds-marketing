@@ -451,6 +451,7 @@ pub async fn open_by_system(
         outputs: vec![],
         production_ids: vec![],
         invalidated_production_ids: vec![],
+        pending_files: vec![],
         olay_id,
         steps: vec![],
         created_at: ctx.now,

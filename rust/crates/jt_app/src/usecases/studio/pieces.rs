@@ -88,7 +88,7 @@ impl TryFrom<MediaInput> for MediaAsset {
                 mime,
                 filename,
             } => {
-                if data.len() as u64 > 4 * files::limit(&mime)?.div_ceil(3) {
+                if data.len() as u64 > 4 * files::media_limit(&mime)?.div_ceil(3) {
                     return Err(files::invalid());
                 }
                 Self::Bytes {
@@ -199,7 +199,7 @@ async fn normalize(
                 mime,
                 size_bytes,
             } => {
-                if size_bytes == 0 || size_bytes > files::limit(&mime)? {
+                if size_bytes == 0 || size_bytes > files::media_limit(&mime)? {
                     return Err(files::invalid());
                 }
                 let u = d

@@ -12,7 +12,7 @@
 //! | `rules` (1 to 10) | prohibitions appended, duplicates skipped |
 //! | `goals` (1 to 5) | goals appended, duplicates skipped |
 //! | `proposals` (1 to 5) | none: the proposals this connection made wait for the owner |
-//! | `post_request` | the content a person's note asks for: refused here (`VALIDATION` `not_available`) until the posts page's composer write exists (the seam: `post_request_outcome`) |
+//! | `post_request` (`{}`) | the content the note asks for, opened as the composer (`content.post_request`) opens it, on the note's person's behalf: the note's text its brief, the note's images and MP4s its files (PDFs stay knowledge), `requested_by` the note's person, the content (or, with files, the materials) agent woken on their behalf; the note records the content's id. Without the content module `CONFLICT` `module_not_installed`; a note longer than a post request takes (2000 characters) `VALIDATION` `note_too_long` |
 //!
 //! or dismisses it with a reason in Turkish. The ad budget, the message limit and the approval
 //! switch are never an outcome: a note asking to change them is dismissed, sending the owner to
@@ -22,11 +22,12 @@
 //! `not_claimed`.
 
 use jt_knowledge::{
-    Attachment, Card, Cause, FiledCard, KnowledgeCardId, KnowledgeNoteId, KnowledgeProposalId,
-    MAX_CARD_ATTACHMENTS, MAX_DISMISS_REASON_CHARS, MAX_GOAL_CHARS, MAX_GOALS, MAX_LIVE_CARDS,
-    MAX_NOTE_FILES, MAX_PROHIBITION_CHARS, MAX_PROHIBITIONS, MAX_SUMMARY_CHARS, NOTE_CLAIM_LEASE,
-    Note, NoteClaim, NoteOutcome, NoteStatus, Proposer, Subject, append_lines, validate_body,
-    validate_lines, validate_links, validate_note_text, validate_text, validate_title,
+    Attachment, Card, Cause, FiledCard, FiledPost, KnowledgeCardId, KnowledgeNoteId,
+    KnowledgeProposalId, MAX_CARD_ATTACHMENTS, MAX_DISMISS_REASON_CHARS, MAX_GOAL_CHARS, MAX_GOALS,
+    MAX_LIVE_CARDS, MAX_NOTE_FILES, MAX_PROHIBITION_CHARS, MAX_PROHIBITIONS, MAX_SUMMARY_CHARS,
+    NOTE_CLAIM_LEASE, Note, NoteClaim, NoteOutcome, NoteStatus, Proposer, Subject, append_lines,
+    validate_body, validate_lines, validate_links, validate_note_text, validate_text,
+    validate_title,
 };
 use jt_studio::FileId;
 use serde::{Deserialize, Serialize};
@@ -44,7 +45,8 @@ use super::{
 use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::TenantRepos;
-use crate::usecases::{Deps, hash_token, ledger_entry, wake};
+use crate::usecases::content::compose::{self, Prepared};
+use crate::usecases::{Deps, hash_token, ledger_entry, modules, wake};
 
 /// The request receipts' actions.
 const NOTE_ADD: &str = "strategy.note_add";
@@ -348,6 +350,20 @@ pub async fn note_file(deps: &Deps, ctx: &Ctx, input: NoteFileInput) -> Result<N
     }
     let filing = Filing::of(&input)?;
     seed::ensure(deps, ctx).await?;
+    // A post request's files are read before the transaction, as the composer reads them (a
+    // replay answers first, as the composer's does).
+    let post_files = if filing.post_request {
+        {
+            let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+            let payload = digest(&input)?;
+            if let Some(id) = replayed(r.as_mut(), NOTE_FILE, &filing.key, &payload).await? {
+                return reread(r.as_mut(), id).await;
+            }
+        }
+        Some(post_request_files(deps, ctx, input.note_id).await?)
+    } else {
+        None
+    };
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     let frame_write = if filing.cards.is_empty() {
         FrameWrite::Never
@@ -521,6 +537,13 @@ pub async fn note_file(deps: &Deps, ctx: &Ctx, input: NoteFileInput) -> Result<N
         outcome.goals = added;
     }
 
+    // A post request: the content the note asks for, as the composer opens it (after every
+    // knowledge lock: the Studio control lock comes later in the lock order).
+    if let Some(files) = &post_files {
+        outcome.post_request =
+            Some(post_request_outcome(deps, r.as_mut(), ctx, &note, files).await?);
+    }
+
     // Proposals: this connection's own, made for this note (after it was written) and still
     // waiting for the owner. A closed one would close the note while nothing waits in
     // "Ajanin onerileri" (design §4.8).
@@ -563,6 +586,7 @@ pub async fn note_file(deps: &Deps, ctx: &Ctx, input: NoteFileInput) -> Result<N
         "rules": outcome.rules.len(),
         "goals": outcome.goals.len(),
         "proposals": outcome.proposals.len(),
+        "post_request": outcome.post_request.map(|p| p.area_id),
     });
     note.outcome = Some(outcome);
     r.knowledge().save_note(&note).await?;
@@ -647,6 +671,8 @@ struct Filing {
     cards: Vec<WrittenCard>,
     rules: Vec<String>,
     goals: Vec<String>,
+    /// The note asks for a post (`post_request: {}`).
+    post_request: bool,
 }
 
 impl Filing {
@@ -659,9 +685,17 @@ impl Filing {
             MAX_SUMMARY_CHARS,
         )
         .map_err(invalid)?;
-        if let Some(request) = &input.post_request {
-            post_request_outcome(request)?;
-        }
+        // `{}`: the post request takes nothing of its own (the note is its text and files).
+        let post_request = match &input.post_request {
+            None => false,
+            Some(Value::Object(o)) if o.is_empty() => true,
+            Some(_) => {
+                return Err(AppError::validation(
+                    "post_request is {}: the note's text and files are the request",
+                    json!({ "field": "post_request", "reason": "invalid" }),
+                ));
+            }
+        };
         if input.cards.len() > 3 {
             return Err(too_many("cards", 3));
         }
@@ -705,7 +739,12 @@ impl Filing {
                 ));
             }
         }
-        if cards.is_empty() && rules.is_empty() && goals.is_empty() && input.proposals.is_empty() {
+        if cards.is_empty()
+            && rules.is_empty()
+            && goals.is_empty()
+            && input.proposals.is_empty()
+            && !post_request
+        {
             return Err(AppError::validation(
                 "a filing carries at least one outcome; dismiss a note with nothing to act on",
                 json!({ "field": "cards", "reason": "nothing_to_file" }),
@@ -717,23 +756,75 @@ impl Filing {
             cards,
             rules,
             goals,
+            post_request,
         })
     }
 }
 
-/// SEAM (design §4.8, §7.4: the note's post-request outcome waits for PR 4's
-/// `content.post_request`). Until that use case exists, the outcome is refused with `VALIDATION`
-/// `not_available` before anything is read, and the agent dismisses the note saying the owner
-/// asks for posts on Paylaşımlar. Once PR 4 is merged, this becomes the call that opens the
-/// content as `content.post_request` does (`text` = the note's text, its image and MP4 files,
-/// `requested_by` = the note's person, `CONTENT` or `MATERIALS` woken on their behalf), inside
-/// [`note_file`]'s bundle, recording `NoteOutcome::post_request`.
-fn post_request_outcome(_request: &Value) -> Result<(), AppError> {
-    Err(AppError::validation(
-        "a post request is not filed yet: dismiss the note, saying the owner asks for posts on \
-         Paylaşımlar",
-        json!({ "field": "post_request", "reason": "not_available" }),
-    ))
+/// The note's images and MP4s, read before the filing's transaction as the composer reads a
+/// person's files ([`compose::prepare`]); its PDFs stay knowledge, and a file deleted since the
+/// note was written is left out. Without the content module `CONFLICT` `module_not_installed`
+/// (the agent dismisses the note, saying so), before anything is written.
+async fn post_request_files(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: KnowledgeNoteId,
+) -> Result<Vec<Prepared>, AppError> {
+    let ids = {
+        let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+        if !modules::installed(r.as_mut(), modules::CONTENT).await? {
+            return Err(refused(
+                ErrorCode::Conflict,
+                "module_not_installed",
+                "the workspace has no content module: dismiss the note, saying a post needs the \
+                 content module",
+                json!({ "field": "post_request", "module": modules::CONTENT }),
+            ));
+        }
+        let note = r
+            .knowledge()
+            .note(id)
+            .await?
+            .ok_or_else(|| AppError::not_found("no such note"))?;
+        let mut ids = Vec::new();
+        for id in &note.file_ids {
+            let media = r.studio().get_file(*id).await?.is_some_and(|f| {
+                f.workspace_id == ctx.workspace_id
+                    && f.deleted_at.is_none()
+                    && compose::media(&f.mime)
+            });
+            if media {
+                ids.push(*id);
+            }
+        }
+        ids
+    };
+    compose::prepare(deps, ctx, &ids).await
+}
+
+/// Opens the content the note asks for, in the filing's transaction, exactly as the composer
+/// does (`content.post_request`, design §3.4, §4.8): the note's text its brief, `files` (the
+/// note's images and MP4s) its files, asked for by the note's person, who is the one the content
+/// or materials agent is woken on behalf of. Takes the Studio control lock (after the knowledge
+/// locks). A note longer than a post request takes is `VALIDATION` `note_too_long`.
+async fn post_request_outcome(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    note: &Note,
+    files: &[Prepared],
+) -> Result<FiledPost, AppError> {
+    let text = note.text.trim();
+    if text.chars().count() > crate::ports::production_projects::MAX_GOAL_CHARS {
+        return Err(AppError::validation(
+            "the note is longer than a post request takes (2000 characters): file it as a card, \
+             or dismiss it asking the owner for a shorter request on Paylasimlar",
+            json!({ "field": "post_request", "reason": "note_too_long" }),
+        ));
+    }
+    r.studio_control().lock_control().await?;
+    let p = compose::open_request_in(deps, r, ctx, note.created_by, text.to_owned(), files).await?;
+    Ok(FiledPost { area_id: p.id })
 }
 
 /// The note's files and links `attachments` puts onto the card at index `card`: each must be

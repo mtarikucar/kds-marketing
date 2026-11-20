@@ -145,6 +145,23 @@ pub trait StudioRepo: Send + Sync {
     ) -> Result<Option<ApprovalReceipt>, AppError>;
     async fn get_arm(&mut self, id: ArmId) -> Result<Option<Arm>, AppError>;
     async fn get_piece(&mut self, slot: SlotId, revision: u64) -> Result<Option<Piece>, AppError>;
+    /// [`Self::get_piece`] of each slot of `slots` at its revision, those stored, by slot id;
+    /// one read in the database.
+    async fn get_pieces(
+        &mut self,
+        slots: &[(SlotId, u64)],
+    ) -> Result<Vec<(SlotId, Piece)>, AppError> {
+        let mut unique = slots.to_vec();
+        unique.sort();
+        unique.dedup();
+        let mut out = Vec::new();
+        for (slot, revision) in unique {
+            if let Some(p) = self.get_piece(slot, revision).await? {
+                out.push((slot, p));
+            }
+        }
+        Ok(out)
+    }
     async fn get_budget_move(&mut self, id: BudgetMoveId) -> Result<Option<BudgetMove>, AppError>;
     /// Most recently created move for this binding; older consent cannot authorize a newer move.
     async fn latest_budget_move(
@@ -342,6 +359,10 @@ pub trait StudioControlRepo: Send + Sync {
     async fn save_binding_control(&mut self, control: BindingControl) -> Result<(), AppError>;
 
     async fn lock_control(&mut self) -> Result<StudioControl, AppError>;
+    /// The control as it is, without a lock (design 2026-11-19 "Paylaşımlar and Bilgi bankası"
+    /// §3.10.2): for reads, which must not queue behind the publisher's fence. Writes keep
+    /// [`Self::lock_control`]. A workspace without a stored control reads the initial one.
+    async fn read_control(&mut self) -> Result<StudioControl, AppError>;
     async fn set_brake(
         &mut self,
         expected_revision: u64,

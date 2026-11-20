@@ -12,6 +12,11 @@
 //! (`200`), exactly as `jeeta.strategy.archive` does. A request that is not valid,
 //! a draft not ready for approval among them, is `422 VALIDATION` with `details.gaps` where the
 //! use case lists them.
+//!
+//! The strategy page became Bilgi bankası (`/api/knowledge`, design 2026-11-19 §4.3.4): once the
+//! workspace's knowledge base is seeded, every write here is `409 CONFLICT` with
+//! `details.reason = "use_knowledge_base"` (`strategy::panel_write_open`), and the reads answer
+//! the knowledge base's compatibility projection. The MCP tools keep writing, with the re-sync.
 
 use axum::Json;
 use axum::extract::State;
@@ -103,6 +108,7 @@ pub async fn start_consultation(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
 ) -> Result<Json<VersionOut>, ApiError> {
+    strategy::panel_write_open(&state.deps, &ctx).await?;
     Ok(Json(strategy::start_consultation(&state.deps, &ctx).await?))
 }
 
@@ -112,6 +118,7 @@ pub async fn record(
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiJson(body): ApiJson<RecordBody>,
 ) -> Result<(StatusCode, Json<RecordedBody>), ApiError> {
+    strategy::panel_write_open(&state.deps, &ctx).await?;
     let input = RecordInput {
         kind: body.kind,
         section_key: body.section_key,
@@ -129,6 +136,7 @@ pub async fn write_section(
     ApiPath(section_key): ApiPath<String>,
     ApiJson(value): ApiJson<Value>,
 ) -> Result<Json<VersionOut>, ApiError> {
+    strategy::panel_write_open(&state.deps, &ctx).await?;
     Ok(Json(
         strategy::write_section(&state.deps, &ctx, section_key, value).await?,
     ))
@@ -141,6 +149,7 @@ pub async fn set_hypotheses(
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiJson(hypotheses): ApiJson<Value>,
 ) -> Result<Json<VersionOut>, ApiError> {
+    strategy::panel_write_open(&state.deps, &ctx).await?;
     Ok(Json(
         strategy::set_hypotheses(&state.deps, &ctx, hypotheses).await?,
     ))
@@ -151,6 +160,7 @@ pub async fn submit(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,
 ) -> Result<Json<VersionOut>, ApiError> {
+    strategy::panel_write_open(&state.deps, &ctx).await?;
     Ok(Json(strategy::submit(&state.deps, &ctx).await?))
 }
 
@@ -160,6 +170,7 @@ pub async fn approve(
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiJson(body): ApiJson<ApproveBody>,
 ) -> Result<Json<VersionOut>, ApiError> {
+    strategy::panel_write_open(&state.deps, &ctx).await?;
     let input = ApproveInput::parse(body.version_id, &body.submitted_at)?;
     Ok(Json(strategy::approve(&state.deps, &ctx, input).await?))
 }
@@ -171,6 +182,7 @@ pub async fn archive(
     WorkspaceCtx(ctx): WorkspaceCtx,
     ApiJson(body): ApiJson<ArchiveBody>,
 ) -> Result<Json<ArchivedBody>, ApiError> {
+    strategy::panel_write_open(&state.deps, &ctx).await?;
     let input = ArchiveInput {
         version_id: body.version_id,
         confirm: body.confirm,

@@ -124,9 +124,20 @@ async fn finished(
     materials: &[&Material],
     versions: Vec<Value>,
 ) -> ProductionProject {
+    finished_as(w, &w.ctx, key, materials, versions).await
+}
+
+/// An area `opener` opened and an agent finished with `versions`.
+async fn finished_as(
+    w: &World,
+    opener: &Ctx,
+    key: &str,
+    materials: &[&Material],
+    versions: Vec<Value>,
+) -> ProductionProject {
     let p = projects::project_create(
         &w.d,
-        &w.ctx,
+        opener,
         input(json!({"request_key":key,"brief":"Yeni sezonu duyur",
             "material_ids":materials.iter().map(|m| m.id).collect::<Vec<_>>()})),
     )
@@ -707,9 +718,11 @@ async fn a_label_the_strategy_does_not_know_still_goes_out_and_a_blocked_version
     let arm = s.studio.arms.iter().find(|x| x.id == arm).expect("the arm");
     assert_eq!(arm.key.content_type, "text");
 
-    // A version nothing can take says why, to the agent and to the person alike.
+    // A version nothing can take says why, to the agent and to the person alike. An agent's
+    // content: a person's would go out under the owner's request on any account (design
+    // 2026-11-19 §3.5).
     let m = material(&w, true).await;
-    finished(&w, "blocked", &[&m], vec![version(&w, &m, json!({}))]).await;
+    finished_as(&w, &a, "blocked", &[&m], vec![version(&w, &m, json!({}))]).await;
     let blocked = || async {
         let waiting = social::versions_waiting(&w.d, &a, input(json!({})))
             .await

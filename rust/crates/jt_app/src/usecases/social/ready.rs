@@ -101,9 +101,10 @@ impl Reader {
         let frame = r.strategy().current_approved().await?.is_some();
         let knowledge = super::approval::rules(r).await?;
         let settings = r.studio_posts().posting_settings().await?;
+        // Read without the lock (design 2026-11-19 §3.10.2): reads never take it.
         let braked = r
             .studio_control()
-            .lock_control()
+            .read_control()
             .await?
             .is_braked(LaneKind::Organic);
         Ok(Reader {

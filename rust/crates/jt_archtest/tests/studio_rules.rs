@@ -746,20 +746,20 @@ async fn every_studio_write_reaches_shared_execution_gate() {
             },
             "material_check_release: {e:?}"
         );
-        // The posting policy, a human's, plans content: the same gate.
-        let e =
+        // The posting policy, a human's, is not strategy (design 2026-11-19 D12): it is set
+        // without a frame, and only an inactive workspace refuses it.
+        let saved =
             jt_app::usecases::studio::posts::posting_policy_set(&w.d, &w.ctx, Default::default())
-                .await
-                .unwrap_err();
-        assert_eq!(
-            e.code,
-            if inactive {
-                ErrorCode::WorkspaceInactive
-            } else {
-                ErrorCode::StrategyRequired
-            },
-            "posting_policy_set: {e:?}"
-        );
+                .await;
+        if inactive {
+            assert_eq!(
+                saved.unwrap_err().code,
+                ErrorCode::WorkspaceInactive,
+                "posting_policy_set"
+            );
+        } else {
+            saved.expect("posting_policy_set needs no frame");
+        }
         // The library's panel-only writes, a human's decisions, meet the status check alone.
         if inactive {
             use jt_app::usecases::studio::library;
@@ -817,8 +817,18 @@ async fn every_studio_write_reaches_shared_execution_gate() {
                 assert_eq!(e.unwrap_err().code, ErrorCode::WorkspaceInactive);
             }
         }
+        // Nothing else is written: only the posting policy, saved without a frame.
         let after = w.uow.snapshot();
-        assert_eq!(after.ledger.len(), before.ledger.len());
+        let written: Vec<&str> = after.ledger[before.ledger.len()..]
+            .iter()
+            .map(|e| e.entry.action.as_str())
+            .collect();
+        let expected: &[&str] = if inactive {
+            &[]
+        } else {
+            &["studio.posting_policy.set"]
+        };
+        assert_eq!(written, expected);
         assert_eq!(after.studio.slots, before.studio.slots);
         assert!(after.studio.approvals.is_empty());
         assert!(w.ads.calls().is_empty());

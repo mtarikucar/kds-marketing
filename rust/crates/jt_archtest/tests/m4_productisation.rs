@@ -257,7 +257,7 @@ const POST_M4_REMOVED: [(&str, &str); 5] = [
     ("studio.policy_set", "jeeta.studio.policy_set"),
 ];
 
-const POST_M4_PANEL_ONLY: [&str; 50] = [
+const POST_M4_PANEL_ONLY: [&str; 57] = [
     "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",
@@ -311,6 +311,14 @@ const POST_M4_PANEL_ONLY: [&str; 50] = [
     "strategy.note_withdraw",
     "strategy.proposal_accept",
     "strategy.proposal_skip",
+    // Paylaşımlar (design 2026-11-19 §3.1): the page's read and a person's writes.
+    "content.posts",
+    "content.post_get",
+    "content.post_request",
+    "content.files_add",
+    "content.special_day_skip",
+    "content.version_cancel",
+    "content.post_dismiss",
 ];
 
 fn baseline(key: &str) -> BTreeSet<String> {

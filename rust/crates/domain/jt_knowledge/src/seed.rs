@@ -174,13 +174,16 @@ fn sentence(text: &str) -> String {
     format!("{}.", text.trim_end_matches('.'))
 }
 
-/// "Biz kimiz": the positioning, then what sets the business apart.
+/// "Biz kimiz": the positioning, then what sets the business apart, unless the positioning says
+/// it already (a frame's positioning is the card's whole text, D34, so a version copied from a
+/// frame ends with that line).
 fn who_we_are(identity: &Identity) -> String {
     let usp = identity.usp.trim();
-    let lines: Vec<String> = if usp.is_empty() {
+    let line = format!("Bizi farklı kılan: {usp}");
+    let lines: Vec<String> = if usp.is_empty() || identity.positioning.contains(&line) {
         Vec::new()
     } else {
-        vec![format!("Bizi farklı kılan: {usp}")]
+        vec![line]
     };
     fit(Some(&identity.positioning), &lines)
 }

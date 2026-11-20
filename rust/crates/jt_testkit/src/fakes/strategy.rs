@@ -43,6 +43,7 @@ fn ensure_draft(state: &MemState, ws: WorkspaceId, id: StrategyVersionId) -> Res
 #[async_trait]
 impl StrategyRepo for MemTenant {
     async fn lock_execution_frame(&mut self) -> Result<Option<StrategyVersion>, AppError> {
+        self.tx.journal_lock("execution_frame");
         self.tx.lock_studio().await;
         self.current_approved().await
     }

@@ -11,13 +11,15 @@ use std::sync::Arc;
 use jt_app::ctx::Ctx;
 use jt_app::error::{AppError, ErrorCode};
 use jt_app::ports::UnitOfWork;
+use jt_app::ports::connectors::MediaUpload;
+use jt_app::ports::files::StoredFile;
 use jt_app::ports::wake::WakeReason;
 use jt_app::usecases::agents::{self, ClientInfo};
 use jt_app::usecases::api_keys::{self, CreateKey};
 use jt_app::usecases::knowledge::cards::{CardUpdateInput, card_update};
 use jt_app::usecases::knowledge::derive::{FrameApplyInput, FrameApplyOut, frame_apply};
 use jt_app::usecases::knowledge::notes::{
-    ExistingCardInput, FiledCardInput, NoteAddInput, NoteClaimInput, NoteFileInput,
+    DismissInput, ExistingCardInput, FiledCardInput, NoteAddInput, NoteClaimInput, NoteFileInput,
     NoteReleaseInput, note_add, note_claim, note_file, note_release,
 };
 use jt_app::usecases::knowledge::proposals::{ProposalCreateInput, proposal_create};
@@ -29,7 +31,9 @@ use jt_knowledge::frame::DerivePart;
 use jt_knowledge::{Card, KnowledgeSettings, ProposalKind};
 use jt_ledger::Actor;
 use jt_strategy::{Hypothesis, Sections, StrategyVersion, StrategyVersionId, VersionStatus};
+use jt_studio::FileId;
 use jt_tenancy::ApiKeyId;
+use jt_testkit::fakes::files::MemoryFiles;
 use jt_testkit::fakes::{FIXED_NOW, ScriptedRegistry, ScriptedWaker};
 use serde_json::{Value, json};
 use support::{World, err, world};
@@ -873,50 +877,362 @@ async fn a_note_is_filed_and_derived() {
     assert_eq!(by, [w.owner]);
 }
 
-/// A note asking for a post cannot be filed as one yet (design §7.4: PR 4's composer write):
-/// refused `not_available` before anything is read, so the agent dismisses it.
-#[tokio::test]
-async fn a_post_request_outcome_waits_for_the_composer() {
-    let w = derived_world().await;
-    let (_, content) = agent(&w, "content", &["workspace.read", "content.work"]).await;
+/// A filing's arguments with `post_request: {}` and nothing else.
+fn post_filing(n: jt_knowledge::KnowledgeNoteId, token: &str, key: &str) -> NoteFileInput {
+    NoteFileInput {
+        note_id: n,
+        claim_token: token.into(),
+        request_key: Some(key.into()),
+        summary: Some("Paylaşım olarak açıldı.".into()),
+        cards: Vec::new(),
+        attachments: Vec::new(),
+        rules: Vec::new(),
+        goals: Vec::new(),
+        post_request: Some(json!({})),
+        proposals: Vec::new(),
+        dismiss: None,
+    }
+}
+
+/// [`derived_world`] with a real file store, so a person's files are read as the composer reads
+/// them.
+async fn files_world() -> World {
+    let mut w = derived_world().await;
+    w.deps.files = Arc::new(MemoryFiles::default());
+    w
+}
+
+/// A stored image with bytes of its own, as `studio.file_upload` leaves it.
+async fn image(w: &World) -> FileId {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend(uuid::Uuid::now_v7().as_bytes());
+    let f: StoredFile = w
+        .deps
+        .files
+        .put(
+            w.ws,
+            FileId::new_v7(),
+            MediaUpload {
+                bytes,
+                mime: "image/png".into(),
+                filename: "vitrin.png".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    t.studio().save_file(f.clone()).await.unwrap();
+    t.commit().await.unwrap();
+    f.id
+}
+
+/// A stored PDF (knowledge: never a post's file).
+async fn pdf(w: &World) -> FileId {
+    let f = StoredFile {
+        id: FileId::new_v7(),
+        workspace_id: w.ws,
+        mime: "application/pdf".into(),
+        filename: "fiyat.pdf".into(),
+        sha256: format!(
+            "{}{}",
+            uuid::Uuid::now_v7().simple(),
+            uuid::Uuid::now_v7().simple()
+        ),
+        created_at: FIXED_NOW,
+        cleanup_due_at: None,
+        deleted_at: None,
+        size_bytes: 9,
+    };
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    t.studio().save_file(f.clone()).await.unwrap();
+    t.commit().await.unwrap();
+    f.id
+}
+
+/// The owner's note `text` with `files`, claimed by `agent`: the note and the claim token.
+async fn claimed(
+    w: &World,
+    agent: &Ctx,
+    key: &str,
+    text: &str,
+    files: Vec<FileId>,
+) -> (jt_knowledge::Note, String) {
     let n = note_add(
         &w.deps,
         &w.owner_ctx,
-        note("n1", "Yılbaşı için bir paylaşım yap"),
+        NoteAddInput {
+            file_ids: files,
+            ..note(key, text)
+        },
     )
     .await
     .unwrap();
     let claim = note_claim(
         &w.deps,
-        &content,
+        agent,
         NoteClaimInput {
             note_id: n.id,
-            expected_revision: 1,
+            expected_revision: n.revision,
         },
     )
     .await
     .unwrap();
-    let e = err(note_file(
-        &w.deps,
+    (n, claim.claim_token)
+}
+
+/// A note asking for a post opens a content exactly as the composer does, on the note's
+/// person's behalf (design §4.8, §3.4): the note's text its brief, its image a material genel
+/// freed by the owner and pending its share, its PDF left as knowledge, `requested_by` the
+/// owner; with a file the materials agent is woken on the owner's behalf (the content agent only
+/// once the file is shared). The note records the content; a replay opens nothing more.
+#[tokio::test]
+async fn a_post_request_note_opens_a_content_on_the_owners_behalf() {
+    let w = files_world().await;
+    let (content_key, content) = agent(&w, "content", &["workspace.read", "content.work"]).await;
+    let (materials_key, _) = agent(&w, "materials", &["workspace.read", "materials.work"]).await;
+    let photo = image(&w).await;
+    let price_list = pdf(&w).await;
+    let text = "Yılbaşı kutularımızı bu fotoğrafla paylaş.";
+    let (n, token) = claimed(&w, &content, "n-post", text, vec![photo, price_list]).await;
+    work::checkin(&w.deps, &content).await.unwrap();
+    assert_eq!(woken(&w, content_key), None, "the check-in read the note");
+
+    let filed = note_file(&w.deps, &content, post_filing(n.id, &token, "post-1"))
+        .await
+        .unwrap();
+    assert_eq!(filed.status, jt_knowledge::NoteStatus::Filed);
+    let area_id = filed
+        .outcome
+        .as_ref()
+        .and_then(|o| o.post_request)
+        .expect("the note records the content")
+        .area_id;
+
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    let area = t
+        .studio_projects()
+        .get_project(area_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let material = t
+        .studio_materials()
+        .material_by_file(photo)
+        .await
+        .unwrap()
+        .expect("the image is a material");
+    let pdf_material = t
+        .studio_materials()
+        .material_by_file(price_list)
+        .await
+        .unwrap();
+    drop(t);
+    assert_eq!(area.brief, text);
+    assert_eq!(area.requested_by, Some(w.owner));
+    assert_eq!(area.olay_id, None);
+    assert!(area.hints.formats.is_empty() && area.hints.capability_ids.is_empty());
+    assert_eq!(
+        area.sources
+            .iter()
+            .map(|s| s.material_id)
+            .collect::<Vec<_>>(),
+        [material.id]
+    );
+    assert_eq!(area.pending_files, [material.id]);
+    assert_eq!(material.binding, jt_studio::Binding::Genel);
+    assert_eq!(material.freed.as_ref().map(|f| f.by), Some(w.owner));
+    assert_eq!(material.share, None);
+    let upload = material
+        .upload_for
+        .as_ref()
+        .expect("attached for the content");
+    assert_eq!((upload.area_id, upload.by), (Some(area_id), w.owner));
+    assert!(pdf_material.is_none(), "a PDF stays knowledge");
+
+    // The materials agent first, on the owner's behalf; the content agent once it is shared.
+    assert_eq!(
+        woken(&w, materials_key),
+        Some((vec![WakeReason::MaterialUploaded], vec![w.owner]))
+    );
+    assert_eq!(woken(&w, content_key), None);
+    assert_eq!(w.entries("content.post_requested").len(), 1);
+    assert_eq!(
+        w.entries("strategy.note_filed")[0].payload["post_request"],
+        json!(area_id)
+    );
+
+    // A replay answers the same note and opens nothing more.
+    let again = note_file(&w.deps, &content, post_filing(n.id, &token, "post-1"))
+        .await
+        .unwrap();
+    assert_eq!(again, filed);
+    assert_eq!(w.entries("content.post_requested").len(), 1);
+}
+
+/// The journey of §8.2: a note asking for a post with no image or video (only a PDF) opens a
+/// content with no files, a `content` row of Paylaşımlar requested by the owner, and wakes the
+/// content agent at once on the owner's behalf; the content is offered to it.
+#[tokio::test]
+async fn a_note_asking_for_a_post_opens_one() {
+    let w = files_world().await;
+    let (content_key, content) = agent(&w, "content", &["workspace.read", "content.work"]).await;
+    let price_list = pdf(&w).await;
+    let (n, token) = claimed(
+        &w,
         &content,
-        NoteFileInput {
-            note_id: n.id,
-            claim_token: claim.claim_token,
-            request_key: Some("post".into()),
-            summary: Some("Paylaşım istendi.".into()),
-            cards: Vec::new(),
-            attachments: Vec::new(),
-            rules: Vec::new(),
-            goals: Vec::new(),
-            post_request: Some(json!({})),
-            proposals: Vec::new(),
-            dismiss: None,
-        },
+        "n-new-year",
+        "Yılbaşı için bir paylaşım yap",
+        vec![price_list],
     )
-    .await);
+    .await;
+    work::checkin(&w.deps, &content).await.unwrap();
+
+    let filed = note_file(&w.deps, &content, post_filing(n.id, &token, "post-2"))
+        .await
+        .unwrap();
+    let area_id = filed.outcome.unwrap().post_request.unwrap().area_id;
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    let area = t
+        .studio_projects()
+        .get_project(area_id)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(t);
+    assert!(area.sources.is_empty() && area.pending_files.is_empty());
+    assert_eq!(area.requested_by, Some(w.owner));
+    assert_eq!(
+        woken(&w, content_key),
+        Some((vec![WakeReason::ContentRequested], vec![w.owner]))
+    );
+    assert!(
+        pending(&w, &content).await.items.iter().any(|i| matches!(
+            i.kind,
+            WorkKind::ContentArea { project_id, .. } if project_id == area_id
+        )),
+        "the content is offered"
+    );
+    let page = jt_app::usecases::content::posts(
+        &w.deps,
+        &w.owner_ctx,
+        serde_json::from_value(json!({})).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        page.rows
+            .iter()
+            .any(|r| r.id == format!("content:{area_id}")
+                && r.kind == jt_app::usecases::content::posts::RowKind::Content),
+        "{:?}",
+        page.rows.iter().map(|r| &r.id).collect::<Vec<_>>()
+    );
+}
+
+/// A post request is refused, writing nothing, for a note longer than the composer takes
+/// (`VALIDATION` `note_too_long`), alongside a dismissal (`VALIDATION` `not_allowed`) and without
+/// the content module (`CONFLICT` `module_not_installed`).
+#[tokio::test]
+async fn a_post_request_note_is_refused_and_writes_nothing() {
+    let w = files_world().await;
+    let (content_key, content) = agent(&w, "content", &["workspace.read", "content.work"]).await;
+
+    // Too long for a post request.
+    let long = "Uzun bir not. ".repeat(160);
+    let (n, token) = claimed(&w, &content, "n-long", &long, Vec::new()).await;
+    work::checkin(&w.deps, &content).await.unwrap();
+    let e = err(note_file(&w.deps, &content, post_filing(n.id, &token, "long")).await);
     assert_eq!(
         (e.code, reason(&e), e.details["field"].as_str()),
-        (ErrorCode::Validation, "not_available", Some("post_request"))
+        (ErrorCode::Validation, "note_too_long", Some("post_request"))
+    );
+
+    // With a dismissal.
+    let mut both = post_filing(n.id, &token, "both");
+    both.dismiss = Some(DismissInput {
+        reason: "Yapılacak bir şey yok.".into(),
+    });
+    let e = err(note_file(&w.deps, &content, both).await);
+    assert_eq!((e.code, reason(&e)), (ErrorCode::Validation, "not_allowed"));
+
+    // Without the content module.
+    jt_app::usecases::modules::remove(&w.deps, &w.owner_ctx, "content")
+        .await
+        .unwrap();
+    let (m, token) = claimed(&w, &content, "n-module", "Bir paylaşım yap.", Vec::new()).await;
+    work::checkin(&w.deps, &content).await.unwrap();
+    let e = err(note_file(&w.deps, &content, post_filing(m.id, &token, "no-module")).await);
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::Conflict, "module_not_installed")
+    );
+
+    // Nothing was written: both notes still open, no content, nobody woken.
+    let mut t = w.uow.tenant(w.ws).await.unwrap();
+    for id in [n.id, m.id] {
+        let note = t.knowledge().note(id).await.unwrap().unwrap();
+        assert_eq!(note.status, jt_knowledge::NoteStatus::Open);
+    }
+    drop(t);
+    assert!(w.entries("content.post_requested").is_empty());
+    assert!(w.entries("strategy.note_filed").is_empty());
+    assert_eq!(woken(&w, content_key), None);
+}
+
+/// An accepted card proposal is the owner's change: a posting card wakes the posting agent in
+/// person and lists its derivation; an accepted rule wakes nobody (read live, §5.3).
+#[tokio::test]
+async fn an_accepted_card_proposal_wakes_the_deriving_agent() {
+    let w = derived_world().await;
+    let (content_key, content) = agent(&w, "content", &["workspace.read", "content.work"]).await;
+    let ideas = card_of(&w, "post_ideas").await;
+    let edit = proposal_create(
+        &w.deps,
+        &content,
+        ProposalCreateInput {
+            request_key: "p-edit".into(),
+            kind: ProposalKind::CardEdit,
+            card_id: Some(ideas.id),
+            title: None,
+            body: format!("{}\n• Hediye paketi", ideas.body),
+            reason: "Müşteriler hediye paketini soruyor.".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let rule = proposal_create(
+        &w.deps,
+        &content,
+        ProposalCreateInput {
+            request_key: "p-rule".into(),
+            kind: ProposalKind::RuleAdd,
+            card_id: None,
+            title: None,
+            body: "Rakip adı geçmez.".into(),
+            reason: "Müşteriler rakibi sormuyor.".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(woken(&w, content_key), None);
+
+    jt_app::usecases::knowledge::proposals::proposal_accept(&w.deps, &w.owner_ctx, rule.id)
+        .await
+        .unwrap();
+    assert_eq!(woken(&w, content_key), None, "a rule is read live");
+    assert!(derive_items(&pending(&w, &content).await).is_empty());
+
+    jt_app::usecases::knowledge::proposals::proposal_accept(&w.deps, &w.owner_ctx, edit.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        woken(&w, content_key),
+        Some((vec![WakeReason::KnowledgeChanged], vec![w.owner]))
+    );
+    let rev = settings(&w).await.revision;
+    assert_eq!(
+        derive_items(&pending(&w, &content).await),
+        [(rev, DerivePart::Posting)]
     );
 }
 

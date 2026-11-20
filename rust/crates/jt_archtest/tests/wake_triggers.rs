@@ -89,12 +89,19 @@ const TRIGGERS: &[(&str, &str, &str, &str)] = &[
     // A knowledge write that moves what a derivation reads (a person's card write, an accepted
     // card proposal, an agent's filing of a person's note): the agent that derives it (§5.3).
     ("knowledge/mod.rs", "wake", "KnowledgeChanged", "KNOWLEDGE"),
+    ("knowledge/mod.rs", "wake", "KnowledgeChanged", "RESEARCH"),
     // A person's note to the agents: the agents that file notes.
     (
         "knowledge/notes.rs",
         "note_add",
         "KnowledgeNote",
         "KNOWLEDGE",
+    ),
+    (
+        "knowledge/notes.rs",
+        "note_add",
+        "KnowledgeNote",
+        "RESEARCH",
     ),
     // A person releasing the organic brake: the posts waiting for a time get one now (D40).
     ("studio/control.rs", "brake", "PostingResumed", "SOCIAL"),
@@ -104,6 +111,47 @@ const TRIGGERS: &[(&str, &str, &str, &str)] = &[
         "account_connected",
         "AccountConnected",
         "SOCIAL",
+    ),
+    // Paylaşımlar (design 2026-11-19 §3.6, §5.3): the composer wakes the content agent, or,
+    // with files, the materials agent for their analysis first; a person's files for what
+    // waits for them; a person's content delivered wakes the social agent on their behalf; the
+    // last pending file of a content shared, taken out or deleted gives it to its agent.
+    (
+        "content/compose.rs",
+        "open_request_in",
+        "ContentRequested",
+        "CONTENT",
+    ),
+    (
+        "content/compose.rs",
+        "open_request_in",
+        "MaterialUploaded",
+        "MATERIALS",
+    ),
+    (
+        "content/compose.rs",
+        "files_add",
+        "MaterialUploaded",
+        "MATERIALS",
+    ),
+    (
+        "content/compose.rs",
+        "files_add",
+        "CaptureAnswered",
+        "CONTENT",
+    ),
+    (
+        "content/delivery.rs",
+        "area_deliver",
+        "ContentDelivered",
+        "SOCIAL",
+    ),
+    ("content/pending.rs", "left", "ContentRequested", "CONTENT"),
+    (
+        "studio/projects.rs",
+        "project_materials",
+        "ContentRequested",
+        "CONTENT",
     ),
 ];
 
@@ -172,6 +220,8 @@ fn a_persons_cancel_wakes_nobody() {
     for (file, name) in [
         ("studio/work.rs", "slot_cancel"),
         ("social/schedule.rs", "cancel_version_of"),
+        ("content/compose.rs", "version_cancel"),
+        ("content/compose.rs", "post_dismiss"),
     ] {
         let source = std::fs::read_to_string(root.join(file))
             .unwrap()
@@ -180,5 +230,40 @@ fn a_persons_cancel_wakes_nobody() {
             !body(&source, name).contains("wake::request("),
             "{file} {name} wakes an agent for a cancel"
         );
+    }
+}
+
+#[test]
+fn every_knowledge_write_reaches_its_wake() {
+    // The knowledge writes that may move what a derivation reads (design 2026-11-19 §4.4 step 5,
+    // §5.3): each runs `Locked::wake` (the `KnowledgeChanged` row above) before it commits, a
+    // card update or archive through the shared `write`; a note's post request opens its content
+    // through the composer's internals (the `open_request_in` rows above), on the note's
+    // person's behalf.
+    let root = workspace_dir().join("crates/jt_app/src/usecases");
+    for (file, name, call) in [
+        ("knowledge/cards.rs", "card_create", "kb.wake("),
+        ("knowledge/cards.rs", "card_update", "write("),
+        ("knowledge/cards.rs", "card_archive", "write("),
+        ("knowledge/cards.rs", "write", "kb.wake("),
+        ("knowledge/proposals.rs", "proposal_accept", "kb.wake("),
+        ("knowledge/notes.rs", "note_file", "kb.wake("),
+        ("knowledge/notes.rs", "note_file", "post_request_outcome("),
+        (
+            "knowledge/notes.rs",
+            "post_request_outcome",
+            "compose::open_request_in(",
+        ),
+    ] {
+        let source = std::fs::read_to_string(root.join(file))
+            .unwrap()
+            .replace("\r\n", "\n");
+        let body = body(&source, name);
+        let at = body
+            .find(call)
+            .unwrap_or_else(|| panic!("{file} {name} never calls {call}"));
+        if let Some(commit) = body.rfind(".commit().await") {
+            assert!(at < commit, "{file} {name} wakes after it commits");
+        }
     }
 }

@@ -123,20 +123,25 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           wrote, or {new: {title, body}} when no card fits), attachments (the \
                           note's own files or links onto a card you file, by its index in \
                           cards), rules (a prohibition the owner states), goals (a goal the \
-                          owner states), proposals (ids of proposals you made with \
+                          owner states), post_request ({}: the owner asks for a post; it opens \
+                          a content as if the owner wrote the note on the Paylasimlar page: the \
+                          note's text its brief, the note's images and MP4 videos its files, \
+                          PDFs staying knowledge; the note records the content), proposals (ids \
+                          of proposals you made with \
                           jeeta.strategy.proposal_create for this note, after it was written, \
                           for what you inferred and the owner did not say; each still waiting \
                           for the owner). summary is one line in Turkish the owner reads under the \
-                          note. A note asking for a post (post_request) is refused \
-                          not_available for now: dismiss it saying the owner asks for posts on \
-                          Paylasimlar. Dismiss ({dismiss: {reason}}, a reason in Turkish that \
+                          note. Dismiss ({dismiss: {reason}}, a reason in Turkish that \
                           says where the answer is) only a note with nothing to act on. The ad \
                           budget, the message limit and the approval switch are the owner's \
                           alone: a note asking to change them is dismissed with a reason that \
                           sends the owner to Kurallar. Refusals: CONFLICT filing_removes_text \
                           (keep what the owner wrote), card_changed (read the card again and \
                           file again), note_withdrawn, not_claimed (claim it again), \
-                          proposal_closed (the owner decided it or it expired); NOT_FOUND \
+                          proposal_closed (the owner decided it or it expired), \
+                          module_not_installed (no content module for a post_request: dismiss \
+                          the note saying so); VALIDATION note_too_long (a post_request takes \
+                          at most 2000 characters: file it as a card or dismiss it); NOT_FOUND \
                           no_such_proposal (not yours, or made before the note). A filing \
                           that changes a card the frame is derived from makes a \
                           knowledge_derive item: call jeeta.work.pending again after it. \
@@ -750,7 +755,8 @@ fn note_file_schema() -> Schema {
             "goals": { "type": "array", "maxItems": 5, "items": { "type": "string", "maxLength": 300 } },
             "post_request": {
                 "type": "object",
-                "description": "Not available yet: refused not_available."
+                "additionalProperties": false,
+                "description": "{} when the owner asks for a post: a content opens as if the owner wrote the note on the Paylasimlar page (the note's text, its images and MP4 videos)."
             },
             "proposals": {
                 "type": "array", "maxItems": 5,

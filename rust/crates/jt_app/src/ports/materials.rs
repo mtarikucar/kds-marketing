@@ -162,6 +162,19 @@ pub trait MaterialRepo: Send + Sync {
         expected_revision: u64,
     ) -> Result<(), AppError>;
     async fn get_material(&mut self, id: MaterialId) -> Result<Option<Material>, AppError>;
+    /// The stored materials among `ids`, erased ones included, by id; one read in the database.
+    async fn get_materials(&mut self, ids: &[MaterialId]) -> Result<Vec<Material>, AppError> {
+        let mut unique = ids.to_vec();
+        unique.sort();
+        unique.dedup();
+        let mut out = Vec::new();
+        for id in unique {
+            if let Some(m) = self.get_material(id).await? {
+                out.push(m);
+            }
+        }
+        Ok(out)
+    }
     async fn material_by_file(&mut self, file: FileId) -> Result<Option<Material>, AppError>;
     /// The oldest material whose file's recorded hash is `sha256`: the same bytes stored again
     /// under another file id (spec D36). Erased materials and files already marked deleted count.
