@@ -5,6 +5,7 @@ import { isApiError } from '@/api/client';
 import { postGet, postsRead, type PostsFilter, type PostsOut } from '@/api/postsPage';
 import { useSession } from '@/auth/useSession';
 import { toast } from '@/components/ui';
+import { errorMessage } from '@/lib/errors';
 import { useStudioKey } from '../StudioShared';
 
 /** Every read of the page starts with this key; every action of the page invalidates it (§3.8). */
@@ -28,6 +29,9 @@ export function usePosts(filter: PostsFilter | undefined, enabled = true) {
     getNextPageParam: (last: PostsOut) => last.next_cursor ?? undefined,
     enabled: enabled && !!workspace,
     refetchInterval: 30_000,
+    // A chip keeps the page's parts (the composer and what the owner typed in it, the brake's
+    // line, the special days) on screen while the new filter is read; never across workspaces.
+    placeholderData: (previous, query) => (query?.queryKey[1] === workspace ? previous : undefined),
   });
 }
 
@@ -66,6 +70,17 @@ export function useInvalidatePosts() {
 /** The refusal that means "it changed since you read it" (§2.7.4). */
 export function isConflict(err: unknown): boolean {
   return isApiError(err) && err.code === 'CONFLICT';
+}
+
+/** A `Geri al` that failed: said in the owner's words, and the page read again. */
+export function useUndoFailed() {
+  const { t } = useTranslation();
+  const client = useQueryClient();
+  const studioKey = useStudioKey();
+  return (err: unknown) => {
+    toast.error(isConflict(err) ? t('postsPage.panel.changed') : errorMessage(t, err));
+    void invalidatePosts(client, studioKey);
+  };
 }
 
 /**

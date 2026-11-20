@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { AtSign, ChevronLeft, Image as ImageIcon, PauseCircle, Settings } from 'lucide-react';
-import type { PostRow, PostsFilter } from '@/api/postsPage';
+import type { ComposerState, PostRow, PostsFilter } from '@/api/postsPage';
 import { brake as brakeWrite } from '@/api/studio';
 import { useSession } from '@/auth/useSession';
 import { Button, Callout, cn, IconButton, PageHeader, Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui';
@@ -14,7 +14,7 @@ import { TiktokDialog } from './social/TiktokDialog';
 import { AccountsSheet } from './posts/AccountsSheet';
 import { AgentLine } from './posts/AgentLine';
 import { Composer } from './posts/Composer';
-import { DetailPanel, PanelSkeleton } from './posts/DetailPanel';
+import { DetailLoadError, DetailPanel, GonePanel, isNotFound, PanelSkeleton } from './posts/DetailPanel';
 import { FilesDrawer } from './posts/FilesDrawer';
 import { closedPlace, selectedRowId, usePostsPlace, withRow, type PostsPlace } from './posts/location';
 import { Chips, PostsTable, TableSkeleton } from './posts/PostsTable';
@@ -54,12 +54,26 @@ export function PostsPage() {
   const filter = place.f;
   const posts = usePosts(filter, allowed);
   const refresh = useInvalidatePosts();
-  const [created, setCreated] = useState<PostRow | null>(null);
+  // The row the composer just made, and when: it shows first until a read made after it is in.
+  const [created, setCreated] = useState<{ row: PostRow; at: number } | null>(null);
+  // Rows cancelled from the panel a moment ago: the panel says they are gone (§2.10).
+  const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
   const pages = posts.data?.pages ?? [];
   const first = pages[0];
   const listed = useMemo(() => pages.flatMap((p) => p.rows), [pages]);
-  // The row the composer just made shows first until the read holds it.
-  const rows = useMemo(() => (created && !listed.some((r) => r.id === created.id) && !filter ? [created, ...listed] : listed), [created, listed, filter]);
+  const rows = useMemo(
+    () => (created && !listed.some((r) => r.id === created.row.id) && !filter ? [created.row, ...listed] : listed),
+    [created, listed, filter],
+  );
+  useEffect(() => {
+    if (created && !posts.isFetching && posts.dataUpdatedAt > created.at) setCreated(null);
+  }, [created, posts.isFetching, posts.dataUpdatedAt]);
+  const markGone = (rowId: string, isGone: boolean) => setGone((current) => {
+    const next = new Set(current);
+    if (isGone) next.add(rowId);
+    else next.delete(rowId);
+    return next;
+  });
 
   // Selection: the address's row, resolved among the rows read; else, on a desk, the first row.
   const named = selectedRowId(place);
@@ -94,6 +108,11 @@ export function PostsPage() {
   const contentModule = modules.data?.modules.find((m) => m.blueprint.id === 'content');
   const contentInstalled = !!contentModule?.installed;
   const brake = first?.brake ?? null;
+  // Until the first read answers, the composer works from who the viewer is (§2.10 Loading).
+  const composer: ComposerState | null = first?.composer
+    ?? (posts.isPending && modules.data
+      ? { allowed: can(session.data, 'content.manage') && contentInstalled, files_allowed: materialsWork, stops: [], advice: [], connected: [] }
+      : null);
   const select = (row: { id: string }) => {
     go(withRow(closedPlace(place), row.id));
   };
@@ -146,31 +165,26 @@ export function PostsPage() {
     </Button>
   ) : null;
 
+  const closePanel = () => go(withRow(closedPlace(place), undefined));
   const panel = selected ? (
     <DetailPanel
       row={selected}
       detail={detail.data}
       detailError={detail.error}
+      markedGone={gone.has(selected.id) || (!!named && gone.has(named))}
       brake={brake}
       onResumeAll={() => resume.mutate()}
       onAccounts={openAccounts}
       onTiktok={(slot) => go({ ...withRow(closedPlace(place), `slot:${slot}`), tiktok: slot })}
       onSelect={(id) => select({ id })}
-      onClose={() => go(withRow(closedPlace(place), undefined))}
+      onClose={closePanel}
+      onRetry={() => void detail.refetch()}
+      onGone={markGone}
     />
-  ) : named && detail.isLoading ? <PanelSkeleton /> : named && detail.isError ? (
-    <DetailPanel
-      row={{ id: named, kind: 'post', area_id: null, version_id: null, slot_id: null, shoot_request_id: null, title: '', cover: null, channel: null, format: null, media: null, category: { olay_id: null, title: '' }, publish_at: null, published_at: null, url: null, status: 'published', sub_state: null, progress: { index: 7, state: 'done' }, waits: [], actions: {}, ai_illustration: false, siblings: [] }}
-      detail={undefined}
-      detailError={detail.error}
-      brake={brake}
-      onResumeAll={() => resume.mutate()}
-      onAccounts={openAccounts}
-      onTiktok={() => {}}
-      onSelect={(id) => select({ id })}
-      onClose={() => go(withRow(closedPlace(place), undefined))}
-    />
-  ) : null;
+  ) : named && gone.has(named) ? <GonePanel onClose={closePanel} />
+    : named && detail.isLoading ? <PanelSkeleton />
+      : named && detail.isError ? (isNotFound(detail.error) ? <GonePanel onClose={closePanel} /> : <DetailLoadError onRetry={() => void detail.refetch()} />)
+        : null;
   // On a desk the panel sits beside the table; below 1024 px it is a sheet over the page (§2.10).
   const sheetOpen = !desk && !!named && !!panel && !place.tiktok;
 
@@ -189,13 +203,14 @@ export function PostsPage() {
             {resume.error != null && <span className="basis-full">{errorMessage(t, resume.error)}</span>}
           </p>
         )}
-        {first && first.composer.allowed && (
+        {composer?.allowed && (
           <Composer
-            state={first.composer}
+            state={composer}
+            known={!!first}
             canResume={!!brake?.can_resume}
             onResume={() => resume.mutate()}
             onAccounts={openAccounts}
-            onCreated={(row) => { setCreated(row); go(withRow({}, row.id)); }}
+            onCreated={(row) => { setCreated({ row, at: Date.now() }); go(withRow({}, row.id)); }}
           />
         )}
         {first && !first.composer.allowed && !contentInstalled && can(session.data, 'content.manage') && modules.data && (
@@ -227,12 +242,12 @@ export function PostsPage() {
         )}
       </div>
       {!desk && (
-        <Sheet open={sheetOpen} onOpenChange={(open) => { if (!open) go(withRow(closedPlace(place), undefined)); }}>
+        <Sheet open={sheetOpen} onOpenChange={(open) => { if (!open) closePanel(); }}>
           <SheetContent side="right" className={cn('overflow-y-auto', phone ? 'w-full max-w-none' : 'w-full max-w-[420px]')} hideClose={phone} aria-label={t('postsPage.panel.label')}>
             <SheetTitle className="sr-only">{t('postsPage.panel.label')}</SheetTitle>
             <SheetDescription className="sr-only">{selected?.title ?? ''}</SheetDescription>
             {phone && (
-              <button type="button" className="mb-3 inline-flex min-h-11 items-center gap-1 text-sm text-muted-foreground" onClick={() => go(withRow(closedPlace(place), undefined))}>
+              <button type="button" className="mb-3 inline-flex min-h-11 items-center gap-1 text-sm text-muted-foreground" onClick={closePanel}>
                 <ChevronLeft aria-hidden="true" className="h-4 w-4" />
                 {t('postsPage.panel.back')}
               </button>

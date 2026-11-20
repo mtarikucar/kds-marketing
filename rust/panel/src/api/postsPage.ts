@@ -337,6 +337,12 @@ export interface PostDetail {
   materials: Cover[];
   redo_note: string | null;
   cancelled: { by_name: string; at: Rfc3339; reason: string } | null;
+  /**
+   * Assumed (PR 4): `false` when no list holds the row any more (an archived content's, a
+   * cancelled version's, a retired post's), so the panel says it is gone (§2.10); `actions` is
+   * then empty. Absent counts as listed.
+   */
+  listed?: boolean;
 }
 
 /** `PostRequestOut` (§3.4.1); assumed `stops` are the composer's stop shape. */

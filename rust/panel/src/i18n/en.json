@@ -4859,7 +4859,9 @@
       "cancelled": "Cancelled.",
       "undo": "Undo",
       "sentToAgent": "Passed to the agent.",
-      "redoNote": "The change you asked for: {{note}}"
+      "redoNote": "The change you asked for: {{note}}",
+      "loadError": "This post could not be loaded.",
+      "managerReconnect": "A manager has to reconnect this account."
     },
     "redo": {
       "title": "What should change?",

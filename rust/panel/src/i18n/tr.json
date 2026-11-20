@@ -4859,7 +4859,9 @@
       "cancelled": "İptal edildi.",
       "undo": "Geri al",
       "sentToAgent": "Ajana iletildi.",
-      "redoNote": "İstediğin değişiklik: {{note}}"
+      "redoNote": "İstediğin değişiklik: {{note}}",
+      "loadError": "Paylaşım yüklenemedi.",
+      "managerReconnect": "Bu hesabı bir yönetici yeniden bağlamalı."
     },
     "redo": {
       "title": "Ne değişsin?",

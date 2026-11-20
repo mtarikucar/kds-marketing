@@ -103,12 +103,15 @@ function adviceLine(t: TFunction, state: ComposerState): string {
  */
 export function Composer({
   state,
+  known = true,
   canResume,
   onResume,
   onAccounts,
   onCreated,
 }: {
   state: ComposerState;
+  /** `false` while the page's first read is out: the connected accounts are not known yet. */
+  known?: boolean;
   canResume: boolean;
   onResume: () => void;
   onAccounts: () => void;
@@ -206,7 +209,7 @@ export function Composer({
     if (!canSend) return;
     send.mutate({ text: trimmed, files });
   };
-  const missing = unconnectedPlatforms(text, state.connected);
+  const missing = known ? unconnectedPlatforms(text, state.connected) : [];
   const advice = (focused || text.length > 0) && state.advice.length > 0 ? adviceLine(t, state) : '';
 
   // The input grows to three lines.

@@ -30,6 +30,14 @@ export interface PostsPlace {
 }
 
 export type SettingsSection = 'rules' | 'days' | 'files';
+
+/** `day={key}:{year}` as its key and year; `undefined` when it is not that shape. */
+export function dayPlace(day: string | undefined): { key: string; year: number } | undefined {
+  const at = day?.lastIndexOf(':') ?? -1;
+  if (!day || at <= 0) return undefined;
+  const year = Number(day.slice(at + 1));
+  return Number.isInteger(year) && year > 2000 ? { key: day.slice(0, at), year } : undefined;
+}
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = ['rules', 'days', 'files'];
 const DAYS = [7, 30, 90] as const;
 const FILTERS: readonly PostsFilter[] = ['you', ...STAGE_KEYS];

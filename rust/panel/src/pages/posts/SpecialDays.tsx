@@ -6,7 +6,7 @@ import { filesAdd, specialDaySkip, type SpecialDayLine } from '@/api/postsPage';
 import { Button, toast } from '@/components/ui';
 import { ACCEPT, fileAccepted, uploadFile } from '../content/uploads';
 import { MaterialsError } from '../materials/MaterialsShared';
-import { usePostsMutation, useInvalidatePosts } from './queries';
+import { usePostsMutation, useInvalidatePosts, useUndoFailed } from './queries';
 import { dayWords, foundWords } from './words';
 
 /** Uploads `files` one by one and hands them to `content.files_add` for `target`. */
@@ -62,6 +62,7 @@ async function useAnyway(ids: string[]) {
 function DayLine({ day }: { day: SpecialDayLine }) {
   const { t, i18n } = useTranslation();
   const refresh = useInvalidatePosts();
+  const undoFailed = useUndoFailed();
   const name = day.name;
   const date = dayWords(day.window_start, i18n.language);
   const target = { kind: 'special_day' as const, key: day.key, year: day.year };
@@ -77,9 +78,10 @@ function DayLine({ day }: { day: SpecialDayLine }) {
           void (async () => {
             const calendar = await m.calendarList(day.year);
             const entry = calendar.entries.find((e) => e.key === day.key);
-            if (entry) await m.calendarSet({ ...entry, enabled: true });
+            if (!entry) throw new Error('day_not_found');
+            await m.calendarSet({ ...entry, enabled: true });
             await refresh();
-          })();
+          })().catch(undoFailed);
         },
       },
     });

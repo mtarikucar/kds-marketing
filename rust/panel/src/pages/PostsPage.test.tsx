@@ -191,6 +191,33 @@ describe('the panel', () => {
     await user.click(within(p).getByRole('button', { name: P.panel.close }));
     await waitFor(() => expect(router.state.location.search).toBe(''));
   });
+
+  it('says a named row it could not read, never a made-up one, and reads it again', async () => {
+    const user = userEvent.setup();
+    const path = '/api/content/posts/slot%3Abroken';
+    const { calls } = open('/posts?slot=broken', postsOut(), { [`GET ${path}`]: withStatus(500, { code: 'INTERNAL', message: 'down', details: {} }) });
+    const p = await panel();
+    expect(await within(p).findByText(P.panel.loadError)).toBeInTheDocument();
+    expect(within(p).queryByText(P.status.published)).not.toBeInTheDocument();
+    expect(within(p).queryByRole('heading')).not.toBeInTheDocument();
+    const before = calls.filter((c) => c.path === path).length;
+    await user.click(within(p).getByRole('button', { name: tr.common.retry }));
+    await waitFor(() => expect(calls.filter((c) => c.path === path).length).toBeGreaterThan(before));
+  });
+
+  it('says a listed row whose text could not be read', async () => {
+    open('/posts?slot=s-live', postsOut(), { 'GET /api/content/posts/slot%3As-live': withStatus(500, { code: 'INTERNAL', message: 'down', details: {} }) });
+    const p = await panel();
+    expect(await within(p).findByRole('heading', { name: 'Mavi sır serisi' })).toBeInTheDocument();
+    expect(await within(p).findByText(P.panel.loadError)).toBeInTheDocument();
+    expect(within(p).getByRole('button', { name: tr.common.retry })).toBeInTheDocument();
+  });
+
+  it('says a row no list holds any more is gone', async () => {
+    const archived = postRow('content:area-old', { title: 'Eski içerik', kind: 'content', area_id: 'area-old', status: 'preparing' });
+    open('/posts?content=area-old', postsOut(), { 'GET /api/content/posts/content%3Aarea-old': detailOf(archived, { listed: false }) });
+    expect(await within(await panel()).findByText(P.panel.gone)).toBeInTheDocument();
+  });
 });
 
 /** A row with the wait `code` and the actions that wait offers. */
@@ -350,6 +377,16 @@ describe('a post that did not go out', () => {
     await waitFor(() => expect(sent(calls, 'POST', '/api/content/posts/f1/dismiss')?.body).toEqual({ expected_revision: 6 }));
   });
 
+  it('leaves an account that still cannot post to a manager, offering no retry', async () => {
+    const row = postRow('slot:f4', { title: 'Gitmeyen', status: 'failed', waits: [wait('failed', { reason: 'permission', kind: 'instagram' })], actions: { redo: { project_id: 'area-1', package_revision: 2 }, acknowledge: { slot_id: 'f4', expected_revision: 1 } } });
+    open('/posts?slot=f4', postsOut({ rows: [row] }));
+    const p = await panel();
+    expect(await within(p).findByText(P.panel.managerReconnect)).toBeInTheDocument();
+    expect(within(p).queryByRole('button', { name: P.actions.retry })).not.toBeInTheDocument();
+    expect(within(p).queryByRole('button', { name: P.actions.redo })).not.toBeInTheDocument();
+    expect(within(p).getByRole('button', { name: P.actions.dismiss })).toBeInTheDocument();
+  });
+
   it('says a renewed connection and offers to prepare it again', async () => {
     const row = postRow('slot:f2', { title: 'Gitmeyen', status: 'failed', waits: [wait('failed', { reason: 'auth', kind: 'instagram', recovered: true })], actions: { redo: { project_id: 'area-1', package_revision: 2 } } });
     open('/posts?slot=f2', postsOut({ rows: [row] }));
@@ -396,6 +433,7 @@ describe('İptal', () => {
     await user.type(within(dialog).getByLabelText(P.cancel.reason), 'Stokta yok');
     await user.click(within(dialog).getByRole('button', { name: P.cancel.confirm }));
     await waitFor(() => expect(sent(calls, 'POST', '/api/content/areas/area-4/versions/v-sched/cancel')?.body).toEqual({ package_revision: 1, reason: 'Stokta yok' }));
+    expect(await within(await panel()).findByText(P.panel.gone)).toBeInTheDocument();
   });
 
   it('archives a content and takes it back with Geri al', async () => {
@@ -406,8 +444,29 @@ describe('İptal', () => {
     expect(within(dialog).getByText(P.cancel.content)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: P.cancel.confirm }));
     await waitFor(() => expect(sent(calls, 'PATCH', '/api/studio/projects/area-3')?.body).toEqual({ expected_revision: 5, archived: true }));
+    const p = await panel();
+    expect(await within(p).findByText(P.panel.gone)).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: P.panel.undo }));
     await waitFor(() => expect(calls.filter((c) => c.method === 'PATCH').at(-1)?.body).toEqual({ expected_revision: 6, archived: false }));
+    expect(await within(p).findByRole('heading', { name: 'Yılbaşı için kurumsal hediye kupası' })).toBeInTheDocument();
+    expect(within(p).queryByText(P.panel.gone)).not.toBeInTheDocument();
+  });
+
+  it('says a failed Geri al in the owner’s words', async () => {
+    const user = userEvent.setup();
+    let n = 0;
+    setViewport('desk');
+    const answers = postsAnswers(postsOut());
+    Object.defineProperty(answers, 'PATCH /api/studio/projects/area-3', {
+      enumerable: true,
+      get: () => { n += 1; return n === 1 ? { id: 'area-3', revision: 6 } : withStatus(409, { code: 'CONFLICT', message: 'stale', details: {} }); },
+    });
+    mockFetch(answers);
+    renderAt('/posts?content=area-3');
+    await user.click(await within(await panel()).findByRole('button', { name: P.actions.cancel }));
+    await user.click(within(await screen.findByRole('dialog', { name: P.cancel.title })).getByRole('button', { name: P.cancel.confirm }));
+    await user.click(await screen.findByRole('button', { name: P.panel.undo }));
+    expect(await screen.findByText(P.panel.changed)).toBeInTheDocument();
   });
 });
 
@@ -439,7 +498,8 @@ describe('the composer', () => {
     const stops = (['knowledge_empty', 'no_account', 'no_content_agent', 'agent_sleeps', 'agent_late'] as const).map((code) => ({ code, at: ahead(3600_000) }));
     open('/posts', postsOut({ composer: { ...postsOut().composer, stops } }));
     const region = await screen.findByRole('region', { name: P.composer.region });
-    expect(within(region).getByText(P.composer.stops.knowledge_empty)).toBeInTheDocument();
+    // The stops are the read's: said once it has answered.
+    expect(await within(region).findByText(P.composer.stops.knowledge_empty)).toBeInTheDocument();
     expect(within(region).getByText(P.composer.stops.no_account)).toBeInTheDocument();
     expect(within(region).getByText(P.composer.stops.no_content_agent)).toBeInTheDocument();
     expect(within(region).getByText(/^Ajanın çağrı adresi yok; bir sonraki çalışmasında \(.+\) başlar\.$/)).toBeInTheDocument();
@@ -459,13 +519,15 @@ describe('the composer', () => {
     const user = userEvent.setup();
     const created = postRow('content:area-new', { title: 'Anneler günü için kupa', kind: 'content', area_id: 'area-new', status: 'preparing', sub_state: { kind: 'queued', wakes_now: true, next_at: null, late: false }, progress: { index: 0, state: 'current' }, channel: null, publish_at: null });
     let n = 0;
+    let requested = false;
     setViewport('desk');
     const answers = postsAnswers(postsOut(), {
-      'POST /api/content/post-requests': { row: created, stops: [] },
       'GET /api/content/posts/content%3Aarea-new': detailOf(created),
     });
-    // Read on every call: each upload gets its own file id.
+    // Read on every call: each upload gets its own file id; the read holds the row once asked.
     Object.defineProperty(answers, 'POST /api/studio/files', { enumerable: true, get: () => { n += 1; return { id: `file-${n}` }; } });
+    Object.defineProperty(answers, 'POST /api/content/post-requests', { enumerable: true, get: () => { requested = true; return { row: created, stops: [] }; } });
+    Object.defineProperty(answers, 'GET /api/content/posts', { enumerable: true, get: () => postsOut({ rows: requested ? [created, ...rows] : rows }) });
     const calls = mockFetch(answers);
     const { router } = renderAt('/posts');
     const region = await screen.findByRole('region', { name: P.composer.region });
@@ -481,6 +543,38 @@ describe('the composer', () => {
     await waitFor(() => expect(router.state.location.search).toBe('?content=area-new'));
     const t = await table();
     expect(within(t).getAllByRole('button')[0]).toHaveTextContent('Anneler günü için kupa');
+    // Once the read holds it, it is the read's row: shown once.
+    await waitFor(() => expect(calls.filter((c) => c.path === '/api/content/posts').length).toBeGreaterThan(1));
+    await waitFor(() => expect(within(t).getAllByText('Anneler günü için kupa')).toHaveLength(1));
+  });
+
+  it('drops the new row once a later read no longer holds it', async () => {
+    const user = userEvent.setup();
+    const created = postRow('content:area-gone', { title: 'Bir günlük istek', kind: 'content', area_id: 'area-gone', status: 'preparing', progress: { index: 0, state: 'current' }, channel: null, publish_at: null });
+    const { calls } = open('/posts', postsOut(), {
+      'POST /api/content/post-requests': { row: created, stops: [] },
+      'GET /api/content/posts/content%3Aarea-gone': detailOf(created),
+    });
+    const region = await screen.findByRole('region', { name: P.composer.region });
+    await user.type(within(region).getByLabelText(P.composer.label), 'Bir günlük istek{Enter}');
+    await waitFor(() => expect(sent(calls, 'POST', '/api/content/post-requests')).toBeDefined());
+    await waitFor(() => expect(calls.filter((c) => c.path === '/api/content/posts').length).toBeGreaterThan(1));
+    const t = await table();
+    await waitFor(() => expect(within(t).queryByText('Bir günlük istek')).not.toBeInTheDocument());
+  });
+
+  it('keeps what the owner typed when a chip is chosen', async () => {
+    const user = userEvent.setup();
+    setViewport('desk');
+    mockFetch({ ...postsAnswers(), 'GET /api/content/posts?filter=onay': delayed(200, postsOut()) });
+    const { router } = renderAt('/posts');
+    const region = await screen.findByRole('region', { name: P.composer.region });
+    await user.type(within(region).getByLabelText(P.composer.label), 'Yarın için bir kupa');
+    await user.click(within(screen.getByRole('group', { name: P.chips.label })).getByRole('button', { name: /Onay/ }));
+    await waitFor(() => expect(router.state.location.search).toBe('?f=onay'));
+    expect(screen.getByRole('textbox', { name: P.composer.label })).toHaveValue('Yarın için bir kupa');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(screen.getByRole('textbox', { name: P.composer.label })).toHaveValue('Yarın için bir kupa');
   });
 
   it('says a failed upload and tries again', async () => {
@@ -503,6 +597,7 @@ describe('the composer', () => {
 
   it('hides the file button without the library', async () => {
     open('/posts', postsOut({ composer: { ...postsOut().composer, files_allowed: false } }));
+    await rowButton('Mavi sır serisi');
     const region = await screen.findByRole('region', { name: P.composer.region });
     expect(within(region).queryByRole('button', { name: P.composer.file })).not.toBeInTheDocument();
   });
@@ -547,6 +642,28 @@ describe('special days', () => {
     await waitFor(() => expect(sent(calls, 'PUT', '/api/studio/calendar/ogretmenler_gunu/2026')?.body).toMatchObject({ enabled: true, name: 'Öğretmenler Günü' }));
   });
 
+  it('says a failed undo of a skipped day', async () => {
+    const user = userEvent.setup();
+    open('/posts', postsOut({ days: [day('none')] }), {
+      'POST /api/content/special-days/ogretmenler_gunu/2026/skip': {},
+      'GET /api/studio/calendar': withStatus(500, { code: 'INTERNAL', message: 'down', details: {} }),
+    });
+    const region = await screen.findByRole('region', { name: P.days.region });
+    await user.click(within(region).getByRole('button', { name: P.days.skip }));
+    await user.click(await screen.findByRole('button', { name: P.days.undo }));
+    expect(await screen.findByText(tr.errors.INTERNAL)).toBeInTheDocument();
+  });
+
+  it('opens a named day in its own year, marked', async () => {
+    const { calls } = open('/posts?settings=1&section=days&day=ogretmenler_gunu:2027', postsOut(), {
+      'GET /api/studio/calendar': { year: 2027, entries: [{ key: 'ogretmenler_gunu', year: 2027, name: 'Öğretmenler Günü', kind: 'special_day', window_start: '2027-11-24', window_end: '2027-11-24', lead_days: null, enabled: true }], rows: [], policy: { lead_days: 21, reuse_days: 14, recap_days: 30, ai_standalone: false } },
+    });
+    const dialog = await screen.findByRole('dialog', { name: P.settings.title });
+    expect(await within(dialog).findByRole('combobox', { name: tr.materials.calendar.year })).toHaveValue('2027');
+    expect(calls.some((c) => c.path === '/api/studio/calendar' && c.search === '?year=2027')).toBe(true);
+    expect(await within(dialog).findByTestId('calendar-ogretmenler_gunu')).toHaveAttribute('aria-current', 'true');
+  });
+
   it('opens Ayarlar at the special days for the rest', async () => {
     const user = userEvent.setup();
     const { router } = open('/posts', postsOut({ days: [day('none')], days_more: 4 }));
@@ -562,7 +679,12 @@ describe('states', () => {
     renderAt('/posts');
     expect(await screen.findByRole('group', { name: P.chips.label })).toHaveAttribute('aria-busy', 'true');
     expect(screen.getAllByRole('status', { name: tr.common.loading }).length).toBeGreaterThan(0);
+    const input = await screen.findByRole('textbox', { name: P.composer.label });
+    expect(input).toBeEnabled();
+    expect(screen.getByRole('group', { name: P.chips.label })).toHaveAttribute('aria-busy', 'true');
+    await userEvent.setup().type(input, 'Bir kupa');
     expect(await table()).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: P.composer.label })).toHaveValue('Bir kupa');
   });
 
   it('says it could not load, and loads again', async () => {

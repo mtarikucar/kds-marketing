@@ -18,7 +18,7 @@ import { Button, ConfirmDialog, Dialog, DialogContent, DialogDescription, Dialog
 import { MaterialsError } from '../materials/MaterialsShared';
 import { StudioError } from '../StudioShared';
 import { PickTime } from './PickTime';
-import { usePostsMutation, useInvalidatePosts } from './queries';
+import { usePostsMutation, useInvalidatePosts, useUndoFailed } from './queries';
 import { addFiles, PickFiles } from './SpecialDays';
 import { channelAndTime, failNeedsRedo, whenWords } from './words';
 
@@ -29,6 +29,11 @@ export interface ActionContext {
   onAccounts: () => void;
   /** Opens the TikTok posting dialog over the row. */
   onTiktok: (slotId: string) => void;
+  /**
+   * A cancel of the row went through (`true`), or its `Geri al` did (`false`): the panel says the
+   * row is gone without waiting for a read to say so.
+   */
+  onGone?: (rowId: string, gone: boolean) => void;
 }
 
 const fieldClass = 'min-h-11 w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-base sm:text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -93,9 +98,10 @@ export function RedoDialog({ row, prefill, onClose }: { row: PostRow; prefill?: 
 }
 
 /** "İptal" (§2.7.2): the body by what is cancelled, an optional reason, and for a content `Geri al`. */
-export function CancelDialog({ row, cancel, onClose }: { row: PostRow; cancel: CancelRef; onClose: () => void }) {
+export function CancelDialog({ row, cancel, onClose, onGone }: { row: PostRow; cancel: CancelRef; onClose: () => void; onGone?: (rowId: string, gone: boolean) => void }) {
   const { t, i18n } = useTranslation();
   const refresh = useInvalidatePosts();
+  const undoFailed = useUndoFailed();
   const [reason, setReason] = useState('');
   const run = usePostsMutation(
     async (why: string) => {
@@ -112,13 +118,17 @@ export function CancelDialog({ row, cancel, onClose }: { row: PostRow; cancel: C
     },
     (archived) => {
       onClose();
+      onGone?.(row.id, true);
       if (archived) {
         toast.success(t('postsPage.panel.cancelled'), {
           duration: 10_000,
           action: {
             label: t('postsPage.panel.undo'),
             onClick: () => {
-              void projectUpdate(archived.id, { expected_revision: archived.revision, archived: false }).then(refresh, (err) => toast.error(String(err)));
+              void projectUpdate(archived.id, { expected_revision: archived.revision, archived: false }).then(
+                () => { onGone?.(row.id, false); return refresh(); },
+                undoFailed,
+              );
             },
           },
         });
@@ -155,7 +165,7 @@ interface Act {
   node: ReactNode;
 }
 
-function useRowActs({ row, onAccounts, onTiktok }: ActionContext) {
+function useRowActs({ row, onAccounts, onTiktok, onGone }: ActionContext) {
   const { t, i18n } = useTranslation();
   const [dialog, setDialog] = useState<null | { kind: 'redo'; prefill?: string } | { kind: 'cancel' } | { kind: 'release' } | { kind: 'pick' }>(null);
   const a = row.actions;
@@ -212,6 +222,8 @@ function useRowActs({ row, onAccounts, onTiktok }: ActionContext) {
   // The wait's primary action and its quiet secondary (§2.6).
   let primary: Act | null = null;
   let secondary: Act | null = null;
+  // A line said under the buttons when the wait's action is someone else's to take.
+  let note: string | null = null;
   switch (wait?.code) {
     case 'approval':
       primary = a.approve ? btn('approve', t('postsPage.actions.approve'), () => approve.mutate(undefined), { primary: true, loading: approve.isPending }) : null;
@@ -248,8 +260,10 @@ function useRowActs({ row, onAccounts, onTiktok }: ActionContext) {
       secondary = a.release_check ? quiet('release', t('postsPage.actions.release'), () => setDialog({ kind: 'release' })) : null;
       break;
     case 'failed':
-      if (a.reconnect && (wait.facts.reason === 'auth' || wait.facts.reason === 'permission') && !wait.facts.recovered) {
-        primary = link('reconnect', t('postsPage.actions.reconnect'), `/connect?capability=${encodeURIComponent(a.reconnect)}`);
+      if ((wait.facts.reason === 'auth' || wait.facts.reason === 'permission') && !wait.facts.recovered) {
+        // The account still cannot post: preparing it again would fail the same way (§2.6).
+        if (a.reconnect) primary = link('reconnect', t('postsPage.actions.reconnect'), `/connect?capability=${encodeURIComponent(a.reconnect)}`);
+        else note = t('postsPage.panel.managerReconnect');
       } else if (failNeedsRedo(wait)) primary = redoAct(true);
       else primary = redoAct(true, t('postsPage.redo.retryText'), t('postsPage.actions.retry'));
       secondary = a.acknowledge ? quiet('dismiss', t('postsPage.actions.dismiss'), () => acknowledge.mutate(undefined), acknowledge.isPending) : null;
@@ -290,7 +304,7 @@ function useRowActs({ row, onAccounts, onTiktok }: ActionContext) {
   if (primary) row2.push(primary);
   if (a.approve && primary?.key !== 'approve') row2.push(btn('approve', t('postsPage.actions.approve'), () => approve.mutate(undefined), { loading: approve.isPending }));
   if (a.tiktok && primary?.key !== 'tiktok') row2.push(btn('tiktok', t('postsPage.actions.tiktok'), () => onTiktok(a.tiktok!.slot_id)));
-  if (a.redo && !row2.some((x) => x.key === 'redo' || x.key === 'retry') && secondary?.key !== 'redo') row2.push(btn('redo', t('postsPage.actions.redo'), () => setDialog({ kind: 'redo' })));
+  if (a.redo && note == null && !row2.some((x) => x.key === 'redo' || x.key === 'retry') && secondary?.key !== 'redo') row2.push(btn('redo', t('postsPage.actions.redo'), () => setDialog({ kind: 'redo' })));
   if (a.cancel) row2.push(btn('cancel', t('postsPage.actions.cancel'), () => setDialog({ kind: 'cancel' })));
   // A version an account can take: a person may give its time now (§2.12 #23).
   const quiets: Act[] = [];
@@ -301,7 +315,7 @@ function useRowActs({ row, onAccounts, onTiktok }: ActionContext) {
   const dialogs = (
     <>
       {dialog?.kind === 'redo' && a.redo && <RedoDialog row={row} prefill={dialog.prefill} onClose={() => setDialog(null)} />}
-      {dialog?.kind === 'cancel' && a.cancel && <CancelDialog row={row} cancel={a.cancel} onClose={() => setDialog(null)} />}
+      {dialog?.kind === 'cancel' && a.cancel && <CancelDialog row={row} cancel={a.cancel} onClose={() => setDialog(null)} onGone={onGone} />}
       {dialog?.kind === 'release' && (
         <ConfirmDialog
           open
@@ -316,7 +330,7 @@ function useRowActs({ row, onAccounts, onTiktok }: ActionContext) {
       )}
     </>
   );
-  return { buttons: row2, quiets, error: errors ?? release.error, dialogs, picking: dialog?.kind === 'pick' && a.pick_time ? a.pick_time : null };
+  return { buttons: row2, quiets, note, error: errors ?? release.error, dialogs, picking: dialog?.kind === 'pick' && a.pick_time ? a.pick_time : null };
 }
 
 /**
@@ -326,9 +340,10 @@ function useRowActs({ row, onAccounts, onTiktok }: ActionContext) {
  */
 export function RowActionBar(ctx: ActionContext) {
   const acts = useRowActs(ctx);
-  if (!acts.buttons.length && !acts.quiets.length && !acts.picking) return acts.dialogs;
+  if (!acts.buttons.length && !acts.quiets.length && !acts.picking && !acts.note) return acts.dialogs;
   return (
     <div className="space-y-2">
+      {acts.note && <p className="text-sm text-muted-foreground">{acts.note}</p>}
       {acts.buttons.length > 0 && <div role="group" aria-label={ctx.row.title} className="flex flex-wrap gap-2">{acts.buttons.map((b) => b.node)}</div>}
       {acts.quiets.length > 0 && <div className="flex flex-wrap gap-x-3">{acts.quiets.map((b) => b.node)}</div>}
       {acts.picking && <PickTime pick={acts.picking} format={ctx.row.format} />}

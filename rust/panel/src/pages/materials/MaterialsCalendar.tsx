@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import * as m from '@/api/materials';
-import { Badge } from '@/components/ui';
+import { Badge, cn } from '@/components/ui';
 import {
   MaterialsError,
   MaterialsReadStatus,
@@ -157,17 +157,29 @@ function EntryRow({
   edited,
   policy,
   decider,
+  focused = false,
 }: {
   entry: m.CalendarEntry;
   edited: boolean;
   policy: m.MaterialPolicy;
   decider: boolean;
+  /** The day a link named: scrolled to and marked. */
+  focused?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const [editing, setEditing] = useState(false);
+  const item = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focused) item.current?.scrollIntoView?.({ block: 'center' });
+  }, [focused]);
   const dated = entry.window_start && entry.window_end;
   return (
-    <li className="space-y-3 border-b border-border py-4" data-testid={`calendar-${entry.key}`}>
+    <li
+      ref={item}
+      aria-current={focused ? 'true' : undefined}
+      className={cn('space-y-3 border-b border-border py-4', focused && 'rounded-md bg-primary/10 px-3 ring-2 ring-primary')}
+      data-testid={`calendar-${entry.key}`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium">{entry.name}</span>
         <span className="flex flex-wrap gap-1">
@@ -275,7 +287,18 @@ function PolicyForm({ policy, decider }: { policy: m.MaterialPolicy; decider: bo
  * occasion's window and lead, the dates the owner has yet to enter, and the materials policy.
  * `part` shows only the days (Ayarlar › Özel günler) or only the policy (Ayarlar › Dosya kullanımı).
  */
-export function MaterialsCalendar({ year, onYear, part = 'all' }: { year: number; onYear: (year: number) => void; part?: 'all' | 'days' | 'files' }) {
+export function MaterialsCalendar({
+  year,
+  onYear,
+  part = 'all',
+  focus,
+}: {
+  year: number;
+  onYear: (year: number) => void;
+  part?: 'all' | 'days' | 'files';
+  /** The key of the day a link named, in `year`. */
+  focus?: string;
+}) {
   const { t } = useTranslation();
   const key = useMaterialsKey();
   const decider = useDecider('content.manage');
@@ -328,6 +351,7 @@ export function MaterialsCalendar({ year, onYear, part = 'all' }: { year: number
                 edited={data.rows.some((r) => r.key === e.key)}
                 policy={data.policy}
                 decider={decider}
+                focused={e.key === focus}
               />
             ))}
           </ul>

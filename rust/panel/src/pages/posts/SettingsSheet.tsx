@@ -11,7 +11,7 @@ import { MaterialsCalendar } from '../materials/MaterialsCalendar';
 import { PostingRules } from '../social/SettingsDialog';
 import { StudioError, useStudioKey } from '../StudioShared';
 import { useAccounts } from './AccountsSheet';
-import { closedPlace, type PostsPlace } from './location';
+import { closedPlace, dayPlace, type PostsPlace } from './location';
 import { useInvalidatePosts } from './queries';
 
 /**
@@ -64,7 +64,9 @@ export function SettingsSheet({ place, go, brake }: { place: PostsPlace; go: (ne
   const social = canAny(session.data, ['social.work', 'social.manage']);
   const files = canAny(session.data, ['content.work', 'content.manage', 'materials.work']);
   const accounts = useAccounts(social);
-  const year = place.year ?? Number(m.istanbulDay(new Date()).slice(0, 4));
+  // A named day (`day={key}:{year}`) opens its own year's calendar, with it marked (§2.12 #6).
+  const day = dayPlace(place.day);
+  const year = place.year ?? day?.year ?? Number(m.istanbulDay(new Date()).slice(0, 4));
   const close = () => go(closedPlace(place), { replace: true });
   useEffect(() => {
     if (!place.section) return;
@@ -87,7 +89,12 @@ export function SettingsSheet({ place, go, brake }: { place: PostsPlace; go: (ne
           {files && (
             <section id="settings-days" aria-labelledby="settings-days-title" className="scroll-mt-4 space-y-3">
               <h2 id="settings-days-title" className="text-base font-semibold">{t('postsPage.settings.days')}</h2>
-              <MaterialsCalendar part="days" year={year} onYear={(y) => go({ ...place, settings: true, year: y }, { replace: true })} />
+              <MaterialsCalendar
+                part="days"
+                year={year}
+                focus={day && day.year === year ? day.key : undefined}
+                onYear={(y) => go({ ...place, settings: true, year: y }, { replace: true })}
+              />
             </section>
           )}
           {files && (

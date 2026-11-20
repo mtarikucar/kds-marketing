@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
+import tr from '@/i18n/tr.json';
 import { mockFetch, renderAt } from '@/test/render';
 import { studioAnswers } from '@/test/studio';
 import { postsAnswers } from '@/test/postsPage';
@@ -63,4 +64,17 @@ it.each([
   const { router } = renderAt(from);
   await waitFor(() => expect(`${router.state.location.pathname}${router.state.location.search}`).toBe(`${path}${search}`));
   expect(router.state.historyAction).toBe('REPLACE');
+});
+
+// An old special-day link opens Ayarlar at that day's own year, not this year's (§2.12 #6).
+it('opens an old special-day link at its own year', async () => {
+  const calls = mockFetch({
+    ...postsAnswers(),
+    ...studioAnswers,
+    'GET /api/studio/calendar': { year: 2027, entries: [{ key: 'yilbasi', year: 2027, name: 'Yılbaşı', kind: 'special_day', window_start: '2027-01-01', window_end: '2027-01-01', lead_days: null, enabled: true }], rows: [], policy: { lead_days: 21, reuse_days: 14, recap_days: 30, ai_standalone: false } },
+  });
+  renderAt('/content?day=yilbasi:2027');
+  expect(await screen.findByRole('combobox', { name: tr.materials.calendar.year })).toHaveValue('2027');
+  await waitFor(() => expect(calls.some((c) => c.path === '/api/studio/calendar' && c.search === '?year=2027')).toBe(true));
+  expect(await screen.findByTestId('calendar-yilbasi')).toHaveAttribute('aria-current', 'true');
 });

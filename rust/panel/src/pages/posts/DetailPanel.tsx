@@ -3,7 +3,7 @@ import { ExternalLink, Info } from 'lucide-react';
 import { isApiError } from '@/api/client';
 import type { BrakeState, PostDetail, PostRow } from '@/api/postsPage';
 import { RunNowButton } from '@/components/AgentWakeLine';
-import { Button, cn, Skeleton } from '@/components/ui';
+import { Button, Callout, cn, Skeleton } from '@/components/ui';
 import { useNeedWake, useNow } from '@/lib/wake';
 import { RowActionBar } from './actions';
 import { Thumb } from './PostsTable';
@@ -36,6 +36,36 @@ export function PanelSkeleton() {
   );
 }
 
+/** A `NOT_FOUND` answer of `content.post_get`: no such row in this workspace. */
+export const isNotFound = (err: unknown) => isApiError(err) && err.code === 'NOT_FOUND';
+
+/** Whether the row the panel shows is no longer one the page lists (§2.10 "Row gone"). */
+export function isGone(detail: PostDetail | undefined, detailError: unknown): boolean {
+  return isNotFound(detailError) || !!detail?.cancelled || detail?.listed === false;
+}
+
+/** §2.10 "Row gone (cancelled, archived)": said, with `Kapat`. */
+export function GonePanel({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-3">
+      <p role="status" className="text-sm">{t('postsPage.panel.gone')}</p>
+      <Button size="sm" variant="outline" onClick={onClose}>{t('postsPage.panel.close')}</Button>
+    </div>
+  );
+}
+
+/** The row's own read failed (not a `NOT_FOUND`): said, with `Yeniden dene`. */
+export function DetailLoadError({ onRetry }: { onRetry: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <Callout tone="danger">
+      <p>{t('postsPage.panel.loadError')}</p>
+      <Button className="mt-2" size="sm" variant="outline" onClick={onRetry}>{t('common.retry')}</Button>
+    </Callout>
+  );
+}
+
 /**
  * The selected row (design 2026-11-19 §2.7), no tabs and no step list: the picture beside the
  * title, `{Kanal} · {zaman}` and the status; the wait's sentence; the actions; the text; the
@@ -45,16 +75,23 @@ export function DetailPanel({
   row,
   detail,
   detailError,
+  markedGone = false,
   brake,
   onResumeAll,
   onAccounts,
   onTiktok,
   onSelect,
   onClose,
+  onRetry,
+  onGone,
 }: {
   row: PostRow;
   detail: PostDetail | undefined;
   detailError: unknown;
+  /** Cancelled from this panel a moment ago, before any read says so. */
+  markedGone?: boolean;
+  onRetry: () => void;
+  onGone?: (rowId: string, gone: boolean) => void;
   brake: BrakeState | null;
   onResumeAll: () => void;
   onAccounts: () => void;
@@ -64,15 +101,7 @@ export function DetailPanel({
 }) {
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
-  const gone = (isApiError(detailError) && detailError.code === 'NOT_FOUND') || !!detail?.cancelled;
-  if (gone) {
-    return (
-      <div className="space-y-3">
-        <p role="status" className="text-sm">{t('postsPage.panel.gone')}</p>
-        <Button size="sm" variant="outline" onClick={onClose}>{t('postsPage.panel.close')}</Button>
-      </div>
-    );
-  }
+  if (markedGone || isGone(detail, detailError)) return <GonePanel onClose={onClose} />;
   const wait = row.waits[0];
   const at = row.published_at ?? row.publish_at;
   const sub = !wait ? subStateLine(t, row.sub_state, lang) : null;
@@ -100,7 +129,7 @@ export function DetailPanel({
       )}
       {sub?.late && <p className="text-sm"><RunNow /></p>}
 
-      <RowActionBar row={row} onAccounts={onAccounts} onTiktok={onTiktok} />
+      <RowActionBar row={row} onAccounts={onAccounts} onTiktok={onTiktok} onGone={onGone} />
 
       {detail ? (
         detail.text && (
@@ -109,6 +138,8 @@ export function DetailPanel({
             <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{detail.text}</p>
           </div>
         )
+      ) : detailError != null ? (
+        <DetailLoadError onRetry={onRetry} />
       ) : (
         <Skeleton className="h-12 w-full" />
       )}
