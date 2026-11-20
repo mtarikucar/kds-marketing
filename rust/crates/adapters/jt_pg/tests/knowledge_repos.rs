@@ -797,8 +797,9 @@ async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_pos
     let db = TestDb::new().await;
     let (ws, user) = db.seed_workspace("kb-deadlock").await;
     let uow = PgUnitOfWork::new(db.pool.clone());
-    // The sample's first topic also runs on ads.
+    // The sample's first topic also runs on ads, on every channel.
     let v5 = approved_sample_with(&uow, ws, user, |h| {
+        h[0].channel = "any".into();
         h[0].cadence.insert(
             jt_strategy::LaneKind::Paid,
             jt_strategy::HypothesisCadence {

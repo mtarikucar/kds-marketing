@@ -63,9 +63,11 @@ async fn flow() -> Flow {
         &["materials", "ads"],
     )
     .await;
-    // Approving the strategy seeded the knowledge base, which made the general ad budget from
-    // the paid lane (design 2026-11-19 §4.3.2): 100.000 a month, the lane's own cap.
-    {
+    // Approving the strategy seeded the knowledge base, which made the general ad budget in the
+    // paid lane's currency and period at 0 (design 2026-11-19 §4.3.2): there was none, so no ad
+    // spend is lifted by the seed. The owner opens it in Bütçe, up to the ad cap (100.000 a
+    // month, the lane's own).
+    let general = {
         use jt_app::ports::UnitOfWork as _;
         let mut t = w.uow.tenant(w.id).await.unwrap();
         let general = t
@@ -78,9 +80,21 @@ async fn flow() -> Flow {
             .expect("the general ad budget the seeding made");
         assert_eq!(
             (general.cap, general.period),
-            (100_000, jt_capability::Period::Monthly)
+            (0, jt_capability::Period::Monthly)
         );
-    }
+        general.id
+    };
+    budget::update_item(
+        &w.deps,
+        &w.owner,
+        general,
+        budget::UpdateBudgetItem {
+            cap: Some(100_000),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let scopes = ["ads_read", "ads_management"];
     let account = w
         .connected(
