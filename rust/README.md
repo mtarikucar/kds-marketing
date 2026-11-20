@@ -1891,10 +1891,18 @@ make check   # fmt + lint + doc + deny + test (JEETA_TEST_DATABASE_URL gerekli)
 | `make panel-install` / `panel-test` / `panel-build` | `panel/` içinde pnpm |
 | `make sweep` | `cargo sweep --time 1` (bir günden eski `target/` çıktılarını siler) |
 
-CI (`.github/workflows/rust.yml`) `rust/**` ya da iş akışı dosyası değiştiğinde, `main` ve `feat/**`
-dallarına gönderimde ve her çekme isteğinde çalışır: `rust-checks` (fmt, clippy, doc, cargo-deny),
-`rust-test` (PostgreSQL 16 hizmetiyle `cargo test --workspace`) ve `panel` (`pnpm install --frozen-lockfile`,
-`pnpm test`, `pnpm typecheck`, `pnpm build`). `fmt` dışındaki her `cargo` komutu, CI'da da `make` ile de
+CI (`.github/workflows/rust.yml`) `rust/**` ya da iş akışı dosyası değiştiğinde, `main` ve `design/**`
+dallarına gönderimde, her çekme isteğinde ve elle başlatıldığında çalışır: `rust-checks` (fmt, clippy, doc,
+cargo-deny), `rust-test` (PostgreSQL 16 hizmetiyle `cargo nextest run --workspace`, testler üç koşucuya
+bölünür; belge testleri için
+`cargo test --workspace --doc` ve `make smoke-productisation`), `rust-production-build` (tek
+`cargo test --locked -p jt_outbound --test production_build` çalıştırması) ve `panel` (`pnpm install
+--frozen-lockfile`, `pnpm test`, `pnpm typecheck`, `pnpm build`). Paketlenmiş adayı çalıştıran tek test
+(`m4_deployment`'ın `production_build_refuses_test_loopback`'i) `release-artifact`'in paketini bekleyen
+`rust-release-binary`'de koşar. `release-artifact`, ses ve cihaz köprüleri ve `production-worker` her
+gönderimde çalışır, bir çekme isteğinde ise yalnız kendilerini besleyen dosyalar değiştiğinde (`changes`
+işi). Önbellekleri yalnız `main` ve `design/**` gönderimleri yazar, çekme istekleri taban dalınkini okur.
+`fmt` dışındaki her `cargo` komutu, CI'da da `make` ile de
 (`make dev` dahil), `--locked` çalışır: `Cargo.lock` yeniden çözümlenmez, kilit dosyası güncel değilse iş
 durur (bir bağımlılık değiştiğinde kilit dosyasını bir kez düz `cargo build` ile güncelleyip işleyin).
 
@@ -4073,7 +4081,7 @@ its SHA-256, ordered migration versions/up-down SHA-384 checksums, highest schem
 version and toolchain versions. Source files come only from the committed tree.
 This is a repeatable packaging recipe; it does not promise identical bytes
 across build hosts. CI's `release-artifact` job archives the package without
-publishing/deploying. `rust-test` tests that exact candidate, preserving executable
+publishing/deploying. `rust-release-binary` tests that exact candidate, preserving executable
 permissions by extracting its tar archive.
 
 Build the package-scoped release candidate **before** running workspace tests:
