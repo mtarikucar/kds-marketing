@@ -854,6 +854,8 @@ async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_pos
     t.capabilities().insert(sms.clone(), None).await.unwrap();
     t.budget().link(sms.id, general).await.unwrap();
     t.commit().await.unwrap();
+    // Every module installed: a lane whose module is not stops (`StudioControl::removed`).
+    jt_testkit::studio_contract::install_all_modules(&uow, ws).await;
     let binding = ad_set_on(&deps, &uow, ws, v5, general).await;
 
     let mut tasks = Vec::new();
@@ -1110,6 +1112,10 @@ async fn ad_set_on(
     };
     t.studio().bind_adset(b.clone(), "binding").await.unwrap();
     let frame = t.strategy().current_approved().await.unwrap().unwrap();
+    // The daily budget's liability to the end of the paid lane's (monthly) period.
+    let (_, until) = jt_capability::period_window(jt_capability::Period::Monthly, FIXED_NOW);
+    let liability =
+        jt_studio::daily_liability(1, jt_capability::Period::Monthly, FIXED_NOW, until).unwrap();
     let saved = jt_app::usecases::studio::budget::reserve_connector_spend(
         t.as_mut(),
         ReserveSpend {
@@ -1121,7 +1127,7 @@ async fn ad_set_on(
             budget_item_ids: vec![general],
             lane: jt_strategy::LaneKind::Paid,
             executed_version_id: frame.id,
-            amount_minor: 30,
+            amount_minor: liability,
             daily_budget_minor: Some(1),
             currency: "TRY".into(),
             evidence_key: format!("budget.move:{}", b.id),
