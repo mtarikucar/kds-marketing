@@ -571,6 +571,11 @@ pub async fn verify(
     )
     .await?;
     repos.commit().await?;
+    // A social account a waiting post can now go out on wakes the social agent (design
+    // 2026-11-19 D40); the verification stands whatever this does.
+    if let Err(_e) = super::social::schedule::account_connected(deps, ctx, &[id]).await {
+        tracing::warn!(workspace_id = %ctx.workspace_id, "the social agent could not be woken for a verification");
+    }
     Ok(CapabilityOut::at(capability, ctx.now))
 }
 

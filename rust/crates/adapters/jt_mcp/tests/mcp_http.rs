@@ -1061,7 +1061,7 @@ async fn gated_test_tool_passes_only_after_a_real_approval() {
     let strategy = ok(&call(&client, "jeeta.strategy.get", json!({})).await);
     assert_eq!(
         strategy,
-        json!({ "approved": null, "draft": null, "gaps": [] })
+        json!({ "approved": null, "draft": null, "gaps": [], "knowledge": null })
     );
 
     // The agent runs the consultation with the owner's key.

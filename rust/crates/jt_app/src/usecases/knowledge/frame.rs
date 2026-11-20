@@ -453,7 +453,7 @@ pub(crate) async fn apply_locked(
         }
         _ => {}
     }
-    frame_wakes(r, ctx, &needs, waking).await?;
+    frame_wakes(r, ctx, &needs, wake::WakeReason::KnowledgeApplied, waking).await?;
 
     Ok(Applied {
         applied: true,
@@ -471,21 +471,20 @@ pub(crate) async fn apply_locked(
     })
 }
 
-/// Records the wakes of an apply (design §4.10.8), with the reason `knowledge_applied`.
+/// Records the wakes of an apply (design §4.10.8) for `needs`, with `reason`, as `waking` says.
 async fn frame_wakes(
     r: &mut dyn TenantRepos,
     ctx: &Ctx,
     needs: &[wake::Need],
+    reason: wake::WakeReason,
     waking: Waking,
 ) -> Result<(), AppError> {
     if needs.is_empty() {
         return Ok(());
     }
     match waking {
-        Waking::InPerson => wake::request(r, ctx, needs, wake::WakeReason::KnowledgeApplied).await,
-        Waking::For(person) => {
-            wake::request_for(r, ctx, needs, wake::WakeReason::KnowledgeApplied, person).await
-        }
+        Waking::InPerson => wake::request(r, ctx, needs, reason).await,
+        Waking::For(person) => wake::request_for(r, ctx, needs, reason, person).await,
         Waking::Nobody => Ok(()),
     }
 }

@@ -146,7 +146,7 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
     let empty = ok_json(p.get("/api/strategy", &owner).await).await;
     assert_eq!(
         empty,
-        json!({ "approved": null, "draft": null, "gaps": [] })
+        json!({ "approved": null, "draft": null, "gaps": [], "knowledge": null })
     );
     assert_eq!(
         ok_json(p.get("/api/strategy/versions", &owner).await).await,
@@ -239,9 +239,38 @@ async fn owner_runs_the_consultation_to_approval_on_the_panel() {
     assert!(approved["approved_at"].is_string());
     assert_eq!(approved["gaps"], json!([]));
 
-    // The strategy in force, and no draft left.
+    // The strategy in force, and no draft left. The approval seeded the knowledge base, so the
+    // read is its compatibility projection (design 2026-11-19 §5.4): the version in force with
+    // the owner's words as the cards and the rules now hold them.
     let strategy = ok_json(p.get("/api/strategy", &owner).await).await;
-    assert_eq!(strategy["approved"], approved);
+    let shown = &strategy["approved"];
+    for field in [
+        "id",
+        "number",
+        "status",
+        "approved_at",
+        "approved_by_email",
+        "hypotheses",
+    ] {
+        assert_eq!(shown[field], approved[field], "{field}");
+    }
+    assert_eq!(
+        shown["sections"]["audience"],
+        approved["sections"]["audience"]
+    );
+    assert_eq!(shown["sections"]["identity"]["product"], "Kahve");
+    assert_eq!(
+        shown["sections"]["identity"]["positioning"], "mahalle\n\nBizi farklı kılan: taze",
+        "the who_we_are card's text"
+    );
+    assert_eq!(shown["sections"]["identity"]["usp"], "taze");
+    assert_eq!(
+        shown["sections"]["goals"]["kpis"],
+        json!([{ "name": "dm: 50", "target": "" }]),
+        "Hedefler, one line a goal"
+    );
+    assert_eq!(shown["sections"]["channels"][0]["channel"], "any");
+    assert_eq!(strategy["knowledge"]["revision"], 1);
     assert_eq!(strategy["draft"], Value::Null);
     assert_eq!(strategy["gaps"], json!([]));
     let versions = ok_json(p.get("/api/strategy/versions", &owner).await).await;

@@ -110,12 +110,19 @@ pub struct VersionOut {
 pub type ConsultationEntryOut = ConsultationEntry;
 
 /// The strategy in force and the draft being worked out, either of which may be missing.
+///
+/// `strategy.get` answers it as the knowledge base's compatibility projection (design
+/// 2026-11-19 §5.4): on a seeded workspace `approved` carries the owner's live words and
+/// `knowledge` what `strategy.knowledge_get` answers (`knowledge::read::project`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct StrategyOut {
     pub approved: Option<VersionOut>,
     pub draft: Option<VersionOut>,
     /// The draft's gaps; empty without a draft.
     pub gaps: Vec<Gap>,
+    /// The knowledge base (`strategy.knowledge_get`'s answer); none until the workspace is
+    /// seeded.
+    pub knowledge: Option<super::knowledge::read::KnowledgeOut>,
 }
 
 /// A version as the version list shows it.
@@ -229,9 +236,22 @@ pub struct RecordInput {
 // Use cases
 // ---------------------------------------------------------------------------------------------
 
-/// The approved version and the draft, each with its hypotheses, and the draft's gaps. Needs
-/// `workspace.read`.
+/// `strategy.get`: the approved version and the draft, each with its hypotheses, and the draft's
+/// gaps, as the knowledge base's compatibility projection (design 2026-11-19 §5.4): once the
+/// workspace is seeded, the approved version carries the owner's live words (identity from the
+/// cards, the prohibitions, the goals), `channels = [any]` and its topics without the owner's
+/// request and the closing ones, and `knowledge` is `strategy.knowledge_get`'s answer. An open
+/// draft (only an older routine's) is answered as it is. Needs `workspace.read`.
 pub async fn get(deps: &Deps, ctx: &Ctx) -> Result<StrategyOut, AppError> {
+    let mut out = versions(deps, ctx).await?;
+    super::knowledge::read::project(deps, ctx, &mut out).await?;
+    Ok(out)
+}
+
+/// The approved version and the draft as stored, each with its hypotheses, and the draft's gaps,
+/// without the knowledge base: what `work.pending` reads of the strategy. Needs
+/// `workspace.read`.
+pub(crate) async fn versions(deps: &Deps, ctx: &Ctx) -> Result<StrategyOut, AppError> {
     ctx.require(Permission::WorkspaceRead)?;
     let known = channel_kinds(deps, ctx).await?;
     let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
@@ -248,6 +268,7 @@ pub async fn get(deps: &Deps, ctx: &Ctx) -> Result<StrategyOut, AppError> {
         approved,
         draft,
         gaps,
+        knowledge: None,
     })
 }
 

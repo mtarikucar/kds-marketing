@@ -6,7 +6,10 @@
 //!   identical; only the actor differs, by design: the human in the panel, the agent on the
 //!   human's authority over MCP.
 //! - `strategy.get`: after an approval, `GET /api/strategy` and `jeeta.strategy.get` answer the
-//!   same JSON, field for field.
+//!   same JSON, field for field: the knowledge base's compatibility projection (design
+//!   2026-11-19 §5.4), with the owner's card and rules edits in it at once.
+//! - `strategy.knowledge_get`: `GET /api/knowledge` and `jeeta.strategy.knowledge_get` answer
+//!   the same knowledge base, field for field.
 //! - `strategy.archive`: archiving the version in force answers `{version_id, archived: true}` on
 //!   both surfaces (each archives a version of its own: one can be archived only once), and the
 //!   same error once nothing is left to archive.
@@ -333,6 +336,20 @@ async fn whoami_answers_the_same_over_the_panel_and_mcp() {
     assert!(agent["actor"]["connection_id"].is_string());
 }
 
+/// A knowledge base answer without the soonest expected check-in of the agents that take notes
+/// (`notes_agent.next_at`): the MCP call itself is a sighting of the agent that makes it, so the
+/// two surfaces read it a moment apart.
+fn steady_kb(mut kb: Value) -> Value {
+    kb["notes_agent"]["next_at"] = Value::Null;
+    kb
+}
+
+/// [`steady_kb`] of a `strategy.get` answer's knowledge base.
+fn steady(mut strategy: Value) -> Value {
+    strategy["knowledge"] = steady_kb(strategy["knowledge"].take());
+    strategy
+}
+
 #[tokio::test]
 async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     let db = TestDb::new().await;
@@ -392,18 +409,77 @@ async fn strategy_get_and_archive_answer_the_same_over_the_panel_and_mcp() {
     .await)
     .await;
 
-    // The panel surface, then the MCP surface with a key the same owner issued.
+    // The panel surface, then the MCP surface with a key the same owner issued (issued first:
+    // the knowledge base says whether an agent can be reached for the owner's notes).
+    let key = issue_key(&app, &cookie).await;
+    let session = mcp_session(&app, &key).await;
     let resp = send(
         &app,
         panel(Method::GET, "/api/strategy", Some(&cookie), None),
     )
     .await;
     let human = ok(resp).await;
-    let key = issue_key(&app, &cookie).await;
-    let session = mcp_session(&app, &key).await;
     let agent = call_tool(&app, &key, &session, "jeeta.strategy.get", json!({})).await;
 
-    assert_eq!(human, agent);
+    assert_eq!(steady(human.clone()), steady(agent));
+    // The approval seeded the knowledge base: the projection answers it, live.
+    assert_eq!(human["knowledge"]["notes_agent"]["state"], "asleep");
+    assert_eq!(
+        human["approved"]["sections"]["channels"][0]["channel"],
+        "any"
+    );
+    assert_eq!(human["knowledge"]["revision"], 1);
+    assert_eq!(human["knowledge"]["empty"], false);
+    let card = human["knowledge"]["cards"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["key"] == "products_prices")
+        .unwrap()
+        .clone();
+    assert_eq!(card["body"], "Kahve");
+
+    // An owner's card edit is in both reads at once, and `GET /api/knowledge` is its twin.
+    let resp = send(
+        &app,
+        panel(
+            Method::PATCH,
+            &format!("/api/knowledge/cards/{}", card["id"].as_str().unwrap()),
+            Some(&cookie),
+            Some(json!({ "expected_revision": card["revision"], "body": "Kahve ve kurabiye" })),
+        ),
+    )
+    .await;
+    ok(resp).await;
+    let human_kb = ok(send(
+        &app,
+        panel(Method::GET, "/api/knowledge", Some(&cookie), None),
+    )
+    .await)
+    .await;
+    let agent_kb = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.strategy.knowledge_get",
+        json!({}),
+    )
+    .await;
+    assert_eq!(steady_kb(human_kb.clone()), steady_kb(agent_kb));
+    assert_eq!(human_kb["revision"], 2);
+    let human = ok(send(
+        &app,
+        panel(Method::GET, "/api/strategy", Some(&cookie), None),
+    )
+    .await)
+    .await;
+    let agent = call_tool(&app, &key, &session, "jeeta.strategy.get", json!({})).await;
+    assert_eq!(steady(human.clone()), steady(agent));
+    assert_eq!(
+        human["approved"]["sections"]["identity"]["product"],
+        "Kahve ve kurabiye"
+    );
+    assert_eq!(steady_kb(human["knowledge"].clone()), steady_kb(human_kb));
     assert_eq!(human["approved"]["status"], "approved");
     assert_eq!(human["approved"]["number"], 1);
     assert_eq!(

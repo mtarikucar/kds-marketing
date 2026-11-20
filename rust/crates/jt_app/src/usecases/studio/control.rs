@@ -45,10 +45,26 @@ pub async fn brake(d: &Deps, ctx: &Ctx, input: BrakeInput) -> Result<StudioContr
     let mut r = d.uow.tenant(ctx.workspace_id).await?;
     let frame = r.strategy().lock_execution_frame().await?;
     active(r.as_mut()).await?;
+    let was_braked = r
+        .studio_control()
+        .lock_control()
+        .await?
+        .is_braked(LaneKind::Organic);
     let c = r
         .studio_control()
         .set_brake(input.expected_revision, input.lane, input.engaged)
         .await?;
+    // A person resuming posting: the versions waiting for a time can be given one again now,
+    // not at the social agent's next scheduled run (design 2026-11-19 D40).
+    if was_braked && !c.is_braked(LaneKind::Organic) {
+        crate::usecases::wake::request(
+            r.as_mut(),
+            ctx,
+            &[crate::usecases::wake::SOCIAL],
+            crate::usecases::wake::WakeReason::PostingResumed,
+        )
+        .await?;
+    }
     let mut e = ledger_entry(
         ctx,
         "studio.brake",

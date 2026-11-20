@@ -77,6 +77,24 @@ const TRIGGERS: &[(&str, &str, &str, &str)] = &[
         "INBOX",
     ),
     ("strategy.rs", "approve", "StrategyApproved", "SOCIAL"),
+    // The knowledge base (design 2026-11-19 §5.3): a frame applied from a person's write (the
+    // bootstrap of their first card, the rules' mirror) wakes the work it changed, on their
+    // behalf when an agent or the system applied it (`wake::request_for`).
+    (
+        "knowledge/frame.rs",
+        "apply_locked",
+        "KnowledgeApplied",
+        "SOCIAL",
+    ),
+    // A person releasing the organic brake: the posts waiting for a time get one now (D40).
+    ("studio/control.rs", "brake", "PostingResumed", "SOCIAL"),
+    // A person connecting or verifying an account a waiting post can go out on (D40).
+    (
+        "social/schedule.rs",
+        "account_connected",
+        "AccountConnected",
+        "SOCIAL",
+    ),
 ];
 
 /// The body of `fn name(` in `source`: from its signature to the next item at the start of a
@@ -119,15 +137,21 @@ fn every_trigger_records_its_wake_before_it_commits() {
 fn the_clocks_own_work_wakes_nobody() {
     // The planner and the jobs make work on a clock: the agent's own schedule is for it.
     let root = workspace_dir().join("crates/jt_app/src/usecases");
-    for file in ["jobs.rs", "studio/planner.rs", "content/mod.rs"] {
+    for file in [
+        "jobs.rs",
+        "studio/planner.rs",
+        "content/mod.rs",
+        "knowledge/settle.rs",
+    ] {
         let path = root.join(file);
         let Ok(source) = std::fs::read_to_string(&path) else {
             continue;
         };
-        assert!(
-            !source.contains("wake::request("),
-            "{file} wakes an agent on a clock"
-        );
+        // On behalf of a person too (`wake::request_for`, design 2026-11-19 D19): a clock
+        // acts for nobody.
+        for call in ["wake::request(", "wake::request_for("] {
+            assert!(!source.contains(call), "{file} wakes an agent on a clock");
+        }
     }
 }
 

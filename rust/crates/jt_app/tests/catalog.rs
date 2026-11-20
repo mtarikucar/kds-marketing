@@ -360,6 +360,18 @@ fn catalog_is_the_release_table() {
         ("strategy.archive", Some("jeeta.strategy.archive"), Some(("POST", "/api/strategy/archive")), false, Risk::Destructive),
         ("strategy.list_versions", Some("jeeta.strategy.list_versions"), Some(("GET", "/api/strategy/versions")), false, Risk::Read),
         ("strategy.consultation", Some("jeeta.strategy.consultation"), Some(("GET", "/api/strategy/versions/{version_id}/consultation")), false, Risk::Read),
+        ("strategy.knowledge_get", Some("jeeta.strategy.knowledge_get"), Some(("GET", "/api/knowledge")), false, Risk::Read),
+        ("strategy.card_create", None, Some(("POST", "/api/knowledge/cards")), true, Risk::Write),
+        ("strategy.card_update", None, Some(("PATCH", "/api/knowledge/cards/{card_id}")), true, Risk::Write),
+        ("strategy.card_archive", None, Some(("POST", "/api/knowledge/cards/{card_id}/archive")), true, Risk::Write),
+        ("strategy.card_history", None, Some(("GET", "/api/knowledge/cards/{card_id}/history")), true, Risk::Read),
+        ("strategy.rules_save", None, Some(("PUT", "/api/knowledge/rules")), true, Risk::Spend),
+        ("strategy.goals_save", None, Some(("PUT", "/api/knowledge/goals")), true, Risk::Write),
+        ("strategy.post_approval_set", None, Some(("POST", "/api/knowledge/post-approval")), true, Risk::Write),
+        ("strategy.note_add", None, Some(("POST", "/api/knowledge/notes")), true, Risk::Write),
+        ("strategy.note_withdraw", None, Some(("POST", "/api/knowledge/notes/{note_id}/withdraw")), true, Risk::Write),
+        ("strategy.proposal_accept", None, Some(("POST", "/api/knowledge/proposals/{proposal_id}/accept")), true, Risk::Write),
+        ("strategy.proposal_skip", None, Some(("POST", "/api/knowledge/proposals/{proposal_id}/skip")), true, Risk::Write),
         ("capability.list", Some("jeeta.capability.list"), Some(("GET", "/api/capabilities")), false, Risk::Read),
         ("capability.get", Some("jeeta.capability.get"), Some(("GET", "/api/capabilities/{capability_id}")), false, Risk::Read),
         ("capability.declare", Some("jeeta.capability.declare"), Some(("POST", "/api/capabilities")), false, Risk::Write),
@@ -475,7 +487,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 302);
+    assert_eq!(CATALOG.len(), 314);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export", "studio.posting_policy_set"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && !["calls.policy_get", "calls.end", "calls.transfer"].contains(&uc.id) && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || (uc.id.starts_with("outreach.") && !["outreach.campaigns_control", "outreach.enrollments_stop"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }
@@ -526,6 +538,18 @@ fn catalog_is_the_release_table() {
             "strategy.archive",
             "strategy.list_versions",
             "strategy.consultation",
+            "strategy.knowledge_get",
+            "strategy.card_create",
+            "strategy.card_update",
+            "strategy.card_archive",
+            "strategy.card_history",
+            "strategy.rules_save",
+            "strategy.goals_save",
+            "strategy.post_approval_set",
+            "strategy.note_add",
+            "strategy.note_withdraw",
+            "strategy.proposal_accept",
+            "strategy.proposal_skip",
             "work.pending",
             "work.checkin",
             "work.set_checkin_interval",

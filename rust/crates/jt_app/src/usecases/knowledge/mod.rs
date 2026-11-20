@@ -12,6 +12,8 @@
 //! - [`settle`]: the `knowledge_settle` job's body (seeding, the bootstrap's repair, the
 //!   normalisation, retiring closing topics, expiring proposals).
 //! - [`resync`]: an approval through the old strategy tools keeps the two layers equal (§4.3.4).
+//! - [`read`]: `strategy.knowledge_get`, what the agents' work reads take from the knowledge
+//!   base, and `strategy.get`'s compatibility projection (§4.11.1, §4.12, §5.4).
 //!
 //! **Every knowledge write** (a card, the rules, the goals, an accepted proposal, a filed note)
 //! runs in one tenant bundle (design §4.4): it takes its locks in the one order of §4.10.13
@@ -30,6 +32,7 @@ pub mod cards;
 pub mod frame;
 pub mod notes;
 pub mod proposals;
+pub mod read;
 pub mod resync;
 pub mod rules;
 pub mod seed;

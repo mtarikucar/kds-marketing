@@ -370,7 +370,8 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | | `jeeta.api_keys.revoke` | Anahtarı hemen iptal eder | DESTRUCTIVE |
 | ajanlar | `jeeta.agents.list` | Bağlanan istemciler: sürüm, kullanılan anahtar, ilk/son görülme, araç çağrısı, `overdue` | READ |
 | günlük | `jeeta.ledger.list` | Alanın değişmez günlüğü, en yenisi başta, sır değerleri maskeli | READ |
-| strateji | `jeeta.strategy.get` | Onaylı sürüm, açık taslak ve taslağın eksikleri; istişare protokolünü anlatır | READ |
+| strateji | `jeeta.strategy.get` | Bilgi bankası, eski rutinlerin okuduğu strateji biçiminde: kimlik kartlardan, yasaklar ve hedefler Kurallar ve Hedefler'den, `knowledge` alanında bilgi bankasının tamamı (tasarım 2026-11-19 §5.4) | READ |
+| | `jeeta.strategy.knowledge_get` | Bilgi bankası: kartlar, Kurallar (yasaklar, reklam ve ücretli mesaj sınırı, onay bekleyen hesaplar), Hedefler, notlar, öneriler ve iç çerçeve; ilk okuma alanı kurar | READ |
 | | `jeeta.strategy.start_consultation` | Taslağı açar (onaylı sürümün kopyası) ya da açık olanı döndürür | WRITE |
 | | `jeeta.strategy.record` | İstişareye soru, cevap, varsayım ya da not yazar | WRITE |
 | | `jeeta.strategy.write_section` | Taslağın bir bölümünü bütünüyle yazar | WRITE |
@@ -612,6 +613,28 @@ açıklaması ajana bu sırayı söyler):
 | Arşivleme (gövde `{"version_id": …, "confirm": true}`; yanıt iki kapıda da `200 {"version_id": …, "archived": true}`) | `POST /api/strategy/archive` | `jeeta.strategy.archive` | sahip ya da yönetici + `team.manage` |
 | Sürümler | `GET /api/strategy/versions` | `jeeta.strategy.list_versions` | `workspace.read` |
 | İstişare kaydı (`limit`, `before_at` + `before_id`) | `GET /api/strategy/versions/{version_id}/consultation` | `jeeta.strategy.consultation` | `workspace.read` |
+
+Bilgi bankası (tasarım `docs/superpowers/specs/2026-11-19-paylasimlar-ve-bilgi-bankasi-design.md` §4)
+sahibin kendi sözleridir ve hemen geçerlidir: taslak, sunma ya da onay yoktur. İç çerçeveyi (onaylı
+strateji sürümü) sistem uygular: ilk kart metni yeni bir alanda çerçeveyi kurar, Kurallar'daki reklam
+ve ücretli mesaj sınırları çerçevenin şeritlerine yansır, `knowledge_settle` işi her 10 dakikada
+çerçeveyi bilgi bankasına göre düzeltir. Eski istişare araçları rutinler taşınana kadar çalışır; onları
+kullanan bir onay bilgi bankasını eşitler, onaylı sürümü arşivlemek ise kurulmuş bir alanda
+`CONFLICT use_brake` ile reddedilir.
+
+| Adım | Panel | MCP aracı | İzin |
+|---|---|---|---|
+| Okuma (ilk okuma alanı kurar) | `GET /api/knowledge` | `jeeta.strategy.knowledge_get` | `workspace.read` |
+| Kart ekleme (`201`) | `POST /api/knowledge/cards` | — | `team.manage`, kişi kendisi |
+| Kart düzenleme (`expected_revision`) | `PATCH /api/knowledge/cards/{card_id}` | — | `team.manage`, kişi kendisi |
+| Kart kaldırma ya da geri getirme | `POST /api/knowledge/cards/{card_id}/archive` | — | `team.manage`, kişi kendisi |
+| Kart geçmişi (`before`) | `GET /api/knowledge/cards/{card_id}/history` | — | `team.manage` |
+| Kurallar (yasaklar, reklam bütçesi, ücretli mesaj sınırı, onay) | `PUT /api/knowledge/rules` | — | `team.manage`, sınırlar için `budget.manage`, onayı gevşetmek için sahip ya da yönetici |
+| Hedefler | `PUT /api/knowledge/goals` | — | `team.manage` |
+| Bir hesabın onayı | `POST /api/knowledge/post-approval` | — | `social.manage` ya da `team.manage`; kaldırmak için sahip ya da yönetici |
+| Ajanlara not (`201`, `request_key` ile tekrarı aynı notu döndürür) | `POST /api/knowledge/notes` | — | `team.manage`, kişi kendisi |
+| Notu geri alma | `POST /api/knowledge/notes/{note_id}/withdraw` | — | notu yazan, sahip ya da yönetici |
+| Öneriyi ekleme / geçme | `POST /api/knowledge/proposals/{proposal_id}/accept`, `…/skip` | — | `team.manage`, kişi kendisi |
 
 Eksikleri olan bir taslak onaya sunulamaz: `422 VALIDATION`, `details.gaps` her eksiği alan yoluyla sayar.
 Bir bölüm yazılırken bilinmeyen bir alan, `lane` ya da `period`'u olmayan bir bütçe şeridi ve sınırını aşan

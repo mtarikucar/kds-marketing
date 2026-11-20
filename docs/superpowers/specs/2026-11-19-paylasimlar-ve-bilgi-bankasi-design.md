@@ -1541,7 +1541,7 @@ PR 3 on (the page they served is gone); the MCP tools keep working, with this re
 | `strategy.card_create` | panel `POST /api/knowledge/cards` | `{title, body?, attachments?, position?}` | a card (`key = null`), revision 1 |
 | `strategy.card_update` | panel `PATCH /api/knowledge/cards/{card_id}` | `{expected_revision, title?, body?, attachments?, position?}` | the fields given replace the card's |
 | `strategy.card_archive` | panel `POST /api/knowledge/cards/{card_id}/archive` | `{expected_revision, archived: bool}` | archives or restores |
-| `strategy.card_history` | panel `GET /api/knowledge/cards/{card_id}/history` | `?cursor` | revisions newest first, 50 a page |
+| `strategy.card_history` | panel `GET /api/knowledge/cards/{card_id}/history` | `?before` (the previous page's `next_before`) | revisions newest first, 50 a page |
 
 All need `team.manage` and a person in person (owner's page; agents write cards only through
 `note_file` and accepted proposals). Refusals: `VALIDATION` per field (limits of §4.2),
@@ -1565,7 +1565,9 @@ its one transaction:
 4. Ledger `strategy.knowledge_changed {subject, card_id?, key?, revision, kb_revision, cause}`
    (no text; texts live in the revisions, as the consultation's did; `strategy_version_id` = the
    frame in force).
-5. Wakes (§5.3): `KNOWLEDGE` with `KnowledgeChanged` when `posting_revision` moved, `RESEARCH` when
+5. Wakes (§5.3; from PR 6, with the `knowledge_derive` and `knowledge_note` items they call an agent
+   to: before those items a wake would start a run that finds nothing to do): `KNOWLEDGE` with
+   `KnowledgeChanged` when `posting_revision` moved, `RESEARCH` when
    `prospecting_revision` moved; a person's own write through `wake::request`, an agent's filing
    through `request_for` on behalf of the note's person. A change that moved neither wakes nobody
    (agents read it live at their next run).
@@ -2369,7 +2371,7 @@ dropped on read (PR 1, §4.2):
 | a special day's file becoming usable while its preparation has started (`content.files_add`, `material_analysis_complete`, `material_permission`) | `content_requested` | `CONTENT` | in person / `request_for` the uploader |
 | `studio.material_delete` emptying an area's pending files | `content_requested` | `CONTENT` | in person |
 | `content.area_deliver` accepted, `requested_by` set | `content_delivered` | `SOCIAL` | `request_for` `requested_by` |
-| `connector.complete_oauth`, `connector.confirm_assets`, `capabilities.verify` making a social account postable while an unsent version waits blocked `no_connected_account`, `its_account_unavailable` or `format_not_supported`, or a failed post's account was the cause | `account_connected` | `SOCIAL` | in person, or `request_for` the person who started the connection |
+| `connector.confirm_assets` (after its probes) and `capabilities.verify` making a social account postable that an unsent version waiting for a time can go out on (`VersionAccounts` offers it: what `no_connected_account`, `its_account_unavailable` or `format_not_supported` said before); `complete_oauth` only stores the assets, so it connects nothing; a failed post's account is not a site (its way out is the owner's `Tekrar hazırlat`, which wakes the content agent) | `account_connected` | `SOCIAL` | in person (an agent's connection wakes nobody) |
 | `studio.brake` releasing the organic lane, by a person | `posting_resumed` | `SOCIAL` | in person |
 | `strategy.approve` | `strategy_approved` | `SOCIAL`, `ADS`, `RESEARCH` | until PR 7 |
 
@@ -2381,7 +2383,10 @@ above (§8.4).
 
 ### 5.4 `jeeta.strategy.get`: the compatibility projection (K7)
 
-`StrategyOut { approved, draft: null, gaps: [], knowledge }` — `knowledge` is new (the
+`StrategyOut { approved, draft, gaps, knowledge }` — `draft` and `gaps` are an older routine's open
+draft as before (the consultation tools stay until PR 7 and `approve` names the draft as this read
+gives it; a seeded workspace has none otherwise: seeding and every frame apply archive drafts), and
+`knowledge` is new (the
 `KnowledgeOut` of `knowledge_get`). `approved` is null until a frame exists; else the frame's
 `VersionOut` with these fields replaced, so a routine reading the old paths gets the owner's live
 words:
@@ -2402,7 +2407,10 @@ approved.sections.identity (product, voice and positioning from the owner's card
 goals (the owner's rules and goals), audience and prospecting (derived), hypotheses (the topics), and
 knowledge (everything jeeta.strategy.knowledge_get answers). approved is null until the knowledge
 base has a card. The owner's edits apply at once: nothing here waits for an approval. Prefer
-jeeta.strategy.knowledge_get. [risk: READ]" The panel route `GET /api/strategy` answers the same
+jeeta.strategy.knowledge_get. [risk: READ]" Reading the strategy never seeds (seeding archives an
+open draft, which an older routine reading this may be working on): until the workspace is seeded
+(by `knowledge_get`, a knowledge write, the first `knowledge_settle` tick or an old approval) it
+answers the versions as stored, with `knowledge: null`. The panel route `GET /api/strategy` answers the same
 (twin), read by the research and prospects pages for audience names. It ships in PR 2, with the
 seeding, so that a routine still reading `strategy.get` sees the owner's card and Kurallar edits the
 moment they are made.

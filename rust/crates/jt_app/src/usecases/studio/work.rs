@@ -16,10 +16,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
+/// What a post must keep to (design 2026-11-19 §4.12): once the knowledge base is seeded, the
+/// identity the owner's cards give, the prohibitions, the voice card and the open notes (which
+/// bind at once), all live; before, the frame's identity and prohibitions.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrandRules {
     pub identity: Identity,
     pub prohibitions: Vec<String>,
+    /// The voice card's text (the frame's voice before seeding).
+    #[serde(default)]
+    pub voice: String,
+    /// What the owner told the agents and no agent has filed yet, newest first.
+    #[serde(default)]
+    pub notes: Vec<String>,
+    /// The knowledge base's revision read; 0 before seeding.
+    #[serde(default)]
+    pub knowledge_revision: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SlotOut {
@@ -440,14 +452,27 @@ pub(crate) async fn slot_in(
         None => None,
     };
     let post = r.studio_posts().get_post(id).await?;
+    let brand_rules = match crate::usecases::knowledge::read::Live::read(r).await? {
+        Some(k) => BrandRules {
+            identity: k.identity(Some(frame)),
+            prohibitions: k.settings.prohibitions.clone(),
+            voice: k.voice(),
+            notes: k.notes(),
+            knowledge_revision: k.settings.revision,
+        },
+        None => BrandRules {
+            identity: frame.sections.identity.clone(),
+            prohibitions: frame.sections.prohibitions.clone(),
+            voice: frame.sections.identity.voice.clone(),
+            notes: Vec::new(),
+            knowledge_revision: 0,
+        },
+    };
     Ok(SlotOut {
         slot,
         piece,
         hypothesis,
-        brand_rules: BrandRules {
-            identity: frame.sections.identity.clone(),
-            prohibitions: frame.sections.prohibitions.clone(),
-        },
+        brand_rules,
         learned,
         attempts,
         measurements,

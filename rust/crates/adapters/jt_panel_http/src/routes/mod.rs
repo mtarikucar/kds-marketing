@@ -23,6 +23,7 @@ pub mod distribution;
 pub mod events;
 pub mod groups;
 pub mod inbox;
+pub mod knowledge;
 pub mod ledger;
 mod modules;
 pub mod oauth_callback;
@@ -257,6 +258,18 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/strategy/archive"),
     ("GET", "/api/strategy/versions"),
     ("GET", "/api/strategy/versions/{version_id}/consultation"),
+    ("GET", "/api/knowledge"),
+    ("POST", "/api/knowledge/cards"),
+    ("PATCH", "/api/knowledge/cards/{card_id}"),
+    ("POST", "/api/knowledge/cards/{card_id}/archive"),
+    ("GET", "/api/knowledge/cards/{card_id}/history"),
+    ("PUT", "/api/knowledge/rules"),
+    ("PUT", "/api/knowledge/goals"),
+    ("POST", "/api/knowledge/post-approval"),
+    ("POST", "/api/knowledge/notes"),
+    ("POST", "/api/knowledge/notes/{note_id}/withdraw"),
+    ("POST", "/api/knowledge/proposals/{proposal_id}/accept"),
+    ("POST", "/api/knowledge/proposals/{proposal_id}/skip"),
     ("GET", "/api/capabilities"),
     ("GET", "/api/capabilities/{capability_id}"),
     ("POST", "/api/capabilities"),
@@ -1404,6 +1417,78 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/strategy/versions/{version_id}/consultation",
             "strategy.consultation",
             strategy::consultation,
+        ),
+        api_route(
+            "GET",
+            "/knowledge",
+            "strategy.knowledge_get",
+            knowledge::get,
+        ),
+        api_route(
+            "POST",
+            "/knowledge/cards",
+            "strategy.card_create",
+            knowledge::card_create,
+        ),
+        api_route(
+            "PATCH",
+            "/knowledge/cards/{card_id}",
+            "strategy.card_update",
+            knowledge::card_update,
+        ),
+        api_route(
+            "POST",
+            "/knowledge/cards/{card_id}/archive",
+            "strategy.card_archive",
+            knowledge::card_archive,
+        ),
+        api_route(
+            "GET",
+            "/knowledge/cards/{card_id}/history",
+            "strategy.card_history",
+            knowledge::card_history,
+        ),
+        api_route(
+            "PUT",
+            "/knowledge/rules",
+            "strategy.rules_save",
+            knowledge::rules_save,
+        ),
+        api_route(
+            "PUT",
+            "/knowledge/goals",
+            "strategy.goals_save",
+            knowledge::goals_save,
+        ),
+        api_route(
+            "POST",
+            "/knowledge/post-approval",
+            "strategy.post_approval_set",
+            knowledge::post_approval_set,
+        ),
+        api_route(
+            "POST",
+            "/knowledge/notes",
+            "strategy.note_add",
+            knowledge::note_add,
+        ),
+        api_route(
+            "POST",
+            "/knowledge/notes/{note_id}/withdraw",
+            "strategy.note_withdraw",
+            knowledge::note_withdraw,
+        ),
+        api_route(
+            "POST",
+            "/knowledge/proposals/{proposal_id}/accept",
+            "strategy.proposal_accept",
+            knowledge::proposal_accept,
+        ),
+        api_route(
+            "POST",
+            "/knowledge/proposals/{proposal_id}/skip",
+            "strategy.proposal_skip",
+            knowledge::proposal_skip,
         ),
         api_route(
             "GET",

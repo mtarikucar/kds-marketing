@@ -25,6 +25,7 @@ use crate::{
             projects,
             work::{EmptyInput, gated},
         },
+        wake,
     },
 };
 use jt_capability::CapabilityId;
@@ -866,6 +867,44 @@ impl VersionAccounts {
         };
         Ok((choices, blocked))
     }
+}
+
+/// After a person connected, reconnected or verified the capabilities `ids` (design 2026-11-19
+/// §3.6, D40): when one of them is a social account a post may go out on now and a version
+/// waiting for a time can go out on it, the social agent is woken (`account_connected`) in a
+/// bundle of its own, so the post does not wait for the agent's next scheduled run. An agent's
+/// connection wakes nobody (`wake::request`).
+pub(crate) async fn account_connected(
+    d: &Deps,
+    ctx: &Ctx,
+    ids: &[CapabilityId],
+) -> Result<(), AppError> {
+    let mut r = d.uow.tenant(ctx.workspace_id).await?;
+    let connected = r
+        .capabilities()
+        .list(Default::default())
+        .await?
+        .into_iter()
+        .any(|c| ids.contains(&c.id) && postable(d, &c, ctx.now));
+    if !connected {
+        return Ok(());
+    }
+    let takes = waiting(d, r.as_mut(), ctx.now)
+        .await?
+        .iter()
+        .flat_map(|p| &p.versions)
+        .any(|v| v.accounts.iter().any(|a| ids.contains(a)));
+    if !takes {
+        return Ok(());
+    }
+    wake::request(
+        r.as_mut(),
+        ctx,
+        &[wake::SOCIAL],
+        wake::WakeReason::AccountConnected,
+    )
+    .await?;
+    r.commit().await
 }
 
 /// See [`versions_waiting`]; `work.pending` lists the same versions.

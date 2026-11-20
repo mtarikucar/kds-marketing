@@ -122,7 +122,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.context",
-            description: "Read recent conversation context and strategy guidance. [risk: READ]",
+            description: "Read recent conversation context and the knowledge base: knowledge (the owner's cards, rules, goals and open notes, which bind at once), prohibitions (the conversation's and the owner's rules) and strategy_guidance (who the business is, the segments and the topics of the frame). Answered with or without a frame. [risk: READ]",
             permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("context")).expect("inbox schema"),
             run: context,

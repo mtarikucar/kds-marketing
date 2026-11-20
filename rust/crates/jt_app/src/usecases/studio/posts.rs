@@ -189,15 +189,20 @@ pub(crate) async fn channels(
 /// Every organic account a post may go out on at `now` under strategy `frame` (connected, its
 /// publisher built, not paused, chosen by the strategy), each with the options of the strategy's
 /// own hypotheses on it, possibly none. The owner's request (`owner_request`) is never an option:
-/// it is not the strategy's, and only a content a person asked for takes it.
+/// it is not the strategy's, and only a content a person asked for takes it. Nor is a closing
+/// topic (design 2026-11-19 §4.10.6): a derivation left it out, and it is kept only for the posts
+/// that still name it, so `pick`, `versions_waiting`, the planner's floor and `best_option` never
+/// choose it.
 pub(crate) async fn open_channels(
     d: &Deps,
     r: &mut dyn TenantRepos,
     frame: &StrategyVersion,
     now: OffsetDateTime,
 ) -> Result<Vec<Channel>, AppError> {
-    let hypotheses =
+    let closing = crate::usecases::knowledge::read::closing_topics(r).await?;
+    let mut hypotheses =
         super::owner_request::without(frame.workspace_id, r.hypotheses().list(frame.id).await?);
+    hypotheses.retain(|h| !closing.contains(&h.id));
     // An account a person paused takes no post (design 2026-11-10 §7.6).
     let paused = r
         .studio_posts()

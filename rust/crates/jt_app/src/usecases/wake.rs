@@ -35,7 +35,17 @@
 //!   `inbox.work` agents;
 //! - `strategy.approve` by a person: `strategy_approved`, for the agents of the work it opens
 //!   (`social.work`, `ads.work`, `prospects.work`);
+//! - a frame applied from a person's knowledge write (design 2026-11-19 §4.10.8): the bootstrap
+//!   of their first card text, `knowledge_applied` for `content.work` and `social.work` agents;
+//!   the rules' mirror when the paid lane moved, for `ads.work` agents;
+//! - `studio.brake` releasing the organic lane: `posting_resumed`, for `social.work` agents;
+//! - `connector.confirm_assets` and `capability.verify` making a social account postable that a
+//!   version waiting for a time can go out on: `account_connected`, for `social.work` agents;
 //! - `agents.wake_now`: `manual`, for the one agent named.
+//!
+//! An action the system or an agent takes because a person asked (a frame applied from their
+//! note, say) records its request on that person's behalf ([`request_for`]); the clock's own
+//! work never does.
 //!
 //! **What deliberately does not.** Work the clock or the system makes: the planner's areas (an
 //! olay's, a calendar day's, the floor), package requests (the planner's alone), a slot reaching
@@ -155,8 +165,15 @@ pub const INBOX: Need = Need {
     permission: Permission::InboxWork,
     module: None,
 };
+/// The knowledge base's posting derivation and the owner's notes (design 2026-11-19 §5.3): an
+/// agent holding `content.work`, in no module.
+pub const KNOWLEDGE: Need = Need {
+    key: "knowledge",
+    permission: Permission::ContentWork,
+    module: None,
+};
 /// Every need the panel reads a state for.
-pub const NEEDS: [Need; 6] = [CONTENT, MATERIALS, SOCIAL, ADS, RESEARCH, INBOX];
+pub const NEEDS: [Need; 7] = [CONTENT, MATERIALS, SOCIAL, ADS, RESEARCH, INBOX, KNOWLEDGE];
 
 /// Which manage permission lets a person wake an agent by hand for the work permission its key
 /// holds (besides `team.manage`, which always does).
@@ -460,6 +477,83 @@ pub(crate) async fn intervals(
         .collect())
 }
 
+/// How an agent holding one of some permissions can be reached for new work (the Bilgi bankası
+/// note composer's line, design 2026-11-19 §4.11): no such agent, one with a usable wake address,
+/// or only agents waiting for their own schedule (`asleep` until `next_at`, `late` once it passed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReachState {
+    None,
+    Asleep,
+    Late,
+    Ok,
+}
+
+/// [`ReachState`] and, for an agent waiting for its schedule, its soonest expected check-in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct AgentReach {
+    pub state: ReachState,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub next_at: Option<OffsetDateTime>,
+}
+
+/// How the active agents holding any of `permissions` (no module asked) can be reached at
+/// `now`: [`ReachState::Ok`] when one has a usable wake address; else the soonest expected
+/// check-in of them, `late` when it has passed; `none` when no such agent exists.
+pub(crate) async fn reach(
+    repos: &mut dyn TenantRepos,
+    now: OffsetDateTime,
+    permissions: &[Permission],
+) -> Result<AgentReach, AppError> {
+    let agents: Vec<Agent> = agents_in(repos)
+        .await?
+        .into_iter()
+        .filter(|a| permissions.iter().any(|p| a.permissions.contains(p)))
+        .collect();
+    if agents.is_empty() {
+        return Ok(AgentReach {
+            state: ReachState::None,
+            next_at: None,
+        });
+    }
+    let rows: BTreeMap<ApiKeyId, AgentWakeRow> = repos
+        .agent_connections()
+        .wakes()
+        .await?
+        .into_iter()
+        .map(|r| (r.api_key_id, r))
+        .collect();
+    if agents
+        .iter()
+        .any(|a| rows.get(&a.key.id).is_some_and(AgentWakeRow::usable))
+    {
+        return Ok(AgentReach {
+            state: ReachState::Ok,
+            next_at: None,
+        });
+    }
+    let fallback = repos
+        .workspace_policy()
+        .get()
+        .await?
+        .agent_checkin_interval_minutes;
+    let next_at = agents
+        .iter()
+        .filter_map(|a| {
+            let row = rows.get(&a.key.id);
+            next_expected(row, a.last_seen_at(), interval_of(row, fallback).0)
+        })
+        .min();
+    Ok(AgentReach {
+        state: if next_at.is_some_and(|at| at <= now) {
+            ReachState::Late
+        } else {
+            ReachState::Asleep
+        },
+        next_at,
+    })
+}
+
 // ---------------------------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------------------------
@@ -584,7 +678,8 @@ pub enum NeedWake {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WakesOut {
     pub agents: Vec<AgentWakeOut>,
-    /// Keyed by [`Need::key`]: `content`, `materials`, `social`, `ads`, `research`, `inbox`.
+    /// Keyed by [`Need::key`]: `content`, `materials`, `social`, `ads`, `research`, `inbox`,
+    /// `knowledge`.
     pub needs: BTreeMap<&'static str, NeedWake>,
 }
 

@@ -443,8 +443,21 @@ pub static CATALOG: &[UseCase] = &[
     twin("strategy.archive", Exempt, "jeeta.strategy.archive", ("POST", "/api/strategy/archive"), Destructive),
     twin("strategy.list_versions", Exempt, "jeeta.strategy.list_versions", ("GET", "/api/strategy/versions"), Read),
     twin("strategy.consultation", Exempt, "jeeta.strategy.consultation", ("GET", "/api/strategy/versions/{version_id}/consultation"), Read),
-    // The one action behind "the strategy does not post on this account" (design 2026-11-19 F3):
-    // a person prepares the draft that adds the channel; the owner approves it as any draft.
+    // The knowledge base (design 2026-11-19 §4): read by every member and key; the owner's page
+    // writes are a person's (agents write only by filing notes and through accepted proposals).
+    twin("strategy.knowledge_get", Exempt, "jeeta.strategy.knowledge_get", ("GET", "/api/knowledge"), Read),
+    panel_only("strategy.card_create", Exempt, ("POST", "/api/knowledge/cards"), Write),
+    panel_only("strategy.card_update", Exempt, ("PATCH", "/api/knowledge/cards/{card_id}"), Write),
+    panel_only("strategy.card_archive", Exempt, ("POST", "/api/knowledge/cards/{card_id}/archive"), Write),
+    panel_only("strategy.card_history", Exempt, ("GET", "/api/knowledge/cards/{card_id}/history"), Read),
+    // The ad budget's ceiling and the paid-message limit are spend (design §4.6).
+    panel_only("strategy.rules_save", Exempt, ("PUT", "/api/knowledge/rules"), Spend),
+    panel_only("strategy.goals_save", Exempt, ("PUT", "/api/knowledge/goals"), Write),
+    panel_only("strategy.post_approval_set", Exempt, ("POST", "/api/knowledge/post-approval"), Write),
+    panel_only("strategy.note_add", Exempt, ("POST", "/api/knowledge/notes"), Write),
+    panel_only("strategy.note_withdraw", Exempt, ("POST", "/api/knowledge/notes/{note_id}/withdraw"), Write),
+    panel_only("strategy.proposal_accept", Exempt, ("POST", "/api/knowledge/proposals/{proposal_id}/accept"), Write),
+    panel_only("strategy.proposal_skip", Exempt, ("POST", "/api/knowledge/proposals/{proposal_id}/skip"), Write),
     // Capabilities, their groups and the budget are exempt from the strategy gate (the
     // consultation needs to know what the workspace has), but not from the status check.
     twin("capability.list", Exempt, "jeeta.capability.list", ("GET", "/api/capabilities"), Read),
