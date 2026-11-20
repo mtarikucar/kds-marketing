@@ -47,7 +47,7 @@ export const cards: CardOut[] = [
 ];
 
 function note(over: Partial<NoteOut> & Pick<NoteOut, 'id' | 'text' | 'status'>): NoteOut {
-  return { links: [], revision: 1, created_at: ago(HOUR), created_by: USER_ID, closed_at: null, outcome: null, ...over };
+  return { links: [], files: [], revision: 1, created_at: ago(HOUR), created_by: USER_ID, claimed_until: null, closed_at: null, outcome: null, ...over };
 }
 
 /** An open note, one filed with every outcome, a dismissed one and a withdrawn one. */

@@ -14,6 +14,13 @@ it('explains a missing ad budget in Kurallar and in Bütçe only in ads', async 
   expect(await screen.findByRole('link', { name: "Kurallar'da reklam bütçesi yok." }, { timeout: 5000 })).toHaveAttribute('href', '/knowledge#kurallar');
   expect(await screen.findByRole('link', { name: "Bütçe’de reklam bütçesi yok; kampanyalar bekler." })).toHaveAttribute('href', '/budget');
 });
+it('says the seeded general ad budget is still 0 while Kurallar allows ads', async () => {
+  // The seed opens no ad spend (design 2026-11-19 §4.3.2): the general item starts at 0.
+  const zero = budgetItems.map(b => ({ ...b, item: { ...b.item, general: b.item.kind === 'ad_budget', cap: b.item.kind === 'ad_budget' ? 0 : b.item.cap } }));
+  contentFetch({ answers: { 'GET /api/budget/items': zero } });
+  renderAt('/ads');
+  expect(await screen.findByRole('link', { name: "Bütçe’deki genel reklam bütçesi 0; kampanyalar harcama yapamaz. Kurallar'daki sınıra kadar açabilirsin." }, { timeout: 5000 })).toHaveAttribute('href', '/budget');
+});
 it('says when the connected ad account may only be read, and nothing when it may create ads', async () => {
   const account = (scopes: string[]) => ({ capability: { id: 'ad-1', kind_key: 'meta_ads', name: 'Hesap', connector_public: { access: { scopes } } }, effective_status: 'verified' });
   const text = 'Bağlı reklam hesabının reklam oluşturma izni yok (ads_management); kampanyalar kurulamaz. Hesabı yeniden bağlayın ve izin ekranında bu izni verin.';

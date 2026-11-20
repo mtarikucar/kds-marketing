@@ -43,12 +43,21 @@ export function messageLine(t: TFunction, cap: Cap | null, language: string): st
  * list, then TikTok's own screen when a TikTok account is connected.
  */
 export function approvalLine(t: TFunction, rules: Pick<RulesOut, 'post_approval' | 'post_approval_accounts' | 'tiktok_connected'>): string {
+  const names = listedNames(rules.post_approval_accounts);
   const base = rules.post_approval
     ? t('knowledge.rules.approvalAll')
-    : rules.post_approval_accounts.length === 0
+    : names.length === 0
       ? t('knowledge.rules.approvalNone')
-      : t('knowledge.rules.approvalExcept', { accounts: rules.post_approval_accounts.map((a) => a.name).join(', ') });
+      : t('knowledge.rules.approvalExcept', { accounts: names.join(', ') });
   return rules.tiktok_connected ? `${base} ${t('knowledge.rules.tiktok')}` : base;
+}
+
+/**
+ * The names of the listed accounts that are still in the workspace: the read names an account it
+ * no longer has with an empty name, and nothing posts there any more.
+ */
+export function listedNames(accounts: RulesOut['post_approval_accounts']): string[] {
+  return accounts.map((a) => a.name.trim()).filter(Boolean);
 }
 
 /** The knowledge base's own refusals in the owner's words; anything else as the panel says it. */

@@ -28,20 +28,21 @@ export interface CapInput {
 }
 
 /**
- * `jt_knowledge::Attachment` as the read gives it: a link, or a studio file (an image, an MP4 or
- * a PDF; knowledge, never a library material) with a short-lived link when one was signed.
+ * `read::AttachmentOut`: a link, or a studio file (an image, an MP4 or a PDF; knowledge, never a
+ * library material) with a link usable until `expires_at` when one was signed. A write answers the
+ * stored form (`jt_knowledge::Attachment`): the same without `url` and `expires_at`.
  */
 export type KnowledgeAttachment =
   | { kind: 'link'; url: string; title?: string | null }
-  | { kind: 'file'; file_id: Uuid; name: string; mime: string; url?: string | null };
+  | { kind: 'file'; file_id: Uuid; name: string; mime: string; url?: string | null; expires_at?: Rfc3339 | null };
 
 /** `jt_knowledge::AttachmentInput`: a link with an optional title, or an uploaded file's id. */
 export type AttachmentInput = { kind: 'link'; url: string; title?: string } | { kind: 'file'; file_id: Uuid };
 
-/** What an agent's filing of a note last wrote into a card. */
+/** What an agent's filing of a note last wrote into a card (`read::Filed`). */
 export interface FiledMark {
   at: Rfc3339;
-  summary: string;
+  summary: string | null;
 }
 
 /** `KnowledgeOut.cards[]`: a live card, by position. `key` is a seed card's fixed key. */
@@ -55,6 +56,25 @@ export interface CardOut {
   revision: number;
   updated_at: Rfc3339;
   filed: FiledMark | null;
+}
+
+/**
+ * `jt_knowledge::Card`, what a card write answers: the card as stored (attachments without
+ * links, no `filed`), with who made and last changed it and, once removed, `archived_at`.
+ */
+export interface StoredCard {
+  id: Uuid;
+  key: string | null;
+  title: string;
+  body: string;
+  attachments: KnowledgeAttachment[];
+  position: number;
+  revision: number;
+  created_at: Rfc3339;
+  created_by: Actor;
+  updated_at: Rfc3339;
+  updated_by: Actor;
+  archived_at: Rfc3339 | null;
 }
 
 /** One account whose posts wait for the owner while the switch is off. */
@@ -102,12 +122,30 @@ export interface NoteOutcome {
   dismissed?: string | null;
 }
 
-/** `KnowledgeOut.notes[]`: open notes and the last five closed, newest first. */
+/**
+ * `read::NoteOut` (`KnowledgeOut.notes[]`): open notes and the last five closed, newest first;
+ * its files named and linked; `claimed_until` while an agent holds it (never the claim itself).
+ */
 export interface NoteOut {
   id: Uuid;
   text: string;
   links: string[];
-  file_ids?: Uuid[];
+  files: KnowledgeAttachment[];
+  status: NoteStatus;
+  revision: number;
+  created_at: Rfc3339;
+  created_by: Uuid;
+  claimed_until: Rfc3339 | null;
+  closed_at: Rfc3339 | null;
+  outcome: NoteOutcome | null;
+}
+
+/** `jt_knowledge::Note`, what `note_add` and `note_withdraw` answer: the note as stored. */
+export interface StoredNote {
+  id: Uuid;
+  text: string;
+  links: string[];
+  file_ids: Uuid[];
   status: NoteStatus;
   revision: number;
   created_at: Rfc3339;
@@ -129,10 +167,17 @@ export interface AgentReach {
 /** `jt_knowledge::ProposalKind`. */
 export type ProposalKind = 'card_new' | 'card_edit' | 'rule_add' | 'goal_add';
 
-/** `KnowledgeOut.proposals[]`: a pending proposal ("Ajanın önerileri"). */
+/** `jt_knowledge::ProposalStatus`. */
+export type ProposalStatus = 'pending' | 'accepted' | 'skipped' | 'expired' | 'superseded';
+
+/**
+ * `jt_knowledge::Proposal`: a pending one in `KnowledgeOut.proposals[]` ("Ajanın önerileri"), and
+ * what accepting or skipping it answers.
+ */
 export interface ProposalOut {
   id: Uuid;
   kind: ProposalKind;
+  status?: ProposalStatus;
   /** The card a `card_edit` rewrites. */
   card_id: Uuid | null;
   title: string | null;
@@ -151,6 +196,7 @@ export type DerivePart = 'posting' | 'prospecting';
 
 /** `KnowledgeOut.frame` (§4.10.3): the page reads only whether a derivation is due. */
 export interface FrameOut {
+  id?: Uuid;
   number: number;
   revision?: number;
   posting_derived?: number;
@@ -193,9 +239,8 @@ export interface RevisionOut {
   cause: KnowledgeCause;
   source_id: Uuid | null;
   at: Rfc3339;
+  /** Who wrote it; a person is named from the team list (the revision carries only the id). */
   by: Actor;
-  /** The person's name, when the server gives it. */
-  by_name?: string | null;
 }
 
 /** `jt_app::usecases::knowledge::cards::HistoryOut`: newest first; `next_before` continues it. */
@@ -217,15 +262,19 @@ export interface RulesInput {
   post_approval_accounts?: Uuid[];
 }
 
-/** `strategy.rules_save`'s answer: the rules as stored, and the campaigns a lowering stopped. */
+/**
+ * `rules::RulesOut`, what `rules_save` and `post_approval_set` answer: the rules as stored (the
+ * listed accounts by id; the read names them), and how many running ad campaigns a lowered ad
+ * budget stopped at once (`rules_save` only; 0 otherwise).
+ */
 export interface RulesSaveOut {
   revision: number;
   prohibitions: string[];
   ad_cap: Cap | null;
   message_cap: Cap | null;
   post_approval: boolean;
-  post_approval_accounts: (Uuid | ApprovalAccount)[];
-  stopped_campaigns?: number;
+  post_approval_accounts: Uuid[];
+  stopped_campaigns: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -262,7 +311,7 @@ export function createCard(input: {
   body?: string;
   attachments?: AttachmentInput[];
   position?: number;
-}): Promise<CardOut> {
+}): Promise<StoredCard> {
   return request('POST', '/api/knowledge/cards', { body: input });
 }
 
@@ -270,12 +319,12 @@ export function createCard(input: {
 export function updateCard(
   id: Uuid,
   input: { expected_revision: number; title?: string; body?: string; attachments?: AttachmentInput[]; position?: number },
-): Promise<CardOut> {
+): Promise<StoredCard> {
   return request('PATCH', `/api/knowledge/cards/${seg(id)}`, { body: input });
 }
 
 /** `POST /api/knowledge/cards/{id}/archive`: removes (`archived: true`) or restores a card. */
-export function archiveCard(id: Uuid, input: { expected_revision: number; archived: boolean }): Promise<CardOut> {
+export function archiveCard(id: Uuid, input: { expected_revision: number; archived: boolean }): Promise<StoredCard> {
   return request('POST', `/api/knowledge/cards/${seg(id)}/archive`, { body: input });
 }
 
@@ -300,12 +349,12 @@ export function saveGoals(input: { expected_revision: number; items: string[] })
 }
 
 /** `POST /api/knowledge/notes`: "Ajanlara bir şey anlat"; a replay of `request_key` answers the same note. */
-export function addNote(input: { request_key: string; text: string; links?: string[]; file_ids?: Uuid[] }): Promise<NoteOut> {
+export function addNote(input: { request_key: string; text: string; links?: string[]; file_ids?: Uuid[] }): Promise<StoredNote> {
   return request('POST', '/api/knowledge/notes', { body: input });
 }
 
 /** `POST /api/knowledge/notes/{id}/withdraw`: takes back an open note ("Geri al"). */
-export function withdrawNote(id: Uuid, input: { expected_revision: number }): Promise<NoteOut> {
+export function withdrawNote(id: Uuid, input: { expected_revision: number }): Promise<StoredNote> {
   return request('POST', `/api/knowledge/notes/${seg(id)}/withdraw`, { body: input });
 }
 

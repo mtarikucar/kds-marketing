@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { FileText, Link2, Paperclip, Plus, Search, X } from 'lucide-react';
@@ -13,8 +13,11 @@ import {
   type CardOut,
   type KnowledgeAttachment,
   type RevisionOut,
+  type StoredCard,
 } from '@/api/knowledge';
 import { fileUpload } from '@/api/studio';
+import { listTeam } from '@/api/team';
+import type { MemberOut } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import {
   Badge,
@@ -335,9 +338,23 @@ function CardEditor({
   );
 }
 
-/** Who and why of one revision, in the owner's words ("Sen", a name, "Ajan (not)", …). */
-export function revisionWho(t: TFunction, rev: RevisionOut, me: string | undefined): string {
-  const person = rev.by.kind === 'human' ? (rev.by.user_id === me ? t('knowledge.history.you') : rev.by_name || t('knowledge.history.member')) : null;
+/** A member's name as the team list gives it: the display name, else the email. */
+export function memberNames(team: readonly MemberOut[] | undefined): Map<string, string> {
+  const names = new Map<string, string>();
+  for (const m of team ?? []) {
+    const name = m.display_name?.trim() || m.email;
+    if (m.user_id && name) names.set(m.user_id, name);
+  }
+  return names;
+}
+
+/**
+ * Who and why of one revision, in the owner's words ("Sen", a name, "Ajan (not)", …). A revision
+ * names its person by id only: `names` (the team list) gives the name.
+ */
+export function revisionWho(t: TFunction, rev: RevisionOut, me: string | undefined, names?: ReadonlyMap<string, string>): string {
+  const person =
+    rev.by.kind === 'human' ? (rev.by.user_id === me ? t('knowledge.history.you') : names?.get(rev.by.user_id) || t('knowledge.history.member')) : null;
   switch (rev.cause) {
     case 'note':
       return t('knowledge.history.note');
@@ -367,6 +384,9 @@ function HistorySheet({ card, editable, onClose }: { card: CardOut | undefined; 
     getNextPageParam: (last) => last.next_before,
     enabled: !!card,
   });
+  // The people a revision names (by id): the team list, read once the sheet opens.
+  const team = useQuery({ queryKey: ['knowledge', 'team', session.data?.current_workspace], queryFn: listTeam, enabled: !!card, retry: false, staleTime: 5 * 60_000 });
+  const names = useMemo(() => memberNames(team.data), [team.data]);
   const restore = useKnowledgeMutation(
     (rev: RevisionOut) =>
       updateCard(card!.id, {
@@ -402,7 +422,7 @@ function HistorySheet({ card, editable, onClose }: { card: CardOut | undefined; 
             return (
               <li key={rev.id} className="flex flex-col gap-1.5 rounded-lg border border-border p-3">
                 <p className="text-caption text-muted-foreground">
-                  {formatWhen(rev.at, i18n.language)} · {revisionWho(t, rev, session.data?.user_id)}
+                  {formatWhen(rev.at, i18n.language)} · {revisionWho(t, rev, session.data?.user_id, names)}
                   {rev.content.archived && <> · {t('knowledge.history.removedState')}</>}
                 </p>
                 {rev.content.title && <p className="text-sm font-semibold [overflow-wrap:anywhere]">{rev.content.title}</p>}
@@ -442,7 +462,7 @@ function CardView({ card, editable, onOpen, now }: { card: CardOut; editable: bo
         <span className="group absolute end-3 top-3 z-10">
           <Badge tone="primary" size="sm" tabIndex={0} aria-describedby={`filed-${card.id}`}>{t('knowledge.cards.newBadge')}</Badge>
           <span id={`filed-${card.id}`} role="tooltip" className="pointer-events-none invisible absolute end-0 top-full z-20 mt-1 w-56 rounded-md bg-foreground px-2.5 py-1.5 text-caption text-background shadow-md group-focus-within:visible group-hover:visible">
-            {t('knowledge.cards.filed', { summary: card.filed.summary })}
+            {card.filed.summary?.trim() ? t('knowledge.cards.filed', { summary: card.filed.summary.trim() }) : t('knowledge.cards.filedPlain')}
           </span>
         </span>
       )}
@@ -498,7 +518,8 @@ export function Cards({
   const phone = useIsPhone();
   const [query, setQuery] = useState('');
   const [removing, setRemoving] = useState<CardOut | null>(null);
-  const [undo, setUndo] = useState<CardOut | null>(null);
+  // The card as the removal answered it: "Geri al" restores it at that revision.
+  const [undo, setUndo] = useState<Pick<StoredCard, 'id' | 'revision' | 'title'> | null>(null);
   const [now] = useState(() => Date.now());
   const shown = useMemo(() => cards.filter((c) => cardMatches(c, query) || c.id === openId), [cards, query, openId]);
   const open = openId && openId !== 'new' ? cards.find((c) => c.id === openId) : undefined;
@@ -516,7 +537,7 @@ export function Cards({
     // The question closes, so the refusal (said in the editor) and the card as it now is show.
     () => setRemoving(null),
   );
-  const restore = useKnowledgeMutation((card: CardOut) => archiveCard(card.id, { expected_revision: card.revision, archived: false }), () => {
+  const restore = useKnowledgeMutation((card: Pick<StoredCard, 'id' | 'revision'>) => archiveCard(card.id, { expected_revision: card.revision, archived: false }), () => {
     removedHere.current = null;
     setUndo(null);
   });
@@ -619,7 +640,8 @@ export function Cards({
           onConfirm={() => removing && remove.mutate(cards.find((c) => c.id === removing.id) ?? removing)}
         />
       )}
-      <HistorySheet card={historyId ? cards.find((c) => c.id === historyId) : undefined} editable={editable} onClose={() => onHistory(null)} />
+      {/* A card's history is its editors' (`strategy.card_history` needs `team.manage`). */}
+      <HistorySheet card={editable && historyId ? cards.find((c) => c.id === historyId) : undefined} editable={editable} onClose={() => onHistory(null)} />
     </section>
   );
 }

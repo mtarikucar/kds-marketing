@@ -99,6 +99,9 @@ export function ModuleStatusLine({ module, extra }: { module: 'content' | 'socia
     const rules = knowledge.data?.rules;
     if (rules && !(rules.ad_cap && rules.ad_cap.amount_minor > 0)) rows.push({ key: 'paid', text: t('moduleStatus.paid'), href: '/knowledge#kurallar' });
     if (budget.data && !general) rows.push({ key: 'budget', text: t('moduleStatus.budget'), href: '/budget' });
+    // The seed opens no ad spend: the general item starts at 0 and the owner raises it in Bütçe,
+    // up to Kurallar's ad budget (design 2026-11-19 §4.3.2).
+    else if (general && general.item.cap <= 0 && rules?.ad_cap && rules.ad_cap.amount_minor > 0) rows.push({ key: 'budget-zero', text: t('moduleStatus.budgetZero'), href: '/budget' });
     // A connection may read an ad account without being allowed to create ads in it (the
     // server's rule, `studio::chain::capability_access`): every plan is then refused.
     const connected = adAccounts.data?.filter(c => c.effective_status === 'verified' && c.capability.kind_key in AD_WRITE_SCOPES);

@@ -171,6 +171,8 @@ export function errorMessage(t: TFunction, err: unknown): string {
     case 'above_rules_cap':
     case 'above_strategy_cap':
       return t('errors.aboveRulesCap');
+    case 'rules_cap_currency':
+      return t('errors.rulesCapCurrency', { currency: typeof err.details.currency === 'string' ? err.details.currency : '' });
     // The leads program's refusals (spec 2026-10-30-leads-pool-outreach-design.md).
     case 'not_editable':
     case 'stale_revision':
