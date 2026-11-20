@@ -66,6 +66,11 @@ use crate::ports::{ChannelCatalog, MAX_CONSULTATION_PAGE, StrategyArchivedHook, 
 
 const NO_SUCH_VERSION: &str = "no such strategy version";
 
+/// Ledger actions no use case writes any more, whose entries stay in the ledger and are still
+/// worded by the panel: `strategy.add_channel` went with K6 (design 2026-11-19 "Paylaşımlar and
+/// Bilgi bankası": every connected account is used, no frame names a channel).
+pub const RETIRED_LEDGER_ACTIONS: &[&str] = &["strategy.add_channel"];
+
 // ---------------------------------------------------------------------------------------------
 // Inputs and outputs
 // ---------------------------------------------------------------------------------------------
