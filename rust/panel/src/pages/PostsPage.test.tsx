@@ -629,7 +629,7 @@ describe('the composer', () => {
 
 describe('special days', () => {
   const day = (state: 'none' | 'analysing' | 'needs_permission' | 'unchecked' | 'quality', found: ('face' | 'name')[] = []) => ({
-    key: 'ogretmenler_gunu', year: 2026, name: 'Öğretmenler Günü', window_start: '2026-11-24', window_end: '2026-11-24', prepares_from: '2026-11-10',
+    key: 'ogretmenler_gunu', year: 2026, name: 'Öğretmenler Günü', window_start: '2026-11-10', window_end: '2026-11-24', prepares_from: '2026-11-03',
     phase: 'preparing' as const, shoot_request_id: null, can_add: true, can_skip: true, files: { state, material_ids: ['m5'], permit: [{ material_id: 'm5', expected_revision: 3 }], found },
   });
 
@@ -644,6 +644,13 @@ describe('special days', () => {
     const region = await screen.findByRole('region', { name: P.days.region });
     expect(within(region).getByText(text)).toBeInTheDocument();
     expect(within(region).queryAllByRole('button').map((b) => b.textContent)).toEqual([...actions]);
+  });
+
+  it('dates a season by its day, the end of its window', async () => {
+    const yilbasi = { ...day('none'), key: 'yilbasi', name: 'Yılbaşı', window_start: '2026-12-01', window_end: '2026-12-31', prepares_from: '2026-11-10' };
+    open('/posts', postsOut({ days: [yilbasi] }));
+    const region = await screen.findByRole('region', { name: P.days.region });
+    expect(within(region).getByText(/^Yılbaşı \(31 Ara\) için fotoğrafın yok$/)).toBeInTheDocument();
   });
 
   it('adds a photo to the day and skips it for the year with an undo', async () => {

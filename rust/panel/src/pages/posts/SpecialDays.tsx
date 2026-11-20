@@ -58,7 +58,8 @@ function DayLine({ day }: { day: SpecialDayLine }) {
   const refresh = useInvalidatePosts();
   const undoFailed = useUndoFailed();
   const name = day.name;
-  const date = dayWords(day.window_start, i18n.language);
+  // The day itself: a special day's window opens two weeks before it and a season's runs up to it.
+  const date = dayWords(day.window_end, i18n.language);
   const target = { kind: 'special_day' as const, key: day.key, year: day.year };
   const add = usePostsMutation((files: File[]) => addFiles(files, target));
   const permit = usePostsMutation(() => permitAll(day.files.permit));
