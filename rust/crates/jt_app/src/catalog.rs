@@ -394,6 +394,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.suppressions.add", Exempt, "jeeta.inbox.suppressions_add", ("POST", "/api/inbox/people/{person_id}/suppressions"), Write),
     twin("inbox.suppressions.remove", Exempt, "jeeta.inbox.suppressions_remove", ("DELETE", "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}"), Write),
     twin("inbox.send", GateMode::Gated, "jeeta.inbox.send", ("POST", "/api/inbox/people/{person_id}/send"), Write),
+    // The email facts a one-to-one email needs (sender identity, the business basis): the same
+    // store the campaigns read, without the campaigns module or an outreach permission.
+    twin("inbox.email_settings_get", Exempt, "jeeta.inbox.email_settings_get", ("GET", "/api/inbox/email-settings"), Read),
+    twin("inbox.email_settings_set", Exempt, "jeeta.inbox.email_settings_set", ("PUT", "/api/inbox/email-settings"), Write),
     twin("inbox.quotes.send", Exempt, "jeeta.inbox.quotes_send", ("POST", "/api/inbox/journeys/{journey_id}/quotes"), Write),
     twin("inbox.quotes.accept", Exempt, "jeeta.inbox.quotes_accept", ("POST", "/api/inbox/quotes/{id}/accept"), Write),
     twin("inbox.quotes.list", Exempt, "jeeta.inbox.quotes_list", ("GET", "/api/inbox/journeys/{journey_id}/quotes"), Read),

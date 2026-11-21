@@ -8,7 +8,8 @@ use crate::{
 };
 use axum::{Json, extract::State};
 use jt_app::usecases::inbox::{
-    JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, tasks,
+    JourneyId, MergeId, PersonId, TaskId, dictionaries, email_settings, journeys, merge, people,
+    tasks,
 };
 use serde_json::Value;
 
@@ -98,6 +99,23 @@ pub async fn status_labels_set(
     ApiJson(input): ApiJson<dictionaries::StatusLabelsInput>,
 ) -> Result<Json<Value>, ApiError> {
     to_json(&dictionaries::set_status_labels(&state.deps, &ctx, input).await?)
+}
+
+/// The email facts a one-to-one email needs (sender identity, the business basis).
+pub async fn email_settings_get(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&email_settings::email_settings_get(&state.deps, &ctx).await?)
+}
+
+/// `200` with the email facts after the change.
+pub async fn email_settings_set(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiJson(input): ApiJson<email_settings::EmailSettingsInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(&email_settings::email_settings_set(&state.deps, &ctx, input).await?)
 }
 
 pub async fn merges_list(

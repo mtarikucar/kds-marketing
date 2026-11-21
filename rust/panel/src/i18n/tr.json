@@ -3139,7 +3139,6 @@
       "title": "Kampanyalar",
       "description": "Kendi posta kutunuzdan giden düz metin e-posta kampanyaları ve adımları.",
       "templatesLink": "Şablonlar",
-      "settingsLink": "E-posta ayarları",
       "newCampaign": "Yeni kampanya",
       "statusFilter": "Durum",
       "columns": {
@@ -3679,8 +3678,7 @@
     },
     "settings": {
       "title": "E-posta ayarları",
-      "description": "Kampanyaların gönderen bilgileri, onay, ısınma ve sıklık sınırları.",
-      "descriptionEmail": "E-postalarının altına eklenen gönderen bilgileri ve işletmelere ilk mesaj izni.",
+      "description": "Kampanyaların onayı, ısınması ve sıklık sınırları.",
       "general": "Genel ayarlar",
       "readOnly": "Bu ayarları yalnızca yöneticiler değiştirebilir.",
       "identity": "Gönderen bilgileri (her e-postanın altbilgisi)",
@@ -3710,7 +3708,8 @@
         "note": "Teyidin notu (kim, ne zaman, neyi teyit etti)",
         "notInForce": "Dayanak kayıtlı, ancak platformda soğuk gönderim kapalı olduğu için şu an geçerli değil.",
         "save": "Dayanağı kaydet"
-      }
+      },
+      "campaignTitle": "Kampanya ayarları"
     },
     "filteredEmpty": {
       "title": "Eşleşen sonuç yok",
@@ -4959,5 +4958,11 @@
       "brake": "Tüm paylaşımları durdur",
       "brakeHelp": "Açıkken hiçbir paylaşım çıkmaz; kapatınca ajan bekleyenlere yeniden zaman verir."
     }
+  },
+  "email": {
+    "title": "E-posta ayarları",
+    "description": "E-postalarının altına eklenen gönderen bilgileri ve işletmelere ilk mesaj izni.",
+    "platformOff": "Bu sunucuda izni olmayan işletmelere ilk mesaj kapalı; izni olan kişilere yazabilirsin.",
+    "senderLink": "Gönderen bilgileri ve ilk mesaj izni: E-posta ayarları"
   }
 }

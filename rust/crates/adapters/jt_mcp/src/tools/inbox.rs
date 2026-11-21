@@ -7,8 +7,8 @@ use jt_app::{
     usecases::{
         Deps,
         inbox::{
-            JourneyId, MergeId, PersonId, TaskId, dictionaries, journeys, merge, people, schema,
-            tasks,
+            JourneyId, MergeId, PersonId, TaskId, dictionaries, email_settings, journeys, merge,
+            people, schema, tasks,
         },
     },
 };
@@ -112,6 +112,20 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("send")).expect("inbox schema"),
             run: send,
+        },
+        ToolDef {
+            use_case: "inbox.email_settings_get",
+            description: "Read the email facts every commercial email needs: sender_company,                           sender_address, privacy_notice_url (the footer), b2b_basis,                           require_iys_lookup and legal_ack (the business-recipient basis), and                           what counts now: sender_identity_complete, platform_enabled and                           b2b_channels_in_force. The same facts campaigns read; no outreach                           permission or campaigns module needed. [risk: READ]",
+            permissions: &[Permission::InboxWork],
+            schema: || Schema::try_from(schema::tool("email_settings_get")).expect("inbox schema"),
+            run: email_settings_get,
+        },
+        ToolDef {
+            use_case: "inbox.email_settings_set",
+            description: "Change the email facts: sender_company (up to 200), sender_address (up                           to 300), privacy_notice_url (http(s)); an empty text clears it. Any of                           b2b_basis, require_iys_lookup or legal_ack needs inbox.manage; giving                           b2b_basis channels or turning require_iys_lookup off needs a human                           owner and legal_ack {counsel_confirmed: true, note} in the same call                           (FORBIDDEN owner_required, counsel_confirmation_required); an agent                           never can. [risk: WRITE]",
+            permissions: &[Permission::InboxWork],
+            schema: || Schema::try_from(schema::tool("email_settings_set")).expect("inbox schema"),
+            run: email_settings_set,
         },
         ToolDef {
             use_case: "inbox.pending",
@@ -421,6 +435,20 @@ fn journeys_assign_owner<'a>(deps: &'a Deps, ctx: &'a Ctx, mut raw: Value) -> To
     Box::pin(async move {
         let id: JourneyId = take_id(&mut raw, "journey_id")?;
         to_json(&journeys::assign_owner(deps, ctx, id, args(raw)?).await?)
+    })
+}
+
+fn email_settings_get<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let NoArgs {} = args(raw)?;
+        to_json(&email_settings::email_settings_get(deps, ctx).await?)
+    })
+}
+
+fn email_settings_set<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let input: email_settings::EmailSettingsInput = args(raw)?;
+        to_json(&email_settings::email_settings_set(deps, ctx, input).await?)
     })
 }
 

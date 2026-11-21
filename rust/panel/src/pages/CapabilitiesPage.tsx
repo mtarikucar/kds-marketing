@@ -317,6 +317,7 @@ export function CapabilitiesPage() {
   const activePage = Math.min(page, pageCount);
   const visibleItems = items.slice((activePage - 1) * 8, activePage * 8);
   const firstConnection = all.isSuccess && all.data.length === 0;
+  const hasMailbox = !!all.data?.some((c) => c.capability.kind_key === 'mailbox') && can(session.data, 'inbox.work');
   const filtered = goal !== 'all' || filter !== 'all' || status !== 'all' || moduleFilter !== 'all' || !!search;
 
   return (
@@ -325,8 +326,15 @@ export function CapabilitiesPage() {
         title={copy('title')}
         description={copy('description')}
         actions={
-          canManage ? (
+          canManage || hasMailbox ? (
             <>
+              {/* Every email's sender details and first-message permission: email's own settings. */}
+              {hasMailbox && (
+                <Button asChild variant="ghost">
+                  <Link to="/settings/email">{t('email.title')}</Link>
+                </Button>
+              )}
+              {canManage && <>
               <Button asChild variant="outline">
                 <Link to="/connect">
                   <Plug className="h-4 w-4" aria-hidden="true" />
@@ -337,6 +345,7 @@ export function CapabilitiesPage() {
                 <Plus className="h-4 w-4" aria-hidden="true" />
                 {copy('add')}
               </Button>
+              </>}
             </>
           ) : null
         }

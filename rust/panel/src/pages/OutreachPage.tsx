@@ -81,7 +81,7 @@ export function OutreachPage() {
               <Link to="/outreach/templates">{t('leads.outreach.templatesLink')}</Link>
             </Button>
             <Button asChild variant="outline">
-              <Link to="/outreach/settings">{t('leads.outreach.settingsLink')}</Link>
+              <Link to="/outreach/settings">{t('leads.settings.campaignTitle')}</Link>
             </Button>
             <Button asChild>
               <Link to="/outreach/new">{t('leads.outreach.newCampaign')}</Link>
