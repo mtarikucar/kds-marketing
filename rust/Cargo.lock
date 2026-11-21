@@ -1333,6 +1333,7 @@ dependencies = [
  "jt_linkedin",
  "jt_mail",
  "jt_mcp",
+ "jt_mcp_client",
  "jt_meta",
  "jt_netgsm",
  "jt_outbound",
@@ -1719,6 +1720,21 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "jt_mcp_client"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "jt_app",
+ "jt_connector",
+ "jt_outbound",
+ "jt_tenancy",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

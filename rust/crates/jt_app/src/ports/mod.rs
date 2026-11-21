@@ -42,6 +42,7 @@ pub mod production_projects;
 pub mod prospects;
 pub mod public;
 pub mod reply_model;
+pub mod shop;
 pub mod studio;
 pub mod wake;
 use inbox::*;
