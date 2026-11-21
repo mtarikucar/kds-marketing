@@ -106,6 +106,14 @@ impl ApiKey {
     }
 }
 
+impl PartialEq for ApiKey {
+    fn eq(&self, other: &ApiKey) -> bool {
+        self.expose() == other.expose()
+    }
+}
+
+impl Eq for ApiKey {}
+
 impl fmt::Debug for ApiKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("ApiKey(***)")

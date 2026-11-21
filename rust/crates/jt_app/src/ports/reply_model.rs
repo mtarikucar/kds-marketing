@@ -31,9 +31,17 @@ pub const AUTOREPLY_SETTLE_MAX: Duration = Duration::seconds(45);
 /// How long a run holds its conversation while it asks the model; a run that died is retried
 /// after it.
 pub const AUTOREPLY_LEASE: Duration = Duration::minutes(2);
-/// How many times the model is asked again after a rate limit or an outage before the
-/// conversation goes to a person.
-pub const AUTOREPLY_RETRIES: u32 = 1;
+/// How many model calls one queue row may take (a retry after a rate limit or an outage, a run
+/// that died after its call included) before the conversation goes to a person (`failed`).
+pub const AUTOREPLY_MAX_ATTEMPTS: u32 = 3;
+/// After a message written by a person (in the panel, or from the phone's Business App), the
+/// automatic replies stay out of the conversation this long, unless a person hands it back to
+/// the agent after that message.
+pub const HUMAN_QUIET: Duration = Duration::hours(24);
+/// What a model call that brought back no usage is counted as costing, in millionths of a US
+/// dollar: a conservative estimate (a full prompt and a full answer), so failed calls count
+/// towards the day's spend ceiling.
+pub const FAILED_CALL_ESTIMATE_MICRO_USD: i64 = 5_000;
 /// The longest wait before asking again after a rate limit.
 pub const AUTOREPLY_RETRY_MAX: Duration = Duration::seconds(60);
 /// Automatic messages per conversation per local day.
@@ -47,7 +55,9 @@ pub const MAX_HISTORY: u32 = 30;
 /// The most output tokens one answer may take (thinking included).
 pub const MAX_OUTPUT_TOKENS: u32 = 2_048;
 /// The most due conversations one run of the job takes per workspace.
-pub const AUTOREPLY_BATCH: u32 = 20;
+pub const AUTOREPLY_BATCH: u32 = 5;
+/// How long one run of the job starts new conversations for; what is left waits for the next.
+pub const AUTOREPLY_TICK_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Who wrote a turn of the conversation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,11 +189,31 @@ pub struct QueueRow {
     pub due_at: Option<OffsetDateTime>,
     /// Until when a run holds it.
     pub lease_until: Option<OffsetDateTime>,
-    /// How many model calls failed for it.
+    /// How many model calls it took in its current burst.
     pub attempts: u32,
+    /// When a person last handed the conversation back to the agent: a person's message before
+    /// it no longer keeps the automatic replies out ([`HUMAN_QUIET`]).
+    pub handed_back_at: Option<OffsetDateTime>,
 }
 
 impl QueueRow {
+    /// A row with nothing due, for conversation `id`.
+    pub fn idle(id: ConversationId, now: OffsetDateTime) -> QueueRow {
+        QueueRow {
+            conversation_id: id,
+            first_at: now,
+            due_at: None,
+            lease_until: None,
+            attempts: 0,
+            handed_back_at: None,
+        }
+    }
+
+    /// Whether nothing is due and no run holds it.
+    pub fn is_idle(&self) -> bool {
+        self.due_at.is_none() && self.lease_until.is_none()
+    }
+
     /// Whether a run may take it at `now`: due and not held, or held by a run whose lease ran out.
     pub fn takeable(&self, now: OffsetDateTime) -> bool {
         let lease_free = self.lease_until.is_none_or(|l| l <= now);
@@ -256,8 +286,12 @@ pub struct RunRow {
 /// The automatic replies' rows of the bundle's workspace.
 #[async_trait]
 pub trait AutoReplyRepo: Send + Sync {
-    /// Conversation `id`'s queue row, locked until the bundle ends.
+    /// Conversation `id`'s queue row, locked until the bundle ends. A row stays once made (idle
+    /// while nothing is due, [`QueueRow::is_idle`]): it keeps when a person handed the
+    /// conversation back.
     async fn queue_lock(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError>;
+    /// Conversation `id`'s queue row, without a lock.
+    async fn queue_get(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError>;
     /// Inserts or replaces the queue row of its conversation.
     async fn queue_save(&mut self, row: &QueueRow) -> Result<(), AppError>;
     /// Removes conversation `id`'s queue row, if any.
@@ -270,6 +304,18 @@ pub trait AutoReplyRepo: Send + Sync {
         limit: u32,
     ) -> Result<Vec<ConversationId>, AppError>;
     async fn run_insert(&mut self, run: &RunRow) -> Result<(), AppError>;
+    /// Replaces run `run.id`'s outcome, reason, usage, outbox and quote; `NOT_FOUND` when the
+    /// workspace has no such run.
+    async fn run_update(&mut self, run: &RunRow) -> Result<(), AppError>;
+    /// The run that queued quote `quote`, if an automatic reply did.
+    async fn run_by_quote(&mut self, quote: Uuid) -> Result<Option<RunRow>, AppError>;
+    /// How many model calls (runs of any outcome) were made at `since` or later, in conversation
+    /// `conversation` when given.
+    async fn runs_since(
+        &mut self,
+        conversation: Option<ConversationId>,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError>;
     /// How many runs at `since` or later queued an automatic message (a reply or a quote; a
     /// hand-over's line does not count): of conversation `conversation` when given, on capability
     /// `capability` when given.
@@ -295,6 +341,7 @@ mod tests {
             due_at: due.map(at),
             lease_until: lease.map(at),
             attempts: 0,
+            handed_back_at: None,
         }
     }
 

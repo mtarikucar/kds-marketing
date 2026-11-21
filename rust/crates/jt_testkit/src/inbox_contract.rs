@@ -2658,11 +2658,16 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
         due_at: Some(at(12)),
         lease_until: None,
         attempts: 0,
+        handed_back_at: Some(at(-5)),
     };
     let mut t = uow.tenant(f.ws).await.unwrap();
     t.auto_reply().queue_save(&row).await.unwrap();
     t.commit().await.unwrap();
     let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.auto_reply().queue_get(c.id).await.unwrap(),
+        Some(row.clone())
+    );
     assert_eq!(
         t.auto_reply().queue_lock(c.id).await.unwrap(),
         Some(row.clone())
@@ -2751,6 +2756,8 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
     t.commit().await.unwrap();
     let mut t = uow.tenant(f.ws).await.unwrap();
     let ar = t.auto_reply();
+    assert_eq!(ar.runs_since(None, at(0)).await.unwrap(), 3, "every call");
+    assert_eq!(ar.runs_since(Some(c.id), at(-1000)).await.unwrap(), 4);
     assert_eq!(ar.runs_sent_since(None, None, at(0)).await.unwrap(), 2);
     assert_eq!(
         ar.runs_sent_since(Some(c.id), None, at(0)).await.unwrap(),
@@ -2771,6 +2778,22 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
     );
     assert_eq!(ar.runs_spend_since(at(0)).await.unwrap(), 12);
     assert_eq!(ar.runs_spend_since(at(-1000)).await.unwrap(), 19);
+    // A run's outcome is settled later, and a quote's run is found by its quote.
+    let quote = Uuid::now_v7();
+    let mut updated = run(RunOutcome::Failed, 30, 2);
+    ar.run_insert(&updated).await.unwrap();
+    updated.outcome = RunOutcome::Quoted;
+    updated.quote_id = Some(quote);
+    ar.run_update(&updated).await.unwrap();
+    assert_eq!(ar.run_by_quote(quote).await.unwrap(), Some(updated.clone()));
+    assert_eq!(ar.run_by_quote(Uuid::now_v7()).await.unwrap(), None);
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let missing = run(RunOutcome::Replied, 0, 0);
+    assert_eq!(
+        t.auto_reply().run_update(&missing).await.unwrap_err().code,
+        ErrorCode::NotFound
+    );
     drop(t);
     let mut other = uow.tenant(f.other).await.unwrap();
     assert_eq!(

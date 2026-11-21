@@ -185,6 +185,8 @@ async fn eligible(
     r: &mut dyn TenantRepos,
     c: &Conversation,
     auto: &AutoReply,
+    handed_back: Option<OffsetDateTime>,
+    now: OffsetDateTime,
 ) -> Result<Result<(), &'static str>, AppError> {
     if public_channel_for_kind(&c.kind_key).is_some()
         || !AUTO_REPLY_KINDS.contains(&c.kind_key.as_str())
@@ -199,6 +201,9 @@ async fn eligible(
     }
     if c.state != ConvState::Ours {
         return Ok(Err("not_ours"));
+    }
+    if human_active(r, c.id, handed_back, now).await? {
+        return Ok(Err("human_active"));
     }
     if r.workspace().get().await?.status != WorkspaceStatus::Active {
         return Ok(Err("workspace_inactive"));
@@ -230,6 +235,115 @@ async fn eligible(
     Ok(Ok(()))
 }
 
+/// How many of a conversation's latest messages are looked through for a person's.
+const HUMAN_SCAN: u32 = 200;
+
+/// Whether a person wrote in conversation `id` (in the panel, `Author::Human`, or from the
+/// phone's Business App, `Author::BusinessApp`) less than [`HUMAN_QUIET`] before `now`, after the
+/// last hand-back to the agent (`handed_back`): the automatic replies then stay out. An automatic
+/// reply a person approved is not a person's message.
+pub(crate) async fn human_active(
+    r: &mut dyn TenantRepos,
+    id: ConversationId,
+    handed_back: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+) -> Result<bool, AppError> {
+    let messages = r.messages().recent(id, HUMAN_SCAN).await?;
+    for m in messages.iter().rev() {
+        if now - m.at >= HUMAN_QUIET {
+            return Ok(false);
+        }
+        if !matches!(m.author, Author::Human(_) | Author::BusinessApp) {
+            continue;
+        }
+        if m.direction == Direction::Outbound
+            && r.outbox()
+                .for_message(m.id)
+                .await?
+                .is_some_and(|row| row.intent.get("auto_reply").is_some())
+        {
+            continue;
+        }
+        return Ok(handed_back.is_none_or(|h| h < m.at));
+    }
+    Ok(false)
+}
+
+/// A person handed conversation `c` to the agent (`conversations::hand_to_agent`), in that
+/// transaction: a person's earlier message no longer keeps the automatic replies out.
+pub(crate) async fn handed_back(
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if !AUTO_REPLY_KINDS.contains(&c.kind_key.as_str()) {
+        return Ok(());
+    }
+    let mut row = r
+        .auto_reply()
+        .queue_lock(c.id)
+        .await?
+        .unwrap_or_else(|| QueueRow::idle(c.id, now));
+    row.handed_back_at = Some(now);
+    r.auto_reply().queue_save(&row).await
+}
+
+/// Whether automatic message `row` (not a hand-over's line) may still go out in conversation `c`,
+/// at claim and at approval: `Err` with `stale` when the conversation is no longer the agent's
+/// and `ours`, or a newer message moved its activity since the run answered, and `human_active`
+/// when a person wrote since.
+pub(crate) async fn still_current(
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    row: &crate::ports::inbox::OutboxRow,
+    now: OffsetDateTime,
+) -> Result<Result<(), &'static str>, AppError> {
+    let Some(auto) = row.intent.get("auto_reply") else {
+        return Ok(Ok(()));
+    };
+    if auto["handing_over"] == true {
+        return Ok(Ok(()));
+    }
+    let activity = r.conversations().send_state(c.id).await?.activity_revision;
+    if c.state != ConvState::Ours
+        || c.executor != Executor::Agent
+        || auto["activity_revision"].as_i64() != Some(activity)
+    {
+        return Ok(Err("stale"));
+    }
+    let handed_back = r
+        .auto_reply()
+        .queue_get(c.id)
+        .await?
+        .and_then(|q| q.handed_back_at);
+    if human_active(r, c.id, handed_back, now).await? {
+        return Ok(Err("human_active"));
+    }
+    Ok(Ok(()))
+}
+
+/// [`schedule`] in a transaction of its own, after the consumer committed the customer's message:
+/// a failure here is logged with its code and never undoes the message.
+pub(crate) async fn schedule_after(
+    deps: &Deps,
+    ws: WorkspaceId,
+    id: ConversationId,
+    now: OffsetDateTime,
+) {
+    let result = async {
+        let mut r = deps.uow.tenant(ws).await?;
+        r.people().lock_workspace().await?;
+        r.people().set_write_time(now).await?;
+        schedule(deps, r.as_mut(), id, now).await?;
+        r.commit().await
+    }
+    .await;
+    if let Err(e) = result {
+        tracing::warn!(job = "inbox_consume", workspace_id = %ws, code = e.code.as_str(),
+            reason = "schedule_failed", "an automatic reply could not be scheduled");
+    }
+}
+
 /// After a customer's message in conversation `id` is stored, in the consumer's transaction: when
 /// the conversation may be answered automatically, its queue row is due [`AUTOREPLY_SETTLE`] from
 /// `now`, but never later than [`AUTOREPLY_SETTLE_MAX`] after the burst's first message. Nothing
@@ -249,29 +363,35 @@ pub(crate) async fn schedule(
     let Some(c) = r.conversations().get(id).await? else {
         return Ok(());
     };
-    if !auto.serves(c.capability_id.as_uuid()) || eligible(r, &c, &auto).await?.is_err() {
+    if !auto.serves(c.capability_id.as_uuid()) {
         return Ok(());
     }
-    let row = match r.auto_reply().queue_lock(id).await? {
-        Some(mut row) => {
-            let first = if row.due_at.is_some() {
-                row.first_at
-            } else {
-                // A run holds the row: this message starts the next burst.
-                now
-            };
-            row.first_at = first;
-            row.due_at = Some((now + AUTOREPLY_SETTLE).min(first + AUTOREPLY_SETTLE_MAX));
-            row
+    let existing = r.auto_reply().queue_lock(id).await?;
+    let handed_back = existing.as_ref().and_then(|q| q.handed_back_at);
+    if let Err(reason) = eligible(r, &c, &auto, handed_back, now).await? {
+        if reason == "human_active" {
+            let ctx = system_ctx(c.workspace_id, now);
+            record(
+                r,
+                &ctx,
+                "inbox.autoreply.skipped",
+                "conversation",
+                id,
+                json!({ "reason": reason }),
+            )
+            .await?;
         }
-        None => QueueRow {
-            conversation_id: id,
-            first_at: now,
-            due_at: Some(now + AUTOREPLY_SETTLE),
-            lease_until: None,
-            attempts: 0,
-        },
-    };
+        return Ok(());
+    }
+    let mut row = existing.unwrap_or_else(|| QueueRow::idle(id, now));
+    if row.due_at.is_none() {
+        // Nothing due, or a run holds the row: this message starts the next burst.
+        row.first_at = now;
+        if row.lease_until.is_none() {
+            row.attempts = 0;
+        }
+    }
+    row.due_at = Some((now + AUTOREPLY_SETTLE).min(row.first_at + AUTOREPLY_SETTLE_MAX));
     r.auto_reply().queue_save(&row).await
 }
 
@@ -312,7 +432,11 @@ pub async fn run(deps: &Deps, now: OffsetDateTime) -> JobReport {
             return report;
         }
     };
+    let started = std::time::Instant::now();
     for ws in workspaces {
+        if started.elapsed() >= AUTOREPLY_TICK_BUDGET {
+            break;
+        }
         let due = async {
             let mut r = deps.uow.tenant(ws).await?;
             r.auto_reply().queue_takeable(now, AUTOREPLY_BATCH).await
@@ -326,8 +450,13 @@ pub async fn run(deps: &Deps, now: OffsetDateTime) -> JobReport {
             }
         };
         for id in due {
+            if started.elapsed() >= AUTOREPLY_TICK_BUDGET {
+                break;
+            }
             report.touched += 1;
-            match work(deps, &model, ws, id, now).await {
+            // Each conversation at its own time: the lease runs from when it is taken.
+            let at = deps.clock.now().max(now);
+            match work(deps, &model, ws, id, at).await {
                 Ok(Worked::Answered | Worked::HandedOver) => report.changed += 1,
                 Ok(Worked::Skipped) => report.skipped += 1,
                 Ok(Worked::Retrying) => report.failed += 1,
@@ -378,15 +507,68 @@ pub async fn work(
     };
     let answer = model.answer(&request).await;
     let ctx = system_ctx(ws, deps.clock.now().max(now));
+    let run = called(deps, &ctx, model.model(), &snapshot, &answer).await?;
     match answer {
-        Ok(answer) => settle(deps, &ctx, model.model(), &snapshot, answer).await,
+        Ok(answer) => settle(deps, &ctx, run, &snapshot, answer).await,
         Err(error) => failed(deps, &ctx, &snapshot, error).await,
     }
+}
+
+/// Records model call `answer` at once, in a transaction of its own, before anything that could
+/// roll back: its run row (outcome `failed` until step 3 says otherwise) with the answer's usage,
+/// or [`FAILED_CALL_ESTIMATE_MICRO_USD`] when none came back. Every call counts towards the day's
+/// limits and spend, whatever becomes of it.
+async fn called(
+    deps: &Deps,
+    ctx: &Ctx,
+    model: &str,
+    s: &Snapshot,
+    answer: &Result<ModelAnswer, ModelError>,
+) -> Result<RunRow, AppError> {
+    let (usage, reason) = match answer {
+        Ok(a) => (a.usage, "pending"),
+        Err(e) => (
+            Usage {
+                cost_micro_usd: FAILED_CALL_ESTIMATE_MICRO_USD,
+                ..Usage::default()
+            },
+            match e {
+                ModelError::RateLimited { .. } => "model_rate_limited",
+                ModelError::Unavailable { .. } => "model_unavailable",
+                ModelError::Rejected { .. } => "model_rejected",
+            },
+        ),
+    };
+    let run = RunRow {
+        id: deps.ids.uuid(),
+        conversation_id: s.conversation.id,
+        capability_id: s.capability.id,
+        at: ctx.now,
+        model: model.to_owned(),
+        outcome: RunOutcome::Failed,
+        reason: Some(reason.into()),
+        usage,
+        outbox_id: None,
+        quote_id: None,
+    };
+    let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+    r.auto_reply().run_insert(&run).await?;
+    r.commit().await?;
+    Ok(run)
 }
 
 enum Prepared {
     Ready(Box<Snapshot>, ModelRequest),
     Done(Worked),
+}
+
+/// Lets queue row `row` rest: nothing due, no run holding it; when a person handed the
+/// conversation back is kept.
+async fn idle(r: &mut dyn TenantRepos, mut row: QueueRow) -> Result<(), AppError> {
+    row.due_at = None;
+    row.lease_until = None;
+    row.attempts = 0;
+    r.auto_reply().queue_save(&row).await
 }
 
 /// Step 1 (see the module docs).
@@ -405,11 +587,13 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     let live = Live::read(r.as_mut()).await?;
     let auto = live.as_ref().and_then(|l| l.settings.auto_reply.clone());
     let reason = match (&c, &auto) {
-        (Some(c), Some(auto)) => eligible(r.as_mut(), c, auto).await?.err(),
+        (Some(c), Some(auto)) => eligible(r.as_mut(), c, auto, row.handed_back_at, now)
+            .await?
+            .err(),
         _ => Some("setting_off"),
     };
     if let Some(reason) = reason {
-        r.auto_reply().queue_delete(id).await?;
+        idle(r.as_mut(), row).await?;
         record(
             r.as_mut(),
             ctx,
@@ -433,19 +617,16 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         .await?
         .ok_or_else(|| AppError::not_found("no such capability"))?;
     let hand = |reason: &'static str| (reason, By::Server);
-    let held_back = if !crate::usecases::calls::within_hours(&capability, now)? {
+    let held_back = if row.attempts >= AUTOREPLY_MAX_ATTEMPTS {
+        // Its calls kept failing (or a run died after its call): a person takes it.
+        Some(hand("failed"))
+    } else if !crate::usecases::calls::within_hours(&capability, now)? {
         Some(hand("outside_active_hours"))
     } else {
         let (day_start, _) = crate::usecases::calls::local_day(&capability, now);
         let today = Today {
-            conversation_sent: r
-                .auto_reply()
-                .runs_sent_since(Some(id), None, day_start)
-                .await?,
-            workspace_sent: r
-                .auto_reply()
-                .runs_sent_since(None, None, day_start)
-                .await?,
+            conversation_sent: r.auto_reply().runs_since(Some(id), day_start).await?,
+            workspace_sent: r.auto_reply().runs_since(None, day_start).await?,
             spend_micro_usd: r.auto_reply().runs_spend_since(day_start).await?,
         };
         rules::limit_reached(LIMITS, today).map(hand)
@@ -466,7 +647,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
             },
         )
         .await?;
-        r.auto_reply().queue_delete(id).await?;
+        idle(r.as_mut(), row).await?;
         r.commit().await?;
         return Ok(Prepared::Done(Worked::HandedOver));
     }
@@ -476,7 +657,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         .last()
         .is_none_or(|t| t.speaker != Speaker::Customer)
     {
-        r.auto_reply().queue_delete(id).await?;
+        idle(r.as_mut(), row).await?;
         record(
             r.as_mut(),
             ctx,
@@ -515,21 +696,23 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     };
     row.due_at = None;
     row.lease_until = Some(now + AUTOREPLY_LEASE);
+    row.attempts += 1;
     r.auto_reply().queue_save(&row).await?;
     r.commit().await?;
     Ok(Prepared::Ready(Box::new(snapshot), request))
 }
 
 /// The conversation's messages as the model reads them: the customer's and the business's turns,
-/// consecutive messages of one speaker in one turn, from the first customer message on. Messages
-/// that never reached the customer (refused, failed) are left out.
+/// consecutive messages of one speaker in one turn, from the first customer message on. Of the
+/// business's messages only those that went out (sent, delivered) are read: queued, held,
+/// refused, failed and uncertain ones never reached the customer.
 pub(crate) fn history(messages: &[Message]) -> Vec<Turn> {
     let mut turns: Vec<Turn> = Vec::new();
     for m in messages {
         let speaker = match m.direction {
             Direction::Inbound => Speaker::Customer,
             Direction::Outbound => {
-                if matches!(m.status, MsgStatus::Refused { .. } | MsgStatus::Failed) {
+                if !matches!(m.status, MsgStatus::Sent | MsgStatus::Delivered) {
                     continue;
                 }
                 Speaker::Business
@@ -631,30 +814,23 @@ impl By {
 async fn settle(
     deps: &Deps,
     ctx: &Ctx,
-    model: &str,
+    mut run: RunRow,
     s: &Snapshot,
     answer: ModelAnswer,
 ) -> Result<Worked, AppError> {
     let id = s.conversation.id;
-    let run_id = deps.ids.uuid();
+    let run_id = run.id;
+    let model = run.model.clone();
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
     let row = r.auto_reply().queue_lock(id).await?;
     let c = r.conversations().lock(id).await?;
     let activity = r.conversations().send_state(id).await?.activity_revision;
-    let mut run = RunRow {
-        id: run_id,
-        conversation_id: id,
-        capability_id: s.capability.id,
-        at: ctx.now,
-        model: model.to_owned(),
-        outcome: RunOutcome::Skipped,
-        reason: None,
-        usage: answer.usage,
-        outbox_id: None,
-        quote_id: None,
-    };
+    run.outcome = RunOutcome::Skipped;
+    run.reason = None;
+    let handed_back = row.as_ref().and_then(|q| q.handed_back_at);
+    let human = human_active(r.as_mut(), id, handed_back, ctx.now).await?;
     let changed = match &c {
         None => Some("conversation_gone"),
         Some(_) if row.is_none() => Some("withdrawn"),
@@ -663,6 +839,7 @@ async fn settle(
         }
         Some(c) if c.state != ConvState::Ours => Some("not_ours"),
         Some(_) if activity != s.activity_revision => Some("activity_changed"),
+        Some(_) if human => Some("human_active"),
         Some(_) => None,
     };
     if let Some(reason) = changed {
@@ -682,12 +859,12 @@ async fn settle(
     }
     let c = c.ok_or_else(|| AppError::internal("checked above"))?;
     let decided = decide(deps, ctx, r.as_mut(), s, &c, run_id, answer).await?;
+    let usage = run.usage;
     run.outcome = decided.outcome;
     run.reason = decided.reason.clone();
     run.outbox_id = decided.outbox_id;
     run.quote_id = decided.quote_id;
     finish(r.as_mut(), row, &run).await?;
-    let usage = run.usage;
     match decided.outcome {
         RunOutcome::Replied => {
             record(
@@ -744,20 +921,21 @@ async fn settle(
     })
 }
 
-/// Stores run `run` and lets the queue row go: removed, unless a newer message made it due again
-/// while the model was asked (then only its lease ends).
+/// Stores what became of run `run` and lets the queue row rest, unless a newer message made it
+/// due again while the model was asked (then only its lease ends, for a new burst).
 async fn finish(
     r: &mut dyn TenantRepos,
     row: Option<QueueRow>,
     run: &RunRow,
 ) -> Result<(), AppError> {
-    r.auto_reply().run_insert(run).await?;
+    r.auto_reply().run_update(run).await?;
     match row {
         Some(mut row) if row.due_at.is_some() => {
             row.lease_until = None;
+            row.attempts = 0;
             r.auto_reply().queue_save(&row).await
         }
-        Some(_) => r.auto_reply().queue_delete(run.conversation_id).await,
+        Some(row) => idle(r, row).await,
         None => Ok(()),
     }
 }
@@ -827,7 +1005,7 @@ async fn decide(
             let Some(journey) = super::active_or_latest_journey(r, c.person_id).await? else {
                 return server_refused(deps, ctx, r, c, run_id, "no_journey").await;
             };
-            if !r.quotes().list(journey.id).await?.is_empty() {
+            if quote_used(r, journey.id).await? {
                 return server_refused(deps, ctx, r, c, run_id, "requote").await;
             }
             let amount_minor = match rules::check_quote(amount, &text, s.range, &s.cards) {
@@ -901,6 +1079,30 @@ async fn decide(
     }
 }
 
+/// Whether journey `journey` has used its one automatic quote: a quote a person sent counts, an
+/// automatic one only once its message went out (a held, discarded or refused one does not).
+async fn quote_used(r: &mut dyn TenantRepos, journey: JourneyId) -> Result<bool, AppError> {
+    for q in r.quotes().list(journey).await? {
+        let Some(run) = r.auto_reply().run_by_quote(q.id).await? else {
+            return Ok(true);
+        };
+        let Some(outbox) = run.outbox_id else {
+            continue;
+        };
+        let Some(row) = r.outbox().get(outbox).await? else {
+            continue;
+        };
+        let sent = match r.messages().get(row.message_id).await? {
+            Some(m) => matches!(m.status, MsgStatus::Sent | MsgStatus::Delivered),
+            None => false,
+        };
+        if sent || row.state == "sent" || row.state == "sending" || row.state == "unknown" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The server turned down what the model wrote: ledger `inbox.autoreply.refused`, then the
 /// conversation goes to a person with that reason.
 async fn server_refused(
@@ -951,9 +1153,12 @@ async fn queue(
     text: &str,
     quote: Option<&QuoteRow>,
 ) -> Result<Decided, AppError> {
+    // One held automatic reply at a time: an older one waiting for approval gives way.
+    replies::supersede_held_auto(r, ctx, c.id).await?;
     let send = replies::AutoSend {
         run_id,
         expected_generation: s.generation,
+        activity_revision: s.activity_revision,
         quote,
         handing_over: false,
     };
@@ -1097,15 +1302,18 @@ async fn hand_over(
     let send = replies::AutoSend {
         run_id: h.run_id.unwrap_or_else(|| deps.ids.uuid()),
         expected_generation: generation,
+        activity_revision: r.conversations().send_state(c.id).await?.activity_revision,
         quote: None,
         handing_over: true,
     };
     Ok(enqueue(deps, ctx, r, c.id, line, &send).await?.ok())
 }
 
-/// The model gave no answer: once after a rate limit or an outage the conversation is asked
-/// again (after the provider's wait, at most [`AUTOREPLY_RETRY_MAX`]); after that, or for a
-/// refused request, it goes to a person when it is still the agent's as it was.
+/// The model gave no answer (its call is recorded already, [`called`]): after a rate limit or an
+/// outage the conversation is asked again (after the provider's wait, at most
+/// [`AUTOREPLY_RETRY_MAX`]) until the row took [`AUTOREPLY_MAX_ATTEMPTS`] calls; after that
+/// (`failed`), or for a refused request (`model_rejected`), it goes to a person when it is still
+/// the agent's as it was.
 async fn failed(
     deps: &Deps,
     ctx: &Ctx,
@@ -1137,11 +1345,10 @@ async fn failed(
         "inbox.autoreply.failed",
         "conversation",
         id,
-        json!({ "reason": reason, "attempt": row.attempts + 1 }),
+        json!({ "reason": reason, "attempt": row.attempts }),
     )
     .await?;
-    if let Some(wait) = retry.filter(|_| row.attempts < AUTOREPLY_RETRIES) {
-        row.attempts += 1;
+    if let Some(wait) = retry.filter(|_| row.attempts < AUTOREPLY_MAX_ATTEMPTS) {
         let at = ctx.now + wait;
         row.due_at = Some(row.due_at.map_or(at, |d| d.max(at)));
         row.lease_until = None;
@@ -1162,7 +1369,7 @@ async fn failed(
             let reason = if reason == "model_rejected" {
                 "model_rejected"
             } else {
-                "model_unavailable"
+                "failed"
             };
             hand_over(
                 deps,
@@ -1185,9 +1392,10 @@ async fn failed(
     };
     if row.due_at.is_some() && worked == Worked::Skipped {
         row.lease_until = None;
+        row.attempts = 0;
         r.auto_reply().queue_save(&row).await?;
     } else {
-        r.auto_reply().queue_delete(id).await?;
+        idle(r.as_mut(), row).await?;
     }
     r.commit().await?;
     Ok(worked)

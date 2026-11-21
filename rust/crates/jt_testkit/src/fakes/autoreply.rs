@@ -40,6 +40,17 @@ impl AutoReplyRepo for MemTenant {
             .map(|(_, r)| r.clone()))
     }
 
+    async fn queue_get(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .auto_reply
+            .queue
+            .iter()
+            .find(|(w, r)| *w == ws && r.conversation_id == id)
+            .map(|(_, r)| r.clone()))
+    }
+
     async fn queue_save(&mut self, row: &QueueRow) -> Result<(), AppError> {
         let row = row.clone();
         self.call(|this| {
@@ -114,6 +125,58 @@ impl AutoReplyRepo for MemTenant {
                 .write(move |s| s.auto_reply.runs.push((ws, run.clone())));
             Ok(())
         })
+    }
+
+    async fn run_update(&mut self, run: &RunRow) -> Result<(), AppError> {
+        let run = run.clone();
+        let ws = self.ws;
+        self.call(|this| {
+            if !this
+                .state()
+                .auto_reply
+                .runs
+                .iter()
+                .any(|(w, r)| *w == ws && r.id == run.id)
+            {
+                return Err(AppError::not_found("no such automatic reply run"));
+            }
+            this.tx.write(move |s| {
+                for (w, r) in &mut s.auto_reply.runs {
+                    if *w == ws && r.id == run.id {
+                        *r = run.clone();
+                    }
+                }
+            });
+            Ok(())
+        })
+    }
+
+    async fn run_by_quote(&mut self, quote: uuid::Uuid) -> Result<Option<RunRow>, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .auto_reply
+            .runs
+            .iter()
+            .find(|(w, r)| *w == ws && r.quote_id == Some(quote))
+            .map(|(_, r)| r.clone()))
+    }
+
+    async fn runs_since(
+        &mut self,
+        conversation: Option<ConversationId>,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .auto_reply
+            .runs
+            .iter()
+            .filter(|(w, r)| {
+                *w == ws && r.at >= since && conversation.is_none_or(|c| r.conversation_id == c)
+            })
+            .count() as u32)
     }
 
     async fn runs_sent_since(

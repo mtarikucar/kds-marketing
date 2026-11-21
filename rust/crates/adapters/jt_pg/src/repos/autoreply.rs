@@ -4,14 +4,14 @@
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
-use jt_app::ports::reply_model::{AutoReplyRepo, QueueRow, RunRow, Usage};
+use jt_app::ports::reply_model::{AutoReplyRepo, QueueRow, RunOutcome, RunRow, Usage};
 use jt_capability::CapabilityId;
 use jt_inbox::ConversationId;
 use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::{FOREIGN_KEY_VIOLATION, dangling, map_sqlx};
+use super::{FOREIGN_KEY_VIOLATION, dangling, map_sqlx, stored};
 use crate::tx::PlatformTx;
 use crate::uow::PgTenantRepos;
 
@@ -45,6 +45,7 @@ struct QueueRecord {
     due_at: Option<OffsetDateTime>,
     lease_until: Option<OffsetDateTime>,
     attempts: i32,
+    handed_back_at: Option<OffsetDateTime>,
 }
 
 impl QueueRecord {
@@ -56,6 +57,51 @@ impl QueueRecord {
             lease_until: self.lease_until,
             attempts: u32::try_from(self.attempts)
                 .map_err(|_| AppError::internal("stored attempts are negative"))?,
+            handed_back_at: self.handed_back_at,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct RunRecord {
+    id: Uuid,
+    conversation_id: Uuid,
+    capability_id: Uuid,
+    at: OffsetDateTime,
+    model: String,
+    outcome: String,
+    reason: Option<String>,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_write_tokens: i64,
+    cache_read_tokens: i64,
+    cost_micro_usd: i64,
+    outbox_id: Option<Uuid>,
+    quote_id: Option<Uuid>,
+}
+
+impl RunRecord {
+    fn into_run(self) -> Result<RunRow, AppError> {
+        let count = |n: i64| {
+            u64::try_from(n).map_err(|_| AppError::internal("a stored token count is negative"))
+        };
+        Ok(RunRow {
+            id: self.id,
+            conversation_id: ConversationId::from(self.conversation_id),
+            capability_id: CapabilityId(self.capability_id),
+            at: self.at,
+            model: self.model,
+            outcome: stored(RunOutcome::parse(&self.outcome), "auto_reply_runs.outcome")?,
+            reason: self.reason,
+            usage: Usage {
+                input_tokens: count(self.input_tokens)?,
+                output_tokens: count(self.output_tokens)?,
+                cache_write_tokens: count(self.cache_write_tokens)?,
+                cache_read_tokens: count(self.cache_read_tokens)?,
+                cost_micro_usd: self.cost_micro_usd,
+            },
+            outbox_id: self.outbox_id,
+            quote_id: self.quote_id,
         })
     }
 }
@@ -70,7 +116,7 @@ impl AutoReplyRepo for PgTenantRepos {
     async fn queue_lock(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError> {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
-            "select conversation_id, first_at, due_at, lease_until, attempts from \
+            "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at from \
              auto_reply_queue where workspace_id = $1 and conversation_id = $2 for update",
         )
         .bind(ws.as_uuid())
@@ -81,16 +127,30 @@ impl AutoReplyRepo for PgTenantRepos {
         record.map(QueueRecord::into_row).transpose()
     }
 
+    async fn queue_get(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError> {
+        let ws = self.workspace_id();
+        let record: Option<QueueRecord> = sqlx::query_as(
+            "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at from \
+             auto_reply_queue where workspace_id = $1 and conversation_id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read an automatic reply's queue row"))?;
+        record.map(QueueRecord::into_row).transpose()
+    }
+
     async fn queue_save(&mut self, row: &QueueRow) -> Result<(), AppError> {
         let ws = self.workspace_id();
         let attempts = i32::try_from(row.attempts)
             .map_err(|_| AppError::internal("attempts are out of range"))?;
         sqlx::query(
             "insert into auto_reply_queue (workspace_id, conversation_id, first_at, due_at, \
-             lease_until, attempts) values ($1, $2, $3, $4, $5, $6) \
+             lease_until, attempts, handed_back_at) values ($1, $2, $3, $4, $5, $6, $7) \
              on conflict (workspace_id, conversation_id) do update set first_at = excluded.first_at, \
              due_at = excluded.due_at, lease_until = excluded.lease_until, \
-             attempts = excluded.attempts",
+             attempts = excluded.attempts, handed_back_at = excluded.handed_back_at",
         )
         .bind(ws.as_uuid())
         .bind(row.conversation_id.as_uuid())
@@ -98,6 +158,7 @@ impl AutoReplyRepo for PgTenantRepos {
         .bind(row.due_at)
         .bind(row.lease_until)
         .bind(attempts)
+        .bind(row.handed_back_at)
         .execute(self.tx.conn())
         .await
         .map_err(|e| match &e {
@@ -180,6 +241,70 @@ impl AutoReplyRepo for PgTenantRepos {
             return Err(AppError::conflict("duplicate automatic reply run"));
         }
         Ok(())
+    }
+
+    async fn run_update(&mut self, run: &RunRow) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        let u = run.usage;
+        let done = sqlx::query(
+            "update auto_reply_runs set outcome = $3, reason = $4, input_tokens = $5, \
+             output_tokens = $6, cache_write_tokens = $7, cache_read_tokens = $8, \
+             cost_micro_usd = $9, outbox_id = $10, quote_id = $11 \
+             where workspace_id = $1 and id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(run.id)
+        .bind(run.outcome.key())
+        .bind(run.reason.as_deref())
+        .bind(tokens(u.input_tokens)?)
+        .bind(tokens(u.output_tokens)?)
+        .bind(tokens(u.cache_write_tokens)?)
+        .bind(tokens(u.cache_read_tokens)?)
+        .bind(u.cost_micro_usd)
+        .bind(run.outbox_id)
+        .bind(run.quote_id)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "update an automatic reply's run"))?;
+        if done.rows_affected() == 0 {
+            return Err(AppError::not_found("no such automatic reply run"));
+        }
+        Ok(())
+    }
+
+    async fn run_by_quote(&mut self, quote: Uuid) -> Result<Option<RunRow>, AppError> {
+        let ws = self.workspace_id();
+        let record: Option<RunRecord> = sqlx::query_as(
+            "select id, conversation_id, capability_id, at, model, outcome, reason, input_tokens, \
+             output_tokens, cache_write_tokens, cache_read_tokens, cost_micro_usd, outbox_id, \
+             quote_id from auto_reply_runs where workspace_id = $1 and quote_id = $2 \
+             order by at limit 1",
+        )
+        .bind(ws.as_uuid())
+        .bind(quote)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read an automatic quote's run"))?;
+        record.map(RunRecord::into_run).transpose()
+    }
+
+    async fn runs_since(
+        &mut self,
+        conversation: Option<ConversationId>,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let ws = self.workspace_id();
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from auto_reply_runs where workspace_id = $1 and at >= $2 \
+             and ($3::uuid is null or conversation_id = $3)",
+        )
+        .bind(ws.as_uuid())
+        .bind(since)
+        .bind(conversation.map(|c| c.as_uuid()))
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count the automatic replies' model calls"))?;
+        u32::try_from(n).map_err(|_| AppError::internal("a count is out of range"))
     }
 
     async fn runs_sent_since(

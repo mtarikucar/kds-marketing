@@ -8,10 +8,11 @@
 alter table knowledge_settings add column if not exists auto_reply jsonb
     check (auto_reply is null or jsonb_typeof(auto_reply) = 'object');
 
--- One row per conversation waiting for an automatic reply: the customer's first message of the
--- burst (`first_at`), when the reply is due (`due_at`, after the last message, never later than
--- a bound after the first; null while a run holds it), the run's lease, and how many model calls
--- failed for it.
+-- One row per conversation the automatic replies have worked on (kept, idle, once made): the
+-- customer's first message of the burst (`first_at`), when the reply is due (`due_at`, after the
+-- last message, never later than a bound after the first; null while a run holds it or nothing is
+-- due), the run's lease, how many model calls the burst took, and when a person last handed the
+-- conversation back to the agent.
 create table if not exists auto_reply_queue (
     workspace_id uuid not null references workspaces (id) on delete cascade,
     conversation_id uuid not null,
@@ -19,6 +20,8 @@ create table if not exists auto_reply_queue (
     due_at timestamptz,
     lease_until timestamptz,
     attempts integer not null default 0 check (attempts >= 0),
+    -- When a person last handed the conversation back to the agent.
+    handed_back_at timestamptz,
     primary key (workspace_id, conversation_id),
     foreign key (conversation_id, workspace_id) references conversations (id, workspace_id)
         on delete cascade

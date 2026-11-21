@@ -9,7 +9,8 @@ use std::sync::Arc;
 use jt_app::ports::UnitOfWork;
 use jt_app::ports::connectors::{InboundEventDraft, SendReceipt};
 use jt_app::ports::reply_model::{
-    AUTOREPLY_SETTLE, ModelAnswer, ModelError, ModelStop, ModelTool, PER_CONVERSATION_DAILY, Part,
+    AUTOREPLY_BATCH, AUTOREPLY_MAX_ATTEMPTS, AUTOREPLY_SETTLE, FAILED_CALL_ESTIMATE_MICRO_USD,
+    HUMAN_QUIET, ModelAnswer, ModelError, ModelStop, ModelTool, PER_CONVERSATION_DAILY, Part,
     RunOutcome, RunRow, Speaker, Usage, WORKSPACE_DAILY_SPEND_MICRO_USD,
 };
 use jt_app::usecases::inbox::{context, conversations, public, replies};
@@ -100,6 +101,9 @@ async fn setup_with(with_model: bool, active: bool) -> T {
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     r.capabilities().insert(cap, Some(sealed)).await.unwrap();
     r.commit().await.unwrap();
+    jt_app::usecases::modules::install(&w.deps, &w.owner_ctx, "inbox", Default::default())
+        .await
+        .unwrap();
     T {
         w,
         cap: id,
@@ -312,7 +316,10 @@ async fn three_messages_within_the_settle_time_make_one_call_and_one_send() {
     let row = &s.inbox.outbox[0];
     assert_eq!(row.intent["use_case"], "inbox.reply");
     assert!(row.intent["auto_reply"]["run_id"].is_string());
-    assert!(s.auto_reply.queue.is_empty(), "the queue row is done");
+    assert!(
+        s.auto_reply.queue.iter().all(|(_, q)| q.is_idle()),
+        "the queue row rests"
+    );
     // The run holds the scripted usage and its cost; the ledger numbers and codes only.
     let run = &runs(&t)[0];
     assert_eq!(run.outcome, RunOutcome::Replied);
@@ -685,7 +692,7 @@ async fn a_refusal_or_an_answer_without_a_tool_goes_to_a_person() {
 }
 
 #[tokio::test]
-async fn a_rate_limit_is_asked_again_once_then_handed_over() {
+async fn failed_calls_are_asked_again_counted_and_then_handed_over() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
     t.model.answer(Err(ModelError::RateLimited {
@@ -694,16 +701,45 @@ async fn a_rate_limit_is_asked_again_once_then_handed_over() {
     let report = job(&t, due(0)).await;
     assert_eq!(report.failed, 1);
     assert_eq!(conversation(&t).executor, Executor::Agent);
+    // The failed call is a run of its own, counted at the conservative estimate.
+    let first = &runs(&t)[0];
+    assert_eq!(first.outcome, RunOutcome::Failed);
+    assert_eq!(first.reason.as_deref(), Some("model_rate_limited"));
+    assert_eq!(first.usage.cost_micro_usd, FAILED_CALL_ESTIMATE_MICRO_USD);
     t.model
         .answer(Err(ModelError::Unavailable { status: Some(529) }));
     job(&t, due(0) + Duration::seconds(5)).await;
-    assert_eq!(t.model.requests().len(), 2);
+    t.model
+        .answer(Err(ModelError::Unavailable { status: Some(500) }));
+    job(&t, due(0) + Duration::seconds(30)).await;
+    assert_eq!(t.model.requests().len(), AUTOREPLY_MAX_ATTEMPTS as usize);
+    assert_eq!(runs(&t).len(), 3);
     handed_to_a_person(&t);
-    assert_eq!(
-        reasons(&t, "inbox.autoreply.handed_over"),
-        ["model_unavailable"]
+    assert_eq!(reasons(&t, "inbox.autoreply.handed_over"), ["failed"]);
+    assert!(
+        t.w.uow
+            .snapshot()
+            .auto_reply
+            .queue
+            .iter()
+            .all(|(_, q)| q.is_idle())
     );
-    assert!(t.w.uow.snapshot().auto_reply.queue.is_empty());
+}
+
+#[tokio::test]
+async fn a_row_whose_calls_died_three_times_goes_to_a_person_without_another_call() {
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    // Three runs took their call and died before step 3 (their leases ran out).
+    t.w.uow.edit(|st| {
+        for (_, q) in &mut st.auto_reply.queue {
+            q.attempts = AUTOREPLY_MAX_ATTEMPTS;
+        }
+    });
+    job(&t, due(0)).await;
+    assert!(t.model.requests().is_empty());
+    handed_to_a_person(&t);
+    assert_eq!(reasons(&t, "inbox.autoreply.handed_over"), ["failed"]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -859,4 +895,226 @@ async fn erasing_the_person_drops_what_waits_to_answer_them() {
     .unwrap();
     assert!(t.w.uow.snapshot().auto_reply.queue.is_empty());
     assert_eq!(job(&t, due(0)).await.touched, 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review findings (2026-11-21)
+// ---------------------------------------------------------------------------------------------
+
+/// Requires approval on every capability: automatic replies wait as held rows.
+fn require_approval(t: &T) {
+    t.w.uow.edit(|st| {
+        for c in &mut st.capabilities {
+            c.capability.policy.requires_human_approval = true;
+        }
+    });
+}
+
+#[tokio::test]
+async fn a_persons_reply_in_the_panel_keeps_the_replies_out_until_handed_back() {
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    // The owner answers in the panel before the reply is due, without taking it over.
+    t.meta.push_send_text(accepted());
+    replies::reply(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(2)),
+        conversation(&t).id,
+        serde_json::from_value(json!({"text": "Ben bakıyorum.", "intent": "reply"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    // The person's answer made the conversation theirs.
+    job(&t, due(0)).await;
+    assert!(t.model.requests().is_empty());
+    // The customer writes again within the day: ours again, but the person's answer keeps the
+    // automatic replies out.
+    inbound(&t, 2, 60).await;
+    assert_eq!(conversation(&t).state, ConvState::Ours);
+    assert!(
+        t.w.uow
+            .snapshot()
+            .auto_reply
+            .queue
+            .iter()
+            .all(|(_, q)| q.is_idle())
+    );
+    job(&t, due(60)).await;
+    assert!(t.model.requests().is_empty());
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.skipped"),
+        ["not_ours", "human_active"]
+    );
+    // Handed back to the agent: the next message is answered.
+    conversations::hand_to_agent(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(90)),
+        conversation(&t).id,
+    )
+    .await
+    .unwrap();
+    inbound(&t, 3, 120).await;
+    t.model.answer(reply("Merhaba!"));
+    t.meta.push_send_text(accepted());
+    job(&t, due(120)).await;
+    assert_eq!(t.model.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn an_answer_from_the_phone_keeps_the_replies_out_for_a_day() {
+    let t = setup().await;
+    let mut echo = meta_drafts("whatsapp_business_app").remove(0);
+    let at_echo = FIXED_NOW_T - Duration::hours(1);
+    echo.payload["occurred_at"] = json!(at_echo.format(&Rfc3339).unwrap());
+    put(&t, echo, at_echo).await;
+    jobs::run_inbox_consume(&t.w.deps, at_echo + Duration::seconds(1)).await;
+    // The customer writes again an hour later: the conversation is ours again, but not served.
+    inbound(&t, 0, 0).await;
+    assert_eq!(conversation(&t).state, ConvState::Ours);
+    job(&t, due(0)).await;
+    assert!(t.model.requests().is_empty());
+    // A day after the phone's answer, a new message is answered again.
+    let later = (HUMAN_QUIET + Duration::minutes(5)).whole_seconds();
+    inbound(&t, 2, later).await;
+    t.model.answer(reply("Merhaba!"));
+    t.meta.push_send_text(accepted());
+    job(&t, due(later)).await;
+    assert_eq!(t.model.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn a_hand_over_line_that_names_money_is_not_sent() {
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(tool(ModelTool::HandOver {
+        reason: "out_of_standard".into(),
+        summary: "Toplu sipariş.".into(),
+        text: Some("Toplu siparişe %20 indirim yaparız, ekibimiz yazacak.".into()),
+    }));
+    job(&t, due(0)).await;
+    handed_to_a_person(&t);
+    assert!(texts_sent(&t).is_empty());
+}
+
+#[tokio::test]
+async fn a_held_reply_approved_after_a_newer_message_is_refused_as_stale() {
+    let t = setup().await;
+    require_approval(&t);
+    inbound(&t, 0, 0).await;
+    t.model.answer(reply("Merhaba!"));
+    job(&t, due(0)).await;
+    let row = t.w.uow.snapshot().inbox.outbox[0].clone();
+    assert_eq!(row.state, "held");
+    inbound(&t, 2, 30).await;
+    let e = public::approve(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(31)),
+        row.id,
+        public::ApproveInput { text: None },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["reason"], "stale");
+    assert!(texts_sent(&t).is_empty());
+    let s = t.w.uow.snapshot();
+    let refused = s.inbox.outbox.iter().find(|o| o.id == row.id).unwrap();
+    assert_eq!(refused.state, "refused");
+    assert_eq!(refused.last_error.as_deref(), Some("stale"));
+}
+
+#[tokio::test]
+async fn a_newer_run_supersedes_a_held_reply_and_never_reads_it() {
+    let t = setup().await;
+    require_approval(&t);
+    inbound(&t, 0, 0).await;
+    t.model.answer(reply("İlk taslak yanıt."));
+    job(&t, due(0)).await;
+    inbound(&t, 2, 60).await;
+    t.model.answer(reply("İkinci taslak yanıt."));
+    job(&t, due(60)).await;
+    let second = &t.model.requests()[1];
+    let read: Vec<String> = second
+        .history
+        .iter()
+        .flat_map(|turn| turn.parts.iter())
+        .map(|Part::Text { text }| text.clone())
+        .collect();
+    assert!(
+        !read.iter().any(|t| t.contains("İlk taslak")),
+        "a held reply never went out"
+    );
+    let s = t.w.uow.snapshot();
+    let states: Vec<(&str, Option<&str>)> = s
+        .inbox
+        .outbox
+        .iter()
+        .map(|o| (o.state.as_str(), o.last_error.as_deref()))
+        .collect();
+    assert_eq!(states, [("refused", Some("superseded")), ("held", None)]);
+}
+
+#[tokio::test]
+async fn a_discarded_automatic_quote_does_not_use_up_the_journeys_quote() {
+    let t = setup().await;
+    require_approval(&t);
+    inbound(&t, 0, 0).await;
+    t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
+    job(&t, due(0)).await;
+    let held = t.w.uow.snapshot().inbox.outbox[0].clone();
+    public::discard(&t.w.deps, &at(&t.w.owner_ctx, consumed_at(5)), held.id)
+        .await
+        .unwrap();
+    inbound(&t, 2, 60).await;
+    t.model.answer(quote(1_300, "Teklifimiz 1.300 TL."));
+    job(&t, due(60)).await;
+    assert!(
+        reasons(&t, "inbox.autoreply.refused").is_empty(),
+        "no requote"
+    );
+    assert_eq!(t.w.uow.snapshot().inbox.quotes.len(), 2);
+    assert_eq!(runs(&t)[1].outcome, RunOutcome::Quoted);
+}
+
+#[tokio::test]
+async fn a_failure_to_schedule_never_undoes_the_customers_message() {
+    let t = setup().await;
+    let ws = t.w.ws;
+    // A module registry that cannot be read makes the schedule's checks fail.
+    t.w.uow.edit(|st| {
+        st.module_registries.retain(|(w, _)| *w != ws);
+        st.module_registries.push((ws, json!("unreadable")));
+    });
+    inbound(&t, 0, 0).await;
+    let s = t.w.uow.snapshot();
+    assert_eq!(s.inbox.messages.len(), 1, "the message is stored");
+    assert!(s.auto_reply.queue.is_empty());
+}
+
+#[tokio::test]
+async fn one_tick_works_at_most_a_batch_per_workspace() {
+    let t = setup().await;
+    let n = AUTOREPLY_BATCH as usize + 2;
+    for i in 0..n {
+        let mut draft = meta_drafts("whatsapp_messages").remove(0);
+        let wamid = format!("wamid.TEST-BATCH-{i}");
+        draft.payload["message"]["from"] = json!(format!("90544000{:04}", i));
+        draft.payload["message"]["id"] = json!(wamid.clone());
+        draft.external_id = wamid;
+        draft.payload["occurred_at"] = json!(FIXED_NOW_T.format(&Rfc3339).unwrap());
+        put(&t, draft, FIXED_NOW_T).await;
+    }
+    assert_eq!(
+        jobs::run_inbox_consume(&t.w.deps, consumed_at(0))
+            .await
+            .failed,
+        0
+    );
+    for _ in 0..n {
+        t.model.answer(reply("Merhaba!"));
+        t.meta.push_send_text(accepted());
+    }
+    let first = job(&t, due(0)).await;
+    assert_eq!(first.touched, u64::from(AUTOREPLY_BATCH));
+    let second = job(&t, due(0) + Duration::seconds(3)).await;
+    assert_eq!(second.touched, 2);
 }

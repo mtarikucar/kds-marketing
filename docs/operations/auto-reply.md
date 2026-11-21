@@ -38,16 +38,25 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   the first); the `inbox_auto_reply` job runs every 3 s. The model reads the fixed instructions,
   the workspace's cards, rules, notes and range, and the last 30 messages.
 - It answers through one tool: a reply, a quote, or a hand-over to a person.
-- The server checks every answer: a reply names no money amount (a number next to TL, ₺, lira or
-  TRY, or a number of four digits or more) and no link the cards lack; a quote is within the range,
-  states that amount only and is the journey's first; the currency is the workspace's.
-- It stops when a person takes the conversation over, when the owner answers from the phone's
-  Business App, or when a newer message arrives (that one is answered instead).
+- The server checks every answer: a reply (and a hand-over's line) names no money: no currency word
+  or symbol (TL, ₺, TRY, lira and its suffixed forms, dolar, euro, $, €, USD, EUR), no "bin" after
+  a number, no percent, discount or VAT wording, and no bare number of three digits or more unless
+  it is a date, a time, a year (2020-2039), a phone number or a quantity with its unit. No link
+  the cards lack (any `label.tld`; the same host, and path if given, must appear in the cards). A
+  quote is within the range, states that amount exactly once and nothing else of money, and is
+  the journey's first one that went out; the currency is the workspace's.
+- It stops when a person takes the conversation over, or when a newer message arrives (that one is
+  answered instead). After a person writes in the conversation (in the panel, or from the phone's
+  Business App) it stays out for 24 hours, unless a person hands the conversation back to the
+  agent. A held or queued automatic reply whose conversation moved on is refused (`stale`).
 - The capability's policy applies: approval (the reply waits in the approvals list), working hours
   (outside them the conversation goes to a person) and the daily cap.
-- Limits per local day: 12 automatic messages per conversation, 300 per workspace, $2 of model cost
+- Limits per local day: 12 model calls per conversation, 300 per workspace, $2 of model cost
   per workspace. Reaching one hands the conversation over.
-- A rate limit or an outage is asked again once; then the conversation goes to a person.
+- Every model call is recorded at once and counts towards the day's limits and spend (a failed
+  call at a conservative estimate). A rate limit or an outage is asked again; after three calls on
+  one burst the conversation goes to a person (`failed`). One tick works at most five
+  conversations per workspace and stops starting new ones after 20 s.
 - A hand-over: the conversation goes to the journey's owner (or the unassigned queue), the model's
   summary becomes a journey note, and its short line to the customer is sent when it passes the
   same rules. The conversation then shows in the owner's home list and in the inbox queue. No email

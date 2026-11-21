@@ -242,6 +242,9 @@ pub(crate) struct AutoSend<'a> {
     /// The executor generation the message is for: the one the model was asked under, so that a
     /// hand-over since refuses it (at queueing, at claim and at approval alike).
     pub expected_generation: u32,
+    /// The conversation's activity revision the run answered: a newer message since refuses it
+    /// at claim and at approval (`stale`, `autoreply::still_current`).
+    pub activity_revision: i64,
     /// The quote it delivers, when it is one.
     pub quote: Option<&'a crate::ports::compliance::QuoteRow>,
     /// A hand-over's line to the customer: written as the system's (a person holds the
@@ -575,7 +578,11 @@ pub(crate) async fn enqueue_in(
     match &purpose {
         Purpose::Reply => {}
         Purpose::AutoReply(a) => {
-            intent["auto_reply"] = json!({ "run_id": a.run_id });
+            intent["auto_reply"] = json!({
+                "run_id": a.run_id,
+                "activity_revision": a.activity_revision,
+                "handing_over": a.handing_over,
+            });
             if let Some(quote) = a.quote {
                 intent["quote_id"] = json!(quote.id);
                 intent["quote_response"] = serde_json::to_value(quote)?;
@@ -1388,6 +1395,14 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         .await
         .map(|passed| passed.basis),
     };
+    // An automatic message goes out only into the conversation it answered (spec addendum C).
+    let fenced = match fenced {
+        Ok(basis) => super::autoreply::still_current(r.as_mut(), &c, &row, ctx.now)
+            .await?
+            .map(|()| basis)
+            .map_err(refused),
+        Err(e) => Err(e),
+    };
     let basis = match fenced.and_then(|basis| footer_ready(&row, &cap).map(|()| basis)) {
         Ok(basis) => basis,
         Err(e) if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) => {
@@ -1890,7 +1905,11 @@ async fn record_result_with(
                     json!({"message_id":row.message_id,"journey_id":journey_id}),
                 )
                 .await?;
-            } else if !row.conversation_merged {
+            } else if !row.conversation_merged
+                // A hand-over's line to the customer leaves the conversation owed to the person
+                // it went to (`autoreply`): it does not answer the customer.
+                && row.intent["auto_reply"]["handing_over"] != true
+            {
                 // Coalesced sends reconcile receipts and journeys but never conversation activity,
                 // even if undo has restored the original conversation before this receipt.
                 // A moved outbox must not compare revisions from different conversations.
@@ -2022,6 +2041,34 @@ pub(super) async fn approve_in(
         None => message.body.clone(),
     };
     let edited = text != message.body;
+    if let Err(reason) = super::autoreply::still_current(r, &c, &row, ctx.now).await? {
+        // A held automatic reply approved after a newer message (the customer's or a person's)
+        // is refused: it answered a conversation that has moved on.
+        row.state = "refused".into();
+        row.last_error = Some(reason.into());
+        row.updated_at = ctx.now;
+        r.messages()
+            .set_status(
+                row.message_id,
+                MsgStatus::Refused {
+                    reason: reason.into(),
+                },
+                None,
+                None,
+            )
+            .await?;
+        save_result(r, ctx, &row).await?;
+        record(
+            r,
+            ctx,
+            "inbox.send.refused",
+            "person",
+            c.person_id,
+            json!({"person_id":c.person_id,"reason":reason}),
+        )
+        .await?;
+        return Err(refused(reason));
+    }
     let author = Author::Human(approver);
     let cap = capability(r, &c).await?;
     let public = super::public::intent_of(&row.intent)?;
@@ -2170,6 +2217,41 @@ pub(super) async fn discard_in(
     )
     .await?;
     Ok(output(&row))
+}
+
+/// Refuses the held automatic replies of conversation `id` (reason `superseded`): a newer one is
+/// about to be queued, and only one waits for approval at a time. In the caller's transaction.
+pub(crate) async fn supersede_held_auto(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    id: ConversationId,
+) -> Result<(), AppError> {
+    for hint in super::context::held_replies(r, ctx.now).await? {
+        if hint.conversation_id != id || hint.intent.get("auto_reply").is_none() {
+            continue;
+        }
+        let Some(mut row) = r.outbox().lock(hint.id).await? else {
+            continue;
+        };
+        if row.state != "held" {
+            continue;
+        }
+        row.state = "refused".into();
+        row.last_error = Some("superseded".into());
+        row.updated_at = ctx.now;
+        r.messages()
+            .set_status(
+                row.message_id,
+                MsgStatus::Refused {
+                    reason: "superseded".into(),
+                },
+                None,
+                None,
+            )
+            .await?;
+        save_result(r, ctx, &row).await?;
+    }
+    Ok(())
 }
 
 /// The refusal of approving or discarding a reply that is not held (any more).

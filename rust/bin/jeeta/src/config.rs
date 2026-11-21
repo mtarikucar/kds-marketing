@@ -412,7 +412,7 @@ pub struct Config {
 
 /// The model of the inbox's automatic replies: the platform's key and the model's id. `Debug`
 /// masks the key.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AutoReplyModel {
     pub key: jt_claude::ApiKey,
     pub model: String,
