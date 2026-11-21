@@ -225,6 +225,28 @@ pub fn tools() -> Value {
     ])
 }
 
+/// [`tools`] and the `discount` tool, for a workspace that allows a bargaining discount: it takes
+/// only a short line; the server sets the step and the price.
+pub fn tools_with_discount() -> Value {
+    let mut all = tools();
+    if let Some(list) = all.as_array_mut() {
+        list.push(json!({
+            "name": "discount",
+            "description": "The customer bargains over the price you quoted (asks for a discount, says it is expensive, names a lower price): ask the server for the business's next discount. The server sets the new price and adds it to your line. Never use it unless the customer bargains.",
+            "strict": true,
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text"],
+                "properties": {
+                    "text": { "type": "string", "description": "A short, warm line before the server's price line, in the customer's language, with no amount, number or percent; empty for none." }
+                }
+            }
+        }));
+    }
+    all
+}
+
 /// The request body for `request` to `model` (see the crate docs).
 pub fn request_body(model: &str, request: &ModelRequest) -> Value {
     // The fixed instructions, the workspace's part (the cache breakpoint), then a server's note
@@ -278,7 +300,7 @@ pub fn request_body(model: &str, request: &ModelRequest) -> Value {
         "max_tokens": request.max_tokens,
         "output_config": { "effort": EFFORT },
         "system": system,
-        "tools": tools(),
+        "tools": if request.offer_discount { tools_with_discount() } else { tools() },
         "tool_choice": tool_choice(),
         "messages": messages,
     })
@@ -347,6 +369,9 @@ fn tool_of(block: &Value) -> Option<ModelTool> {
                 basis: q.basis,
                 text: q.text,
             }),
+        "discount" => serde_json::from_value::<ReplyIn>(input)
+            .ok()
+            .map(|d| ModelTool::Discount { text: d.text }),
         "hand_over" => {
             serde_json::from_value::<HandOverIn>(input)
                 .ok()

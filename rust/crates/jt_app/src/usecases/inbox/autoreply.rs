@@ -657,6 +657,11 @@ struct Snapshot {
     cards: String,
     /// A person on the team stated money in the journey ([`human_priced`]): no quote.
     human_priced: bool,
+    /// The bargaining discount's state in the journey ([`bargain`]); none while the workspace
+    /// allows none or the journey has no current automatic quote.
+    bargain: Option<Bargain>,
+    /// The workspace's setting, for the bargaining policy.
+    policy: AutoReply,
 }
 
 /// Works conversation `id` of workspace `ws` at `now`; the customer's images are fetched only
@@ -690,10 +695,13 @@ pub async fn work(
     // asked for once more, with a line saying why; only if that one fails too does the first
     // answer go on (and is refused with its own reason).
     if let Ok(first) = &answer
-        && repairable(first, &snapshot, ctx.now.year())
+        && let Some(note) = repair_note(first, &snapshot, ctx.now.year())
         && within_limits(deps, &ctx, &snapshot).await?
     {
-        request.system_note = Some(REPAIR_LINE.to_owned());
+        request.system_note = Some(match &request.system_note {
+            Some(state) => format!("{state}\n{note}"),
+            None => note.to_owned(),
+        });
         let second = model.answer(&request).await;
         let ctx = system_ctx(ws, deps.clock.now().max(now));
         let mut repair = called(deps, &ctx, model.model(), &snapshot, &second).await?;
@@ -703,7 +711,7 @@ pub async fn work(
             Ok(second)
                 if second.stop == ModelStop::ToolUse
                     && second.tool.is_some()
-                    && !repairable(&second, &snapshot, ctx.now.year()) =>
+                    && repair_note(&second, &snapshot, ctx.now.year()).is_none() =>
             {
                 run.reason = Some("repaired".into());
                 r.auto_reply().run_update(&run).await?;
@@ -733,15 +741,292 @@ amount, a discount word or a link. Answer again without digits, amounts, discoun
 words or links (write counts as words), or use `hand_over` if the customer is asking about \
 price.";
 
-/// Whether `answer` is a `reply` the server's rules refuse for money, a number or a link (not a
-/// quote, not anything else): it is worth asking once more.
-fn repairable(answer: &ModelAnswer, s: &Snapshot, year: i32) -> bool {
+/// What the model is told when it asks for a discount with no quote of its own to discount.
+const NO_QUOTE_TO_DISCOUNT: &str = "There is no quote of yours to discount in this conversation. \
+If the customer asks for the price, use `quote`; otherwise answer in words, without bargaining.";
+/// What the model is told when it asks for a discount the customer did not ask for.
+const UNPROMPTED_DISCOUNT: &str = "The customer did not bargain: never offer a discount they did \
+not ask for. Answer their message.";
+/// What the model is told when no further discount can be given.
+const NO_FURTHER_DISCOUNT: &str = "No further discount can be given: the customer already has \
+the best price. Say kindly, in words, that this is the best price you can offer, and carry on; do \
+not hand over for this and do not promise that someone will call.";
+/// The server's line when no further discount can be given and the model asked again.
+const BEST_PRICE_LINE: &str = "Size sunabileceğimiz en iyi fiyat bu.";
+/// The server's line when the model asked for a discount with no quote of its own to discount.
+const NO_QUOTE_LINE: &str = "Size en uygun teklifi hazırlayalım: isteğinizi biraz daha anlatır \
+mısınız?";
+
+/// What the model is told when `answer` is worth asking for once more ([`work`]): a `reply` the
+/// server's rules refuse for money, a number or a link; a `discount` that cannot be given (no
+/// quote of its own, the customer did not bargain, nothing more to give). None otherwise.
+fn repair_note(answer: &ModelAnswer, s: &Snapshot, year: i32) -> Option<&'static str> {
     match (&answer.stop, &answer.tool) {
         (ModelStop::ToolUse, Some(ModelTool::Reply { text })) => matches!(
             rules::check_reply(text, &s.cards, year),
             Err(rules::Refusal::PriceWithoutQuote | rules::Refusal::LinkInReply)
-        ),
-        _ => false,
+        )
+        .then_some(REPAIR_LINE),
+        (ModelStop::ToolUse, Some(ModelTool::Discount { .. })) if !s.human_priced => {
+            match &s.bargain {
+                None => Some(NO_QUOTE_TO_DISCOUNT),
+                Some(b) if !b.asked => Some(UNPROMPTED_DISCOUNT),
+                Some(b) if b.next.is_none() => Some(NO_FURTHER_DISCOUNT),
+                Some(_) => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bargaining
+// ---------------------------------------------------------------------------------------------
+
+/// The bargaining discount's state in a journey: its first automatic quote (every step is taken
+/// from it, never from a discounted one), its current one (the customer's price now), the next
+/// step and its price when one can still be given, and whether the customer bargained since the
+/// current quote.
+#[derive(Clone, Debug)]
+struct Bargain {
+    current: QuoteRow,
+    /// `("preferred" | "largest", price in minor units)`.
+    next: Option<(&'static str, i64)>,
+    asked: bool,
+}
+
+/// `original` less `pct` percent, rounded up to a whole ten of the currency, never below `floor`.
+fn discounted(original: i64, pct: u8, floor: i64) -> i64 {
+    let less = original.saturating_mul(100 - i64::from(pct)) / 100;
+    let ten = 1_000;
+    let rounded = (less + ten - 1) / ten * ten;
+    rounded.max(floor)
+}
+
+/// The words a customer bargains with (asks for a discount, says it is expensive): a stem a
+/// lower-cased word starts with. A named price counts too ([`rules::states_money`]).
+const BARGAIN_STEMS: &[&str] = &[
+    "indirim",
+    "pahal",
+    "ucuz",
+    "daha uygun",
+    "düşür",
+    "düşebilir",
+    "düşer mi",
+    "kırabilir",
+    "kırar mı",
+    "pazarlık",
+    "son fiyat",
+    "esnet",
+    "discount",
+    "cheaper",
+    "expensive",
+    "lower price",
+    "best price",
+];
+
+/// Whether a customer's `text` bargains over the current price `current` (minor units): a word or
+/// phrase of [`BARGAIN_STEMS`], or an amount in a money form (beside a currency, or with "bin" or
+/// "k") lower than `current`. A bare number (an address, a quantity, a postcode) does not.
+fn bargains(text: &str, year: i32, current: i64) -> bool {
+    // Turkish lower case ("İndirim" is "indirim"), the server's own normal form.
+    let lower = rules::normalise(text);
+    if BARGAIN_STEMS.iter().any(|s| lower.contains(s)) {
+        return true;
+    }
+    if rules::scan(text, year)
+        .amounts
+        .iter()
+        .any(|(_, minor)| *minor < current)
+    {
+        return true;
+    }
+    let words: Vec<&str> = lower
+        .split(|c: char| c.is_whitespace() || matches!(c, '?' | '!' | ';' | '(' | ')'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let number = |t: &str| -> Option<f64> {
+        let t = t.trim_matches(|c: char| !c.is_ascii_digit());
+        (!t.is_empty())
+            .then(|| t.replace(',', "."))
+            .and_then(|t| t.parse::<f64>().ok())
+    };
+    words.iter().enumerate().any(|(i, w)| {
+        let thousands = if let Some(n) = w.strip_suffix('k').and_then(number) {
+            Some(n)
+        } else if let Some(n) = w
+            .strip_suffix("bin")
+            .filter(|n| !n.is_empty())
+            .and_then(number)
+        {
+            Some(n)
+        } else if words.get(i + 1).is_some_and(|n| n.starts_with("bin")) {
+            number(w)
+        } else {
+            None
+        };
+        thousands.is_some_and(|n| (n * 100_000.0) < current as f64)
+    })
+}
+
+/// [`Bargain`] for conversation `c` at `now`, by the workspace's policy `auto` and price range;
+/// none while the policy allows no discount or the open journey has no automatic quote that went
+/// out and is still valid.
+async fn bargain(
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    auto: &AutoReply,
+    range: Range,
+    now: OffsetDateTime,
+) -> Result<Option<Bargain>, AppError> {
+    let (preferred, largest) = auto.discount();
+    if largest == 0 {
+        return Ok(None);
+    }
+    let Some(journey) = r.journeys().open_for(c.person_id).await? else {
+        return Ok(None);
+    };
+    let mut automatic = Vec::new();
+    for q in r.quotes().list(journey.id).await? {
+        if r.auto_reply().run_by_quote(q.id).await?.is_some() {
+            automatic.push(q);
+        }
+    }
+    automatic.sort_by_key(|q| (q.created_at, q.id));
+    let (Some(original), Some(current)) = (automatic.first(), automatic.last()) else {
+        return Ok(None);
+    };
+    if current.quote.state != QuoteState::Sent
+        || current.quote.valid_until <= now
+        || !went_out(r, current.id).await?
+    {
+        return Ok(None);
+    }
+    let original = original.quote.amount_minor;
+    let now_price = current.quote.amount_minor;
+    let next = [("preferred", preferred), ("largest", largest)]
+        .into_iter()
+        .filter(|(_, pct)| *pct > 0)
+        .map(|(step, pct)| (step, discounted(original, pct, range.min_minor)))
+        .find(|(_, price)| *price < now_price);
+    let year = now.year();
+    let asked = r
+        .messages()
+        .recent(c.id, MAX_HISTORY)
+        .await?
+        .iter()
+        .any(|m| {
+            m.direction == Direction::Inbound
+                && m.at >= current.created_at
+                && bargains(&m.body, year, current.quote.amount_minor)
+        });
+    Ok(Some(Bargain {
+        current: current.clone(),
+        next,
+        asked,
+    }))
+}
+
+/// Whether the automatic message of quote `quote` reached the customer (or may have).
+async fn went_out(r: &mut dyn TenantRepos, quote: Uuid) -> Result<bool, AppError> {
+    let Some(outbox) = r
+        .auto_reply()
+        .run_by_quote(quote)
+        .await?
+        .and_then(|run| run.outbox_id)
+    else {
+        return Ok(false);
+    };
+    let Some(row) = r.outbox().get(outbox).await? else {
+        return Ok(false);
+    };
+    let sent = match r.messages().get(row.message_id).await? {
+        Some(m) => matches!(m.status, MsgStatus::Sent | MsgStatus::Delivered),
+        None => false,
+    };
+    Ok(sent || matches!(row.state.as_str(), "sent" | "sending" | "unknown"))
+}
+
+/// The workspace part's bargaining section: only while the workspace allows a discount, the same
+/// for every conversation of the workspace (it sits in the cached block): its percentages and
+/// the rules. Where a conversation stands goes in its own note ([`bargaining_note`]).
+fn bargaining_part(auto: &AutoReply) -> Option<String> {
+    let (preferred, largest) = auto.discount();
+    if largest == 0 {
+        return None;
+    }
+    let steps = if preferred > 0 && preferred < largest {
+        format!(
+            "{preferred}% first, and only if the customer still bargains after that discounted \
+             quote, at most {largest}%"
+        )
+    } else {
+        format!("at most {largest}%")
+    };
+    Some(format!(
+        "\n# Bargaining\nWhen the customer bargains over the price you quoted (asks for a \
+         discount, says it is expensive, names a lower price), use `discount`: the business \
+         allows {steps} off its first quote, and the server sets the price. Never offer a \
+         discount the customer did not ask for. Never bargain in plain words or invent a price. \
+         If the customer asks for a lower price and no discount can be given, say kindly that \
+         this is the best price you can offer and carry on; do not hand over for this.\n"
+    ))
+}
+
+/// Where a conversation stands in its bargaining, for the uncached note of its request: only
+/// while the workspace allows a discount.
+fn bargaining_note(
+    auto: &AutoReply,
+    bargain: Option<&Bargain>,
+    human_priced: bool,
+) -> Option<String> {
+    if auto.discount().1 == 0 {
+        return None;
+    }
+    let now = match (human_priced, bargain) {
+        (true, _) => "A person on the team discussed the price: no discount; hand over when the \
+                      customer asks about price."
+            .to_owned(),
+        (false, None) => "There is no quote yet: if the customer bargains, quote first; no \
+                          discount before a quote."
+            .to_owned(),
+        (false, Some(b)) if b.next.is_some() => {
+            "A discount can be given now if the customer bargains.".to_owned()
+        }
+        (false, Some(_)) => "No further discount can be given: if the customer bargains, say \
+                             kindly that this is the best price you can offer; do not hand over \
+                             for this."
+            .to_owned(),
+    };
+    Some(format!("Bargaining in this conversation: {now}"))
+}
+
+/// A whole amount as the customer reads it: `4.680 TL`, `1.250,50 TL`.
+fn money_text(minor: i64, currency: &str) -> String {
+    let whole = (minor / 100).to_string();
+    let mut grouped = String::new();
+    for (i, ch) in whole.chars().enumerate() {
+        if i > 0 && (whole.len() - i).is_multiple_of(3) {
+            grouped.push('.');
+        }
+        grouped.push(ch);
+    }
+    if minor % 100 != 0 {
+        grouped.push_str(&format!(",{:02}", minor % 100));
+    }
+    let unit = if currency == "TRY" { "TL" } else { currency };
+    format!("{grouped} {unit}")
+}
+
+/// The discounted quote's message: the model's short line (when it passes the reply rules),
+/// then the server's line stating the price.
+fn discount_message(lead: &str, price: i64, currency: &str, cards: &str, year: i32) -> String {
+    let line = format!("İndirimli fiyatımız: {}.", money_text(price, currency));
+    let lead = lead.trim();
+    if lead.is_empty() || rules::check_reply(lead, cards, year).is_err() {
+        line
+    } else {
+        format!("{lead}\n{line}")
     }
 }
 
@@ -824,6 +1109,7 @@ async fn judge(
 ) -> Result<Verdict, AppError> {
     let year = ctx.now.year();
     let no_price = "The server's facts: this message is not a quote; it may state no price.";
+    let discounted_text;
     let (text, facts) = match (&answer.stop, &answer.tool) {
         (ModelStop::ToolUse, Some(ModelTool::Reply { text }))
             if rules::check_reply(text, &s.cards, year).is_ok() =>
@@ -849,6 +1135,31 @@ async fn judge(
             }),
         ) if rules::check_reply(line, &s.cards, year).is_ok() => {
             (line.as_str(), no_price.to_owned())
+        }
+        (ModelStop::ToolUse, Some(ModelTool::Discount { text })) => {
+            let (
+                false,
+                Some(Bargain {
+                    next: Some((step, price)),
+                    asked: true,
+                    ..
+                }),
+            ) = (s.human_priced, &s.bargain)
+            else {
+                return Ok(Verdict::None);
+            };
+            discounted_text = discount_message(text, *price, &s.currency, &s.cards, year);
+            (
+                discounted_text.as_str(),
+                format!(
+                    "The server's facts: this message is a discounted quote the business's own \
+                     policy allows (its {step} step); the one price it may state is {} {}, and \
+                     it may say that this is a discounted price. Nothing else of money may be \
+                     stated.",
+                    whole(*price),
+                    s.currency
+                ),
+            )
         }
         _ => return Ok(Verdict::None),
     };
@@ -1202,6 +1513,16 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         .price
         .clone()
         .ok_or_else(|| AppError::internal("an eligible setting without its range"))?;
+    let range = Range {
+        min_minor: price.min_minor,
+        max_minor: price.max_minor,
+    };
+    let bargain = bargain(r.as_mut(), &c, &auto, range, now).await?;
+    let mut system_workspace = workspace_part(&live, frame.as_ref(), &price, human_priced);
+    if let Some(policy) = bargaining_part(&auto) {
+        system_workspace.push_str(&policy);
+    }
+    let system_note = bargaining_note(&auto, bargain.as_ref(), human_priced);
     let snapshot = Snapshot {
         generation: c.executor_generation,
         activity_revision: r.conversations().send_state(id).await?.activity_revision,
@@ -1215,11 +1536,14 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         cards: live.card_texts(),
         conversation: c,
         human_priced,
+        bargain,
+        policy: auto.clone(),
     };
     let request = ModelRequest {
         system_fixed: SYSTEM_FIXED.to_owned(),
-        system_workspace: workspace_part(&live, frame.as_ref(), &price, human_priced),
-        system_note: None,
+        system_workspace,
+        system_note,
+        offer_discount: auto.discount().1 > 0,
         history,
         max_tokens: MAX_OUTPUT_TOKENS,
     };
@@ -1531,6 +1855,16 @@ async fn settle(
     let activity = r.conversations().send_state(id).await?.activity_revision;
     run.outcome = RunOutcome::Skipped;
     run.reason = None;
+    // The second check approved the discounted quote of the step-1 snapshot: a bargain that
+    // moved since (its step, price or the customer's ask) is not sent, and the run is asked again.
+    let bargain_moved = match (&answer.tool, &c) {
+        (Some(ModelTool::Discount { .. }), Some(c)) if !s.human_priced => {
+            let fresh = bargain(r.as_mut(), c, &s.policy, s.range, ctx.now).await?;
+            fresh.as_ref().map(|b| (b.next, b.asked))
+                != s.bargain.as_ref().map(|b| (b.next, b.asked))
+        }
+        _ => false,
+    };
     let changed = match &c {
         None => Some("conversation_gone"),
         Some(_) if row.is_none() => Some("withdrawn"),
@@ -1539,10 +1873,17 @@ async fn settle(
         }
         Some(c) if c.state != ConvState::Ours => Some("not_ours"),
         Some(_) if activity != s.activity_revision => Some("activity_changed"),
+        Some(_) if bargain_moved => Some("bargain_changed"),
         Some(_) => None,
     };
     if let Some(reason) = changed {
         run.reason = Some(reason.into());
+        let mut row = row;
+        if reason == "bargain_changed"
+            && let Some(row) = row.as_mut()
+        {
+            row.due_at = Some(ctx.now);
+        }
         finish(r.as_mut(), row, &run).await?;
         record(
             r.as_mut(),
@@ -1586,21 +1927,30 @@ async fn settle(
             .await?
         }
         RunOutcome::Quoted => {
+            let mut payload = json!({
+                "run_id": run_id,
+                "outbox_id": run.outbox_id,
+                "quote_id": run.quote_id,
+                "amount_minor": decided.amount_minor,
+                "currency": s.currency,
+                "model": model,
+                "cost_micro_usd": usage.cost_micro_usd,
+            });
+            // Which bargaining step a discounted quote gave (codes only).
+            if let Some(step) = decided
+                .reason
+                .as_deref()
+                .and_then(|r| r.strip_prefix("discount_"))
+            {
+                payload["discount_step"] = json!(step);
+            }
             record(
                 r.as_mut(),
                 ctx,
                 "inbox.autoreply.quoted",
                 "conversation",
                 id,
-                json!({
-                    "run_id": run_id,
-                    "outbox_id": run.outbox_id,
-                    "quote_id": run.quote_id,
-                    "amount_minor": decided.amount_minor,
-                    "currency": s.currency,
-                    "model": model,
-                    "cost_micro_usd": usage.cost_micro_usd,
-                }),
+                payload,
             )
             .await?
         }
@@ -1760,6 +2110,70 @@ async fn decide(
                 .await?;
                 decided.quote_id = Some(quote.id);
                 decided.amount_minor = Some(amount_minor);
+            }
+            Ok(decided)
+        }
+        ModelTool::Discount { text } => {
+            // A person on the team discussed the price: no discount; hand over on price.
+            if s.human_priced {
+                return server_refused(deps, ctx, r, c, run_id, "human_quoted").await;
+            }
+            let fresh = bargain(r, c, &s.policy, s.range, ctx.now).await?;
+            // Never a hand-over for bargaining: no quote of its own to discount, the server's line
+            // carries on without a price (a quote can follow on the next message).
+            let Some(b) = fresh else {
+                return queue(deps, ctx, r, s, c, run_id, NO_QUOTE_LINE, None).await;
+            };
+            // The customer did not bargain: the model's own line when it passes the rules, else
+            // the best-price line.
+            if !b.asked {
+                let line = if !text.trim().is_empty()
+                    && rules::check_reply(&text, &s.cards, year).is_ok()
+                {
+                    text.trim()
+                } else {
+                    BEST_PRICE_LINE
+                };
+                return queue(deps, ctx, r, s, c, run_id, line, None).await;
+            }
+            // Nothing more to give: the best price, in words; never a hand-over for this.
+            let Some((step, price)) = b.next else {
+                return queue(deps, ctx, r, s, c, run_id, BEST_PRICE_LINE, None).await;
+            };
+            if let Some(reason) = verdict.refusal() {
+                return server_refused(deps, ctx, r, c, run_id, reason).await;
+            }
+            let message = discount_message(&text, price, &s.currency, &s.cards, year);
+            let quote = QuoteRow {
+                id: deps.ids.uuid(),
+                workspace_id: ctx.workspace_id,
+                created_at: ctx.now,
+                quote: Quote {
+                    amount_minor: price,
+                    valid_until: ctx.now + Duration::days(i64::from(s.valid_days)),
+                    state: QuoteState::Sent,
+                    ..b.current.quote.clone()
+                },
+            };
+            let mut decided = queue(deps, ctx, r, s, c, run_id, &message, Some(&quote)).await?;
+            if decided.outcome == RunOutcome::Quoted {
+                r.quotes().insert(quote.clone()).await?;
+                // One current price per journey: the discounted quote supersedes the last one.
+                r.quotes()
+                    .set_state(b.current.id, QuoteState::Expired)
+                    .await?;
+                record(
+                    r,
+                    ctx,
+                    "inbox.quote.created",
+                    "quote",
+                    quote.id,
+                    json!({"journey_id": quote.quote.journey_id, "person_id": c.person_id}),
+                )
+                .await?;
+                decided.quote_id = Some(quote.id);
+                decided.amount_minor = Some(price);
+                decided.reason = Some(format!("discount_{step}"));
             }
             Ok(decided)
         }

@@ -197,6 +197,8 @@ function AutoReplyField({
   onMax,
   notify,
   onNotify,
+  discount,
+  onDiscount,
   invalid,
 }: {
   auto: AutoReplyView;
@@ -208,6 +210,8 @@ function AutoReplyField({
   onMax: (minor: number | null) => void;
   notify: boolean;
   onNotify: (on: boolean) => void;
+  discount: [number, number];
+  onDiscount: (discount: [number, number]) => void;
   invalid: boolean;
 }) {
   const { t } = useTranslation();
@@ -237,6 +241,29 @@ function AutoReplyField({
           <div className="w-32">
             <MoneyInput id="knowledge-auto-max" currency={currency} minor={max} onChange={onMax} disabled={!auto.available} />
           </div>
+          <span>{t('knowledge.rules.dialog.discount')}</span>
+          <Label htmlFor="knowledge-discount-preferred">{t('knowledge.rules.dialog.discountPreferred')}</Label>
+          <Input
+            id="knowledge-discount-preferred"
+            className="w-16"
+            type="number"
+            min={0}
+            max={50}
+            value={discount[0]}
+            disabled={!auto.available || !on}
+            onChange={(e) => onDiscount([percent(e.target.value), discount[1]])}
+          />
+          <Label htmlFor="knowledge-discount-max">{t('knowledge.rules.dialog.discountMax')}</Label>
+          <Input
+            id="knowledge-discount-max"
+            className="w-16"
+            type="number"
+            min={0}
+            max={50}
+            value={discount[1]}
+            disabled={!auto.available || !on}
+            onChange={(e) => onDiscount([discount[0], percent(e.target.value)])}
+          />
         </div>
       )}
       {on && <p className="text-caption text-muted-foreground">{t('knowledge.rules.dialog.autoReplyHelp')}</p>}
@@ -249,6 +276,12 @@ function AutoReplyField({
       {invalid && <p role="alert" className="text-caption text-danger">{t('knowledge.rules.dialog.autoReplyInvalid')}</p>}
     </section>
   );
+}
+
+/** A percent field's value: a whole number, 0 when empty. */
+function percent(raw: string): number {
+  const n = Math.trunc(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 /** Whether two lists hold the same ids, in any order. */
@@ -294,6 +327,7 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
   const [autoMax, setAutoMax] = useState<number | null>(null);
   const [autoInvalid, setAutoInvalid] = useState(false);
   const [notify, setNotify] = useState(true);
+  const [discount, setDiscount] = useState<[number, number]>([0, 0]);
   const showMessage = !!base.message_cap || base.metered;
 
   const save = useKnowledgeMutation(
@@ -322,6 +356,7 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     setAutoMin(from.auto_reply.price?.min_minor ?? null);
     setAutoMax(from.auto_reply.price?.max_minor ?? null);
     setNotify(from.auto_reply.notify.on);
+    setDiscount([from.auto_reply.discount_preferred_pct, from.auto_reply.discount_max_pct]);
   };
 
   // The rules as read each time the dialog opens; a later read leaves the person's edits alone.
@@ -347,7 +382,10 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     e.preventDefault();
     const adMissing = money && !adOff && adAmount === null;
     const msgMissing = money && showMessage && !msgOff && msgAmount === null;
-    const autoBad = autoIds.length > 0 && (autoMin === null || autoMax === null || autoMin <= 0 || autoMin > autoMax);
+    const autoBad =
+      (autoIds.length > 0 && (autoMin === null || autoMax === null || autoMin <= 0 || autoMin > autoMax)) ||
+      discount[1] > 50 ||
+      discount[0] > discount[1];
     setInvalid(adMissing || msgMissing);
     setAutoInvalid(autoBad);
     if (adMissing || msgMissing || autoBad) return;
@@ -375,6 +413,13 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     }
     if (notify !== stored.notify.on) {
       input.auto_reply = { ...(input.auto_reply ?? { capability_ids: autoIds }), notify_email: notify };
+    }
+    if (discount[0] !== stored.discount_preferred_pct || discount[1] !== stored.discount_max_pct) {
+      input.auto_reply = {
+        ...(input.auto_reply ?? { capability_ids: autoIds }),
+        discount_preferred_pct: discount[0],
+        discount_max_pct: discount[1],
+      };
     }
     save.mutate(input);
   };
@@ -458,6 +503,8 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
               onMax={setAutoMax}
               notify={notify}
               onNotify={setNotify}
+              discount={discount}
+              onDiscount={setDiscount}
               invalid={autoInvalid}
             />
           )}
