@@ -2,7 +2,7 @@
 //! conversation to a person (or, from the orders' release, create an order), the workspace's team
 //! managers are told by email, through the workspace's own oldest verified mailbox.
 //!
-//! - **Written** in the hand-over's own transaction ([`queue_in`]): one row per hand-over (its
+//! - **Written** in the hand-over's own transaction (`queue_in`): one row per hand-over (its
 //!   dedupe key names the conversation and the executor generation the hand-over wrote). Nothing at
 //!   all while the setting is off (`AutoReply::notify_email`) or no verified mailbox exists; over
 //!   [`DAILY_NOTICES`] in a rolling day the row is kept as `skipped` (`daily_cap`).
@@ -16,7 +16,7 @@
 //!   codes and ids only.
 //! - **Never back in the inbox**: each email's `Message-ID` is `<jeeta-notice.{id}.{n}@{domain}>`.
 //!   The consumer drops a polled mail (its inbox copy, its Sent copy, an answer to it) whose
-//!   `Message-ID` or `In-Reply-To` names a notice the workspace holds ([`own_notice`]).
+//!   `Message-ID` or `In-Reply-To` names a notice the workspace holds (`own_notice`).
 
 use jt_capability::{Capability, StoredStatus};
 use jt_connector::Provider;

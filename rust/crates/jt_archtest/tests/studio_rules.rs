@@ -1290,6 +1290,13 @@ fn all_connector_write_sites_have_reservation_paths() {
             "send_step".into(),
             "send_text".into(),
         ),
+        // The owner's email notices: free mail through the workspace's own mailbox, capped per
+        // rolling day where they are queued (`queue_in` counts them, below).
+        (
+            "crates/jt_app/src/usecases/inbox/notices.rs".into(),
+            "send_all".into(),
+            "send".into(),
+        ),
     ]);
     assert_eq!(
         found, expected,
@@ -1307,6 +1314,7 @@ fn all_connector_write_sites_have_reservation_paths() {
         ("inbox/replies.rs", "send_step", "claim"),
         // The inbox names the module that spends (a campaign's step, else the inbox).
         ("inbox/replies.rs", "claim", "reserve_metered_for"),
+        ("inbox/notices.rs", "queue_in", "count_since"),
     ] {
         let ast = syntax(&format!("crates/jt_app/src/usecases/{file}"));
         let funcs = functions(&ast);

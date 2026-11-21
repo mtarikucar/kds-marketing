@@ -2170,6 +2170,12 @@ async fn polled(
         received_at: FIXED_NOW_T + Duration::minutes(10),
         processed_at: None,
     };
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.inbound_events()
+        .insert_if_new(event.clone(), None)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
     // Any outcome but `own_notice` is the mail taken as any other.
     match jt_app::usecases::inbox::consumer::consume_event(
         &w.deps,
