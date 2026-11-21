@@ -23,10 +23,6 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
-/// After a message written by a person (in the panel, or from the phone's Business App), the
-/// automatic replies stay out of the conversation this long, unless a person hands the
-/// conversation back after it; a customer's message in between is answered when it ends.
-pub const HUMAN_QUIET: Duration = Duration::minutes(15);
 /// How long after a customer's last message the business may still answer it (WhatsApp's
 /// customer service window).
 pub const REPLY_WINDOW: Duration = Duration::hours(24);

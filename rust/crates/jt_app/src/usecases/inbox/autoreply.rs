@@ -220,8 +220,6 @@ async fn eligible(
     r: &mut dyn TenantRepos,
     c: &Conversation,
     auto: &AutoReply,
-    handed_back: Option<OffsetDateTime>,
-    now: OffsetDateTime,
 ) -> Result<Result<(), &'static str>, AppError> {
     if public_channel_for_kind(&c.kind_key).is_some()
         || !AUTO_REPLY_KINDS.contains(&c.kind_key.as_str())
@@ -236,9 +234,6 @@ async fn eligible(
     }
     if c.state != ConvState::Ours {
         return Ok(Err("not_ours"));
-    }
-    if human_active(r, c, handed_back, now).await? {
-        return Ok(Err("human_active"));
     }
     if r.workspace().get().await?.status != WorkspaceStatus::Active {
         return Ok(Err("workspace_inactive"));
@@ -270,70 +265,11 @@ async fn eligible(
     Ok(Ok(()))
 }
 
-/// Whether the automatic replies stay out of conversation `c` at `now` because a person wrote in
-/// it (in the panel, `Author::Human`, or from the phone's Business App, `Author::BusinessApp`):
-/// see [`human_until`].
-pub(crate) async fn human_active(
-    r: &mut dyn TenantRepos,
-    c: &Conversation,
-    handed_back: Option<OffsetDateTime>,
-    now: OffsetDateTime,
-) -> Result<bool, AppError> {
-    Ok(human_until(r, c, handed_back, now).await?.is_some())
-}
-
-/// Until when the automatic replies stay out of conversation `c` at `now`: [`HUMAN_QUIET`] after
-/// the person's last message, while that is later than `now` and no person handed the
-/// conversation back to the agent after it (`handed_back`); `None` when they need not. An
-/// automatic reply a person approved is not a person's message. One indexed lookup
-/// ([`MessageRepo::person_last_at`](crate::ports::inbox::MessageRepo::person_last_at)).
-pub(crate) async fn human_until(
-    r: &mut dyn TenantRepos,
-    c: &Conversation,
-    handed_back: Option<OffsetDateTime>,
-    now: OffsetDateTime,
-) -> Result<Option<OffsetDateTime>, AppError> {
-    let Some(at) = r.messages().person_last_at(c.id).await? else {
-        return Ok(None);
-    };
-    if handed_back.is_some_and(|h| h >= at) {
-        return Ok(None);
-    }
-    Ok(Some(at + HUMAN_QUIET).filter(|until| *until > now))
-}
-
-/// When a customer's message held back by a person's quiet window ([`human_until`]) is to be
-/// answered: the window's end, while that is still inside the reply window of the customer's
-/// last message; `None` (it is not answered) otherwise.
-async fn deferred_until(
-    r: &mut dyn TenantRepos,
-    c: &Conversation,
-    handed_back: Option<OffsetDateTime>,
-    now: OffsetDateTime,
-) -> Result<Option<OffsetDateTime>, AppError> {
-    Ok(human_until(r, c, handed_back, now).await?.filter(|until| {
-        c.last_inbound_at
-            .is_some_and(|at| *until < at + REPLY_WINDOW)
-    }))
-}
-
-/// Whether the automatic replies will answer conversation `c` themselves (served, `ours`, the
-/// agent's, and no person's hold): only then is it kept from the agents' work (`pending_in`), so
-/// a conversation the replies stay out of is always someone's work.
-pub(crate) async fn answers(
-    r: &mut dyn TenantRepos,
-    c: &Conversation,
-    now: OffsetDateTime,
-) -> Result<bool, AppError> {
-    if c.executor != Executor::Agent || c.state != ConvState::Ours {
-        return Ok(false);
-    }
-    let handed_back = r
-        .auto_reply()
-        .queue_get(c.id)
-        .await?
-        .and_then(|q| q.handed_back_at);
-    Ok(!human_active(r, c, handed_back, now).await?)
+/// Whether the automatic replies will answer conversation `c` themselves (served, `ours` and the
+/// agent's): only then is it kept from the agents' work (`pending_in`). The assistant answers
+/// first; a person takes over (the executor) when they choose to.
+pub(crate) fn answers(c: &Conversation) -> bool {
+    c.executor == Executor::Agent && c.state == ConvState::Ours
 }
 
 /// Whether the automatic replies are on for conversation `id` at all (a model, the setting on
@@ -360,9 +296,9 @@ async fn served(
 }
 
 /// A person handed conversation `id` to the agent (`conversations::hand_to_agent`), in the
-/// hand-back's own transaction (its workspace lock held): a person's earlier message no longer
-/// keeps the automatic replies out. The mark commits with the hand-back, so no agent sees the
-/// conversation as its work in between (`pending_in`) and answers it beside the automatic reply.
+/// hand-back's own transaction (its workspace lock held): a customer message still waiting is
+/// scheduled, committed with the hand-back, so no agent sees the conversation as its work in
+/// between (`pending_in`) and answers it beside the automatic reply.
 /// It runs inside a savepoint: when it fails, only the mark is undone (logged by its code), the
 /// hand-back commits all the same and the conversation stays the agents' work, as before. `Err`
 /// only when the savepoint itself cannot be undone. Nothing at all while the replies are off.
@@ -408,13 +344,6 @@ async fn mark_handed_back(
     if served(deps, r, id).await?.is_none() {
         return Ok(());
     }
-    let mut row = r
-        .auto_reply()
-        .queue_lock(id)
-        .await?
-        .unwrap_or_else(|| QueueRow::idle(id, now));
-    row.handed_back_at = Some(now);
-    r.auto_reply().queue_save(&row).await?;
     // The customer's last message still waits for an answer inside the reply window: the
     // replies take it now, on the same debounce as any message.
     let waiting = match r.conversations().get(id).await? {
@@ -436,13 +365,12 @@ async fn mark_handed_back(
 
 /// Whether automatic message `row` (not a hand-over's line) may still go out in conversation `c`,
 /// at claim and at approval: `Err` with `stale` when the conversation is no longer the agent's
-/// and `ours`, or a newer message moved its activity since the run answered, and `human_active`
-/// when a person wrote since.
+/// and `ours`, or a newer message (a person's answer among them) moved its activity since the run
+/// answered.
 pub(crate) async fn still_current(
     r: &mut dyn TenantRepos,
     c: &Conversation,
     row: &crate::ports::inbox::OutboxRow,
-    now: OffsetDateTime,
 ) -> Result<Result<(), &'static str>, AppError> {
     let Some(auto) = row.intent.get("auto_reply") else {
         return Ok(Ok(()));
@@ -456,14 +384,6 @@ pub(crate) async fn still_current(
         || auto["activity_revision"].as_i64() != Some(activity)
     {
         return Ok(Err("stale"));
-    }
-    let handed_back = r
-        .auto_reply()
-        .queue_get(c.id)
-        .await?
-        .and_then(|q| q.handed_back_at);
-    if human_active(r, c, handed_back, now).await? {
-        return Ok(Err("human_active"));
     }
     Ok(Ok(()))
 }
@@ -514,39 +434,12 @@ pub(crate) async fn mark_due(
         return Ok(());
     };
     let existing = r.auto_reply().queue_lock(id).await?;
-    let handed_back = existing.as_ref().and_then(|q| q.handed_back_at);
     let mut row = existing.unwrap_or_else(|| QueueRow::idle(id, now));
     // The customer's messages up to now are handled, whatever comes of them (the job's sweep
     // looks only for newer ones).
     row.handled_at = Some(row.handled_at.map_or(now, |h| h.max(now)));
-    if let Err(reason) = eligible(r, &c, &auto, handed_back, now).await? {
-        // Inside a person's quiet window: answered when it ends (the checks run again then).
-        if reason == "human_active"
-            && let Some(until) = deferred_until(r, &c, handed_back, now).await?
-        {
-            if row.due_at.is_none() {
-                row.first_at = now;
-                if row.lease_until.is_none() {
-                    row.attempts = 0;
-                }
-            }
-            row.due_at = Some(until);
-            return r.auto_reply().queue_save(&row).await;
-        }
-        r.auto_reply().queue_save(&row).await?;
-        if reason == "human_active" {
-            let ctx = system_ctx(c.workspace_id, now);
-            record(
-                r,
-                &ctx,
-                "inbox.autoreply.skipped",
-                "conversation",
-                id,
-                json!({ "reason": reason }),
-            )
-            .await?;
-        }
-        return Ok(());
+    if eligible(r, &c, &auto).await?.is_err() {
+        return r.auto_reply().queue_save(&row).await;
     }
     if row.due_at.is_none() {
         // Nothing due, or a run holds the row: this message starts the next burst.
@@ -1223,24 +1116,9 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     let live = Live::read(r.as_mut()).await?;
     let auto = live.as_ref().and_then(|l| l.settings.auto_reply.clone());
     let reason = match (&c, &auto) {
-        (Some(c), Some(auto)) => eligible(r.as_mut(), c, auto, row.handed_back_at, now)
-            .await?
-            .err(),
+        (Some(c), Some(auto)) => eligible(r.as_mut(), c, auto).await?.err(),
         _ => Some("setting_off"),
     };
-    // A person wrote meanwhile: the window moved, and the run waits for its new end.
-    if reason == Some("human_active")
-        && let Some(c) = &c
-        && let Some(until) = deferred_until(r.as_mut(), c, row.handed_back_at, now).await?
-    {
-        let mut row = row;
-        row.due_at = Some(until);
-        row.lease_until = None;
-        row.attempts = 0;
-        r.auto_reply().queue_save(&row).await?;
-        r.commit().await?;
-        return Ok(Prepared::Done(Worked::Skipped));
-    }
     if let Some(reason) = reason {
         idle(r.as_mut(), row).await?;
         record(
@@ -1653,11 +1531,6 @@ async fn settle(
     let activity = r.conversations().send_state(id).await?.activity_revision;
     run.outcome = RunOutcome::Skipped;
     run.reason = None;
-    let handed_back = row.as_ref().and_then(|q| q.handed_back_at);
-    let human = match &c {
-        Some(c) => human_active(r.as_mut(), c, handed_back, ctx.now).await?,
-        None => false,
-    };
     let changed = match &c {
         None => Some("conversation_gone"),
         Some(_) if row.is_none() => Some("withdrawn"),
@@ -1666,7 +1539,6 @@ async fn settle(
         }
         Some(c) if c.state != ConvState::Ours => Some("not_ours"),
         Some(_) if activity != s.activity_revision => Some("activity_changed"),
-        Some(_) if human => Some("human_active"),
         Some(_) => None,
     };
     if let Some(reason) = changed {
