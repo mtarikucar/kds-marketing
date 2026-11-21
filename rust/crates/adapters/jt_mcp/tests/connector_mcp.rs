@@ -245,6 +245,7 @@ async fn agent_gets_an_authorize_url_but_cannot_complete() {
             "jeeta.connector.reconnect",
             "jeeta.connector.hooks",
             "jeeta.connector.set_pbx_policy",
+            "jeeta.connector.set_shop_order",
         ]
     );
 

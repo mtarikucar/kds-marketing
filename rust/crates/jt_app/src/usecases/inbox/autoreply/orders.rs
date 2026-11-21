@@ -3,32 +3,43 @@
 //! workspace's own shop (`ports::shop`, a verified `shop_mcp` capability with its order template,
 //! `jt_inbox::order`) and sends the customer the payment link.
 //!
-//! - **Offered** only with a shop to order from (exactly one live, verified `shop_mcp` capability
-//!   with an enabled template, and a shop client) and a quote on the journey: the model then has a
-//!   fourth tool, `create_order`, and [`ORDER_FIXED`] follows the fixed instructions. Otherwise
-//!   the request is exactly what it was before orders existed.
+//! - **Offered** only when an order could pass: a shop to order from (exactly one live, verified
+//!   `shop_mcp` capability with an enabled template, and a shop client) and the journey's one
+//!   quote, automatic, delivered, unexpired and in the template's currency (or an order already
+//!   created, whose link may be asked for again). The model then has a fourth tool,
+//!   `create_order`, and [`ORDER_FIXED`] follows the fixed instructions. Otherwise the request is
+//!   exactly what it was before orders existed.
 //! - **Checked** under the run's lock ([`decide`]), before the shop is asked anything: the shop
 //!   (`order_unavailable`, `order_needs_approval`); an order the journey holds (created: its link
-//!   is sent again, no call; any other: `order_exists`); the journey's one automatic, delivered,
-//!   valid quote in the shop's currency (`no_auto_quote`, `quote_ambiguous`, `quote_expired`,
-//!   `order_currency`), whose amount is always the one ordered; the customer's own words of
-//!   acceptance after it (`acceptance_unverified`); the details (missing or malformed ones are
-//!   asked for once with a fixed message, `order_incomplete`, then `order_details`); the shop's
-//!   day ([`ORDERS_DAILY`] unless its daily cap says otherwise, `order_limit`); the model's own
-//!   line, held to the reply rules and the second check.
+//!   is sent again, no call; calling, failed or unknown: `order_exists`); the quote (`no_auto_quote`,
+//!   `quote_ambiguous`, `quote_expired`, `order_currency`), whose amount is always the one ordered;
+//!   the details, every one the customer's own words (missing, malformed or unclear ones are asked
+//!   for once with a fixed message, `order_incomplete`, then `order_details`); the shop's day
+//!   ([`ORDERS_DAILY`] unless its daily cap says otherwise, `order_limit`).
+//! - **Confirmed** by the customer, judged by the server: the first call sends a fixed summary of
+//!   the details and the amount and asks for an explicit yes (`jt_inbox::order::summary`); the row
+//!   (`confirming`) keeps only a keyed hash of what was shown. The order goes ahead only when the
+//!   customer's first message after the summary is an explicit yes and the model calls again with
+//!   the same details (the same hash). Other details give a new summary (at most
+//!   [`MAX_SUMMARIES`], then `order_details`); anything but a yes creates nothing.
 //! - **Called** in three steps: the order row (`calling`) commits with the run; the shop is asked
-//!   with no transaction open; the outcome is stored in a new locked transaction ([`call`]). A
-//!   created order accepts the quote (the journey becomes `Pending`), queues the owner's notice and
-//!   sends the model's line and the fixed link message ([`ORDER_LINK`], server text, outside the
-//!   reply rules). A take-over meanwhile, or a send fence's refusal, sends nothing: the person gets
-//!   a note with the reference and the link (`order_link_unsent`). A refusal, an outage or an
-//!   unknown outcome hands the conversation over with the fixed line [`ORDER_LATER`]; an order
+//!   with no transaction open; the outcome is stored in a new locked transaction ([`call`]). The
+//!   shop's amount must equal the quote's and its link be a bare `https` URL on the endpoint's own
+//!   host. A created order accepts the quote (the journey becomes `Pending`), queues the owner's
+//!   notice and sends the model's line and the fixed link message ([`ORDER_LINK`], server text,
+//!   outside the reply rules). A take-over meanwhile, or a send fence's refusal, sends nothing: the
+//!   person gets a note with the reference and the link (`order_link_unsent`). A refusal, an outage
+//!   or an unknown outcome hands the conversation over with the fixed line [`ORDER_LATER`]; an order
 //!   left `calling` (a crash) is handed over by the sweep ([`interrupted`], `order_interrupted`).
-//! - **Kept**: the order row holds codes, the amount, the shop's reference and the link; the
-//!   customer's details exist in memory only, between the model's answer and the shop's call.
+//! - **Kept**: the order row holds codes, the amount, a keyed hash of the confirmed details, the
+//!   shop's reference (letters, digits, `-`, `_` only) and the link; the customer's details exist in
+//!   memory only, between the model's answer and the shop's call, and in the conversation's own
+//!   messages (the summary).
 
+use hmac::{Hmac, KeyInit, Mac};
 use jt_capability::StoredStatus;
 use jt_inbox::order::{self, OrderTemplate, ResultError, Values};
+use sha2::Sha256;
 use url::Url;
 
 use super::*;
@@ -48,6 +59,10 @@ const ORDER_HISTORY: u32 = 100;
 const CALL_BOUND: std::time::Duration = std::time::Duration::from_secs(20);
 /// The most interrupted orders one sweep of a workspace hands over.
 const INTERRUPTED_BATCH: u32 = 10;
+/// The most summaries a journey is shown before a person takes it (`order_details`).
+pub const MAX_SUMMARIES: u32 = 2;
+/// The purpose of the per-workspace key the confirmed details are hashed with.
+const CONFIRM_KEY: &str = "auto-reply-order-confirm";
 
 /// What follows the fixed instructions when the order is offered.
 pub const ORDER_FIXED: &str = "
@@ -60,9 +75,13 @@ needs: full name, email, phone (only if different from this WhatsApp number), st
 neighbourhood if they know it, district, province, postcode if they know it, and card or bank \
 transfer.
 - Ask only for what is still missing, at most three short questions at a time.
-- Call `create_order` only when you have them all, copying the customer's own words of \
-acceptance into `acceptance`.
-- Never write their details, an amount or a link in `text`.
+- Copy every detail exactly as the customer wrote it: never correct, expand, translate or \
+complete a name, an address, an email or a number.
+- Call `create_order` when you have them all. The server then shows the customer a summary to \
+confirm. When the customer confirms it, call `create_order` again with exactly the same details. \
+If the customer corrects something, call it again with the corrected details: a new summary \
+follows.
+- Never write the summary, their details, an amount or a link yourself, in `text` or anywhere.
 - Never promise payment terms, deadlines or refunds the cards do not state. A payment question \
 the cards don't answer, a change of the order, or a cancellation: `hand_over` with \
 `payment_problem`.
@@ -147,50 +166,56 @@ pub(crate) fn shop_in(client: bool, capabilities: &[Capability]) -> Result<Shop,
     })
 }
 
-/// The order tool's offer for conversation `c` (see the module docs): `None` without a shop or a
-/// quote on the journey, read without a write.
+/// The order tool's offer for conversation `c` (see the module docs): only when an order could
+/// pass, read without a write.
 pub(super) async fn offer(
     deps: &Deps,
     r: &mut dyn TenantRepos,
     c: &Conversation,
+    now: OffsetDateTime,
 ) -> Result<Option<OrderOffer>, AppError> {
-    if deps.connectors.shop().is_none() || shop(deps, r).await?.is_err() {
+    if deps.connectors.shop().is_none() {
         return Ok(None);
     }
+    let Ok(shop) = shop(deps, r).await? else {
+        return Ok(None);
+    };
     let Some(journey) = crate::usecases::inbox::active_or_latest_journey(r, c.person_id).await?
     else {
         return Ok(None);
     };
-    let Some(quote) = r
-        .quotes()
-        .list(journey.id)
-        .await?
-        .into_iter()
-        .max_by_key(|q| (q.created_at, q.id))
-    else {
+    let existing = r.auto_reply().order_by_journey(journey.id).await?;
+    if let Some(o) = existing.as_ref().filter(|o| o.state == OrderState::Created) {
+        return Ok(Some(OrderOffer {
+            amount_minor: o.amount_minor,
+            currency: o.currency.clone(),
+            valid_until: now,
+            done: Some(o.reference.clone().unwrap_or_default()),
+        }));
+    }
+    let Ok(quote) = order_quote(r, journey.id, &shop.template.currency, now).await? else {
         return Ok(None);
     };
-    let done = r
-        .auto_reply()
-        .order_by_journey(journey.id)
-        .await?
-        .filter(|o| o.state == OrderState::Created)
-        .map(|o| o.reference.unwrap_or_else(|| o.id.to_string()));
     Ok(Some(OrderOffer {
         amount_minor: quote.quote.amount_minor,
         currency: quote.quote.currency,
         valid_until: quote.quote.valid_until,
-        done,
+        done: None,
     }))
 }
 
-/// What the workspace's part says of an order already created.
+/// What the workspace's part says of an order already created (`reference`: the shop's, as
+/// cleaned; empty for none shown).
 pub(super) fn done_part(reference: &str) -> String {
+    let named = if reference.is_empty() {
+        String::new()
+    } else {
+        format!(" The shop's reference is {reference}.")
+    };
     format!(
-        "\n# The order\nThis customer's order was created and its payment link sent; the shop's \
-         reference is {reference}. Answer questions about it only from the cards. A change, a \
-         cancellation or a payment question the cards do not answer: `hand_over` with \
-         `payment_problem`.\n"
+        "\n# The order\nThis customer's order was created and its payment link sent.{named} \
+         Answer questions about it only from the cards. A change, a cancellation or a payment \
+         question the cards do not answer: `hand_over` with `payment_problem`.\n"
     )
 }
 
@@ -232,14 +257,13 @@ fn checked_line(
     Ok(Some(line.to_owned()))
 }
 
-/// The journey's one automatic, delivered, valid quote in `currency`, and when it went out; or
-/// why there is none.
+/// The journey's one automatic, delivered, valid quote in `currency`, or why there is none.
 async fn order_quote(
     r: &mut dyn TenantRepos,
     journey: JourneyId,
     currency: &str,
     now: OffsetDateTime,
-) -> Result<Result<(QuoteRow, OffsetDateTime), &'static str>, AppError> {
+) -> Result<Result<QuoteRow, &'static str>, AppError> {
     let mut quotes = r.quotes().list(journey).await?;
     let q = match quotes.len() {
         0 => return Ok(Err("no_auto_quote")),
@@ -249,21 +273,21 @@ async fn order_quote(
     if r.auto_reply().run_by_quote(q.id).await?.is_none() {
         return Ok(Err("no_auto_quote"));
     }
-    let Some(sent) = r
-        .journeys()
+    if r.journeys()
         .event_by_key(&format!("quote:{}:sent", q.id))
         .await?
         .filter(|e| e.kind == JourneyEventKind::QuoteSent && e.journey_id == journey)
-    else {
+        .is_none()
+    {
         return Ok(Err("no_auto_quote"));
-    };
+    }
     if q.quote.state != QuoteState::Sent || q.quote.valid_until <= now {
         return Ok(Err("quote_expired"));
     }
     if q.quote.currency != currency {
         return Ok(Err("order_currency"));
     }
-    Ok(Ok((q, sent.at)))
+    Ok(Ok(q))
 }
 
 /// The phone number conversation `c` is with: its last inbound phone identity, else the person's
@@ -288,6 +312,59 @@ async fn own_phone(r: &mut dyn TenantRepos, c: &Conversation) -> Result<Option<S
         .map(|i| i.value_normalized.clone()))
 }
 
+/// The keyed hash of the details and the amount the customer is shown (`order::canonical`), with
+/// the quote it orders: HMAC-SHA256 under the workspace's own key for it, in hex.
+fn confirm_hash(
+    deps: &Deps,
+    ws: WorkspaceId,
+    checked: &order::CheckedOrder,
+    quote: &QuoteRow,
+) -> Result<String, AppError> {
+    let key = deps.seal.hmac_key(ws, CONFIRM_KEY)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(key.as_ref())
+        .map_err(|_| AppError::internal("an HMAC key of the wrong length"))?;
+    mac.update(
+        order::canonical(checked, quote.quote.amount_minor, &quote.quote.currency).as_bytes(),
+    );
+    mac.update(b"\n");
+    mac.update(quote.id.to_string().as_bytes());
+    Ok(mac
+        .finalize()
+        .into_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
+
+/// Whether the customer's first message after the summary queued as outbox row `summary` (in
+/// `messages`) is an explicit yes: the summary went out (its message sent or delivered, or its row
+/// sent), and the next customer message says yes and nothing else.
+async fn confirmed(
+    r: &mut dyn TenantRepos,
+    messages: &[Message],
+    summary: Option<Uuid>,
+) -> Result<bool, AppError> {
+    let Some(summary) = summary else {
+        return Ok(false);
+    };
+    let Some(row) = r.outbox().get(summary).await? else {
+        return Ok(false);
+    };
+    let Some(shown) = r.messages().get(row.message_id).await? else {
+        return Ok(false);
+    };
+    let sent =
+        matches!(shown.status, MsgStatus::Sent | MsgStatus::Delivered) || row.state == "sent";
+    if !sent {
+        return Ok(false);
+    }
+    Ok(messages
+        .iter()
+        .filter(|m| m.direction == Direction::Inbound && m.at > shown.at)
+        .min_by_key(|m| m.at)
+        .is_some_and(|m| order::explicit_yes(&m.body)))
+}
+
 /// `create_order` (see the module docs), in step 3's transaction.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn decide(
@@ -298,7 +375,6 @@ pub(super) async fn decide(
     c: &Conversation,
     run_id: Uuid,
     fields: Box<order::OrderFields>,
-    acceptance: String,
     text: String,
     verdict: Verdict,
 ) -> Result<Decided, AppError> {
@@ -311,8 +387,13 @@ pub(super) async fn decide(
     else {
         return server_refused(deps, ctx, r, c, run_id, "no_auto_quote").await;
     };
-    // One order per journey: a created one's link is sent again, anything else is a person's.
-    if let Some(existing) = r.auto_reply().order_by_journey(journey.id).await? {
+    // One order per journey: a created one's link is sent again; one being confirmed goes on
+    // below; anything else is a person's.
+    let existing = r.auto_reply().order_by_journey(journey.id).await?;
+    if let Some(existing) = existing
+        .as_ref()
+        .filter(|o| o.state != OrderState::Confirming)
+    {
         let url = existing
             .pay_url
             .clone()
@@ -360,37 +441,19 @@ pub(super) async fn decide(
     if shop.capability.policy.requires_human_approval {
         return server_refused(deps, ctx, r, c, run_id, "order_needs_approval").await;
     }
-    let (quote, sent_at) =
-        match order_quote(r, journey.id, &shop.template.currency, ctx.now).await? {
-            Ok(found) => found,
-            Err(reason) => return server_refused(deps, ctx, r, c, run_id, reason).await,
-        };
-    // What the customer wrote in this journey, and after the quote went out.
-    let messages = r.messages().recent(c.id, ORDER_HISTORY).await?;
-    let customer = |since: OffsetDateTime, strictly: bool| -> Vec<&str> {
-        messages
-            .iter()
-            .filter(|m| {
-                m.direction == Direction::Inbound
-                    && if strictly {
-                        m.at > since
-                    } else {
-                        m.at >= since
-                    }
-            })
-            .map(|m| m.body.as_str())
-            .collect()
+    let quote = match order_quote(r, journey.id, &shop.template.currency, ctx.now).await? {
+        Ok(found) => found,
+        Err(reason) => return server_refused(deps, ctx, r, c, run_id, reason).await,
     };
-    if !order::acceptance_found(&acceptance, &customer(sent_at, true)) {
-        return server_refused(deps, ctx, r, c, run_id, "acceptance_unverified").await;
-    }
+    // What the customer wrote in this journey.
+    let messages = r.messages().recent(c.id, ORDER_HISTORY).await?;
+    let customer: Vec<&str> = messages
+        .iter()
+        .filter(|m| m.direction == Direction::Inbound && m.at >= journey.opened_at)
+        .map(|m| m.body.as_str())
+        .collect();
     let phone = own_phone(r, c).await?;
-    let checked = match order::check(
-        &fields,
-        &customer(journey.opened_at, false),
-        phone.as_deref(),
-        year,
-    ) {
+    let checked = match order::check(&fields, &customer, phone.as_deref(), year) {
         Ok(checked) => checked,
         Err(missing) => {
             // Asked for once; a second time a person takes it.
@@ -410,15 +473,86 @@ pub(super) async fn decide(
         }
     };
     drop(fields);
-    let (day_start, _) = crate::usecases::calls::local_day(&shop.capability, ctx.now);
-    let cap = shop.capability.policy.daily_ops_cap.unwrap_or(ORDERS_DAILY);
-    if r.auto_reply()
-        .orders_since(shop.capability.id, day_start)
-        .await?
-        >= cap
-    {
-        return server_refused(deps, ctx, r, c, run_id, "order_limit").await;
+    let hash = confirm_hash(deps, ctx.workspace_id, &checked, &quote)?;
+    let same = existing
+        .as_ref()
+        .is_some_and(|o| o.confirm_hash.as_deref() == Some(hash.as_str()));
+    let yes = match &existing {
+        Some(o) if same => confirmed(r, &messages, o.summary_outbox_id).await?,
+        _ => false,
+    };
+    if !yes {
+        // The summary (again, or anew): nothing is ordered until the customer confirms it.
+        if let Some(o) = &existing
+            && !same
+            && o.summaries >= MAX_SUMMARIES
+        {
+            return server_refused(deps, ctx, r, c, run_id, "order_details").await;
+        }
+        if existing.is_none() {
+            let (day_start, _) = crate::usecases::calls::local_day(&shop.capability, ctx.now);
+            let cap = shop.capability.policy.daily_ops_cap.unwrap_or(ORDERS_DAILY);
+            if r.auto_reply()
+                .orders_since(shop.capability.id, day_start)
+                .await?
+                >= cap
+            {
+                return server_refused(deps, ctx, r, c, run_id, "order_limit").await;
+            }
+        }
+        let text = order::summary(&checked, quote.quote.amount_minor, &quote.quote.currency);
+        drop(checked);
+        let mut decided = queue(deps, ctx, r, s, c, run_id, &text, None).await?;
+        let Some(outbox) = decided
+            .outbox_id
+            .filter(|_| decided.outcome == RunOutcome::Replied)
+        else {
+            return Ok(decided);
+        };
+        decided.reason = Some("order_summary".into());
+        match existing {
+            Some(mut o) => {
+                o.confirm_hash = Some(hash);
+                o.summary_outbox_id = Some(outbox);
+                o.run_id = run_id;
+                if !same {
+                    o.summaries += 1;
+                }
+                r.auto_reply().order_save(&o).await?;
+            }
+            None => {
+                let row = OrderRow {
+                    id: deps.ids.uuid(),
+                    journey_id: journey.id,
+                    conversation_id: c.id,
+                    quote_id: quote.id,
+                    shop_capability_id: shop.capability.id,
+                    run_id,
+                    state: OrderState::Confirming,
+                    reason: None,
+                    amount_minor: quote.quote.amount_minor,
+                    currency: quote.quote.currency.clone(),
+                    reference: None,
+                    pay_url: None,
+                    created_at: ctx.now,
+                    finished_at: None,
+                    confirm_hash: Some(hash),
+                    summary_outbox_id: Some(outbox),
+                    summaries: 1,
+                    called_at: None,
+                    generation: None,
+                };
+                if !r.auto_reply().order_insert(&row).await? {
+                    return Err(AppError::conflict("an order of this journey exists"));
+                }
+            }
+        }
+        return Ok(decided);
     }
+    // Confirmed: the shop is asked once the run commits.
+    let Some(mut row) = existing else {
+        return Err(AppError::internal("a confirmation without its order"));
+    };
     let line = match checked_line(&text, s, verdict, year) {
         Ok(line) => line,
         Err(reason) => return server_refused(deps, ctx, r, c, run_id, reason).await,
@@ -426,25 +560,12 @@ pub(super) async fn decide(
     let Some(sealed) = r.capabilities().read_sealed(shop.capability.id).await? else {
         return server_refused(deps, ctx, r, c, run_id, "order_unavailable").await;
     };
-    let row = OrderRow {
-        id: deps.ids.uuid(),
-        journey_id: journey.id,
-        conversation_id: c.id,
-        quote_id: quote.id,
-        shop_capability_id: shop.capability.id,
-        run_id,
-        state: OrderState::Calling,
-        reason: None,
-        amount_minor: quote.quote.amount_minor,
-        currency: quote.quote.currency.clone(),
-        reference: None,
-        pay_url: None,
-        created_at: ctx.now,
-        finished_at: None,
-    };
-    if !r.auto_reply().order_insert(&row).await? {
-        return server_refused(deps, ctx, r, c, run_id, "order_exists").await;
-    }
+    row.state = OrderState::Calling;
+    row.run_id = run_id;
+    row.called_at = Some(ctx.now);
+    row.generation = Some(s.generation);
+    row.shop_capability_id = shop.capability.id;
+    r.auto_reply().order_save(&row).await?;
     Ok(Decided {
         outcome: RunOutcome::Ordered,
         reason: Some("pending".into()),
@@ -531,28 +652,37 @@ async fn ask_shop(deps: &Deps, ws: WorkspaceId, p: Pending) -> Result<order::Ord
         ResultError::Refused => failure(OrderState::Failed, "order_rejected"),
         ResultError::Malformed => failure(OrderState::Unknown, "order_unknown"),
     })?;
-    let host = |u: &Url| u.host_str().map(str::to_ascii_lowercase);
-    let link_ok = Url::parse(&created.url).is_ok_and(|u| {
-        u.scheme() == "https" && host(&u).is_some() && host(&u) == host(&p.endpoint)
-    });
-    if !link_ok {
-        return Err(Failure {
-            state: OrderState::Failed,
-            reason: "order_link_host",
-            reference: created.reference,
-        });
-    }
-    if created
-        .amount_minor
-        .is_some_and(|a| a != p.row.amount_minor)
-    {
+    let reference = order::clean_reference(created.reference.as_deref());
+    // The amount is always the quote's, before anything else is looked at.
+    if created.amount_minor != Some(p.row.amount_minor) {
         return Err(Failure {
             state: OrderState::Failed,
             reason: "order_amount_mismatch",
-            reference: created.reference,
+            reference,
         });
     }
-    Ok(created)
+    // A bare https link on the endpoint's own host, sent as the parser reads it.
+    let host = |u: &Url| u.host_str().map(str::to_ascii_lowercase);
+    let link = Url::parse(&created.url).ok().filter(|u| {
+        u.scheme() == "https"
+            && u.username().is_empty()
+            && u.password().is_none()
+            && host(u).is_some()
+            && host(u) == host(&p.endpoint)
+            && u.port() == p.endpoint.port()
+    });
+    let Some(link) = link else {
+        return Err(Failure {
+            state: OrderState::Failed,
+            reason: "order_link_host",
+            reference,
+        });
+    };
+    Ok(order::OrderResult {
+        url: link.as_str().to_owned(),
+        reference,
+        amount_minor: created.amount_minor,
+    })
 }
 
 /// Steps 2 and 3 of an order decided in `run` (see the module docs).
@@ -592,7 +722,7 @@ async fn note(
 }
 
 /// What the person is told of a failed order: its code, the shop's reference when known, and
-/// for an unknown outcome what to look for at the shop.
+/// what to look for at the shop (an order may exist there whatever the outcome).
 fn failure_note(o: &OrderRow) -> String {
     let mut text = format!(
         "Sipariş oluşturulamadı ({}).",
@@ -601,12 +731,10 @@ fn failure_note(o: &OrderRow) -> String {
     if let Some(reference) = &o.reference {
         text.push_str(&format!(" Mağaza referansı: {reference}."));
     }
-    if o.state == OrderState::Unknown {
-        text.push_str(&format!(
-            " Mağazada jeeta_ref {} ile oluşmuş bir sipariş olup olmadığına bakın.",
-            o.id
-        ));
-    }
+    text.push_str(&format!(
+        " Mağazada jeeta_ref {} ile oluşmuş bir sipariş olup olmadığına bakın.",
+        o.id
+    ));
     text
 }
 
@@ -885,12 +1013,25 @@ pub(super) async fn interrupted(deps: &Deps, ws: WorkspaceId, now: OffsetDateTim
             o.reason = Some("order_interrupted".into());
             o.finished_at = Some(now);
             r.auto_reply().order_save(&o).await?;
-            let c = r
-                .conversations()
-                .lock(o.conversation_id)
-                .await?
-                .filter(|c| c.executor == Executor::Agent && c.state == ConvState::Ours);
-            let outbox = hand_over_failed(deps, &ctx, r.as_mut(), c.as_ref(), &o).await?;
+            // Still the agent's as when the shop was asked, and no person writing: only then
+            // does the line go out.
+            let c = r.conversations().lock(o.conversation_id).await?;
+            let current = match c {
+                Some(c)
+                    if c.executor == Executor::Agent
+                        && c.state == ConvState::Ours
+                        && Some(c.executor_generation) == o.generation =>
+                {
+                    let handed_back = r
+                        .auto_reply()
+                        .queue_get(c.id)
+                        .await?
+                        .and_then(|q| q.handed_back_at);
+                    (!human_active(r.as_mut(), &c, handed_back, now).await?).then_some(c)
+                }
+                _ => None,
+            };
+            let outbox = hand_over_failed(deps, &ctx, r.as_mut(), current.as_ref(), &o).await?;
             r.commit().await?;
             if let Some(outbox) = outbox
                 && let Err(e) = replies::send_step(deps, &ctx, outbox).await

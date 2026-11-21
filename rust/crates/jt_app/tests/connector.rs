@@ -4876,8 +4876,16 @@ async fn a_shop_is_connected_by_its_endpoint_and_takes_an_order_template() {
     let template = json!({
         "enabled": true, "tool": "create_order", "currency": "TRY",
         "arguments": {"ref": "{{ref}}", "total": "{{amount_minor}}", "email": "{{email}}"},
-        "result": {"url": "/payUrl"}
+        "result": {"url": "/payUrl", "amount_minor": "/amountMinor"}
     });
+    // Only a person sets it: an agent with the same permission is refused, and nothing changes.
+    let agent = w.agent(&["capabilities.manage"]).await;
+    let refused = connector::set_shop_order(&w.deps, &agent, out.id, template.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::Forbidden);
+    assert_eq!(refused.details["reason"], "person_only");
+    assert!(w.entries("connector.shop_order_set").is_empty());
     let set = connector::set_shop_order(&w.deps, o, out.id, template.clone())
         .await
         .unwrap();
@@ -4910,8 +4918,13 @@ async fn a_shop_is_connected_by_its_endpoint_and_takes_an_order_template() {
         ),
         (
             json!({"enabled": true, "tool": "t", "currency": "TRY",
-                   "arguments": {"a": "{{amount}}"}, "result": {"url": "/u"}}),
+                   "arguments": {"a": "{{amount}}"}, "result": {"url": "/u", "amount_minor": "/a"}}),
             "no_ref",
+        ),
+        (
+            json!({"enabled": true, "tool": "t", "currency": "TRY",
+                   "arguments": {"ref": "{{ref}}", "a": "{{amount}}"}, "result": {"url": "/u"}}),
+            "no_result_amount",
         ),
     ] {
         let e = connector::set_shop_order(&w.deps, o, out.id, bad)

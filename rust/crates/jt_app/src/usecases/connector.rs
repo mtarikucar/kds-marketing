@@ -1335,7 +1335,8 @@ pub struct ShopOrderOut {
 /// reserved: no declaration and no connection step writes it, so what the automatic replies send
 /// to the shop is decided here alone, and logged (`connector.shop_order_set`, payload the tool and
 /// whether it is on: never the template's text). Another kind or a retired capability is
-/// `CONFLICT`. `{"enabled": false, ...}` turns the orders off. Needs `capabilities.manage`.
+/// `CONFLICT`. `{"enabled": false, ...}` turns the orders off. Needs `capabilities.manage`, and a
+/// person: an agent's call (an API key or an MCP connection) is `FORBIDDEN` (`person_only`).
 pub async fn set_shop_order(
     deps: &Deps,
     ctx: &Ctx,
@@ -1343,6 +1344,15 @@ pub async fn set_shop_order(
     input: ShopOrderInput,
 ) -> Result<ShopOrderOut, AppError> {
     ctx.require(Permission::CapabilitiesManage)?;
+    // Where customers' details are sent is a person's decision: an agent (an API key, an MCP
+    // connection) may not set it.
+    if !matches!(ctx.actor, jt_ledger::Actor::Human { .. }) {
+        return Err(AppError {
+            code: ErrorCode::Forbidden,
+            message: "only a person sets the shop's order template".into(),
+            details: json!({ "reason": "person_only" }),
+        });
+    }
     let template = jt_inbox::order::OrderTemplate::parse(&input).map_err(|e| {
         AppError::validation(
             format!("invalid order template: {e}"),

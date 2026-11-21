@@ -1239,7 +1239,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     };
     // The order tool, only with a shop to order from and a quote on the journey: otherwise the
     // request is exactly what it was before orders existed.
-    let order = orders::offer(deps, r.as_mut(), &snapshot.conversation).await?;
+    let order = orders::offer(deps, r.as_mut(), &snapshot.conversation, now).await?;
     let mut system_fixed = SYSTEM_FIXED.to_owned();
     let mut system_workspace = workspace_part(&live, frame.as_ref(), &price);
     if let Some(offer) = &order {
@@ -1801,15 +1801,8 @@ async fn decide(
             }
             Ok(Decided::handed_over(reason, line))
         }
-        ModelTool::CreateOrder {
-            fields,
-            acceptance,
-            text,
-        } => {
-            orders::decide(
-                deps, ctx, r, s, c, run_id, fields, acceptance, text, verdict,
-            )
-            .await
+        ModelTool::CreateOrder { fields, text } => {
+            orders::decide(deps, ctx, r, s, c, run_id, fields, text, verdict).await
         }
     }
 }
