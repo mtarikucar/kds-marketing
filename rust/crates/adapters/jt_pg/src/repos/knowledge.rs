@@ -91,6 +91,7 @@ struct SettingsRecord {
     frame_applied_at: Option<OffsetDateTime>,
     seeded_at: OffsetDateTime,
     seed_source: String,
+    auto_reply: Option<Value>,
 }
 
 impl SettingsRecord {
@@ -123,6 +124,10 @@ impl SettingsRecord {
             frame_applied_at: self.frame_applied_at,
             seeded_at: self.seeded_at,
             seed_source: stored(SeedSource::parse(&self.seed_source), "seed source")?,
+            auto_reply: self
+                .auto_reply
+                .map(|v| decode(v, "automatic replies"))
+                .transpose()?,
         })
     }
 }
@@ -130,7 +135,7 @@ impl SettingsRecord {
 const SETTINGS_COLUMNS: &str = "workspace_id, revision, changed_at, changed_by, posting_revision, \
      prospecting_revision, posting_derived, prospecting_derived, prohibitions, goals, ad_cap, \
      message_cap, post_approval, post_approval_accounts, post_gate_seeded_at, closing_topic_ids, \
-     rules_revision, goals_revision, frame_applied_at, seeded_at, seed_source";
+     rules_revision, goals_revision, frame_applied_at, seeded_at, seed_source, auto_reply";
 
 // ---------------------------------------------------------------------------------------------
 // Cards
@@ -398,9 +403,9 @@ impl KnowledgeRepo for PgTenantRepos {
              posting_revision, prospecting_revision, posting_derived, prospecting_derived, \
              prohibitions, goals, ad_cap, message_cap, post_approval, post_approval_accounts, \
              post_gate_seeded_at, closing_topic_ids, rules_revision, goals_revision, \
-             frame_applied_at, seeded_at, seed_source) \
+             frame_applied_at, seeded_at, seed_source, auto_reply) \
              values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
-             $18, $19, $20, $21) on conflict do nothing",
+             $18, $19, $20, $21, $22) on conflict do nothing",
         )
         .bind(ws.as_uuid())
         .bind(int(s.revision, "the knowledge revision")?)
@@ -436,6 +441,12 @@ impl KnowledgeRepo for PgTenantRepos {
         .bind(s.frame_applied_at)
         .bind(s.seeded_at)
         .bind(s.seed_source.key())
+        .bind(
+            s.auto_reply
+                .as_ref()
+                .map(|a| encode(a, "the automatic replies"))
+                .transpose()?,
+        )
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "store the knowledge settings"))?;
@@ -451,8 +462,8 @@ impl KnowledgeRepo for PgTenantRepos {
              prospecting_derived = $8, prohibitions = $9, goals = $10, ad_cap = $11, \
              message_cap = $12, post_approval = $13, post_approval_accounts = $14, \
              post_gate_seeded_at = $15, closing_topic_ids = $16, rules_revision = $17, \
-             goals_revision = $18, frame_applied_at = $19, seeded_at = $20, seed_source = $21 \
-             where workspace_id = $1",
+             goals_revision = $18, frame_applied_at = $19, seeded_at = $20, seed_source = $21, \
+             auto_reply = $22 where workspace_id = $1",
         )
         .bind(ws.as_uuid())
         .bind(int(s.revision, "the knowledge revision")?)
@@ -488,6 +499,12 @@ impl KnowledgeRepo for PgTenantRepos {
         .bind(s.frame_applied_at)
         .bind(s.seeded_at)
         .bind(s.seed_source.key())
+        .bind(
+            s.auto_reply
+                .as_ref()
+                .map(|a| encode(a, "the automatic replies"))
+                .transpose()?,
+        )
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "save the knowledge settings"))?;

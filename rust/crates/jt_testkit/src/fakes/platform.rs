@@ -450,6 +450,21 @@ impl PlatformRepos for MemPlatform {
         Ok(ids.into_iter().collect())
     }
 
+    async fn workspaces_with_due_auto_replies(
+        &mut self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        let ids: BTreeSet<WorkspaceId> = self
+            .state()
+            .auto_reply
+            .queue
+            .iter()
+            .filter(|(_, r)| r.takeable(now))
+            .map(|(w, _)| *w)
+            .collect();
+        Ok(ids.into_iter().collect())
+    }
+
     async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
         let ids: BTreeSet<WorkspaceId> = self
             .state()

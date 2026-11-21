@@ -21,6 +21,7 @@
 
 pub(crate) mod agent_connections;
 pub(crate) mod api_keys;
+pub(crate) mod autoreply;
 mod budget;
 pub(crate) mod calls;
 pub(crate) mod capabilities;

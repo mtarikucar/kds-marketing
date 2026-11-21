@@ -772,3 +772,9 @@ fn personal_text(value: &Value) -> Vec<String> {
     walk(value, &mut out);
     out
 }
+
+#[tokio::test]
+async fn auto_reply_rows() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::auto_reply_rows(uow(&db)).await;
+}

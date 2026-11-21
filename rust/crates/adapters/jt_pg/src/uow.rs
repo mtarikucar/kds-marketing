@@ -328,6 +328,10 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    fn auto_reply(&mut self) -> &mut dyn jt_app::ports::reply_model::AutoReplyRepo {
+        self
+    }
+
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         let mut this = *self;
         ensure_not_aborted(this.tx.conn()).await?;
@@ -646,6 +650,13 @@ impl PlatformRepos for PgPlatformRepos {
         now: OffsetDateTime,
     ) -> Result<Vec<WorkspaceId>, AppError> {
         agent_connections::workspaces_with_due_wakes(&mut self.tx, now).await
+    }
+
+    async fn workspaces_with_due_auto_replies(
+        &mut self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        crate::repos::autoreply::workspaces_with_due_auto_replies(&mut self.tx, now).await
     }
 
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {

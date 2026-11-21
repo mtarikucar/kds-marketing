@@ -147,6 +147,8 @@ pub struct MemState {
     pub inbox: super::inbox::MemInbox,
     /// The knowledge bases (`0046_knowledge_base`).
     pub knowledge: super::knowledge::MemKnowledge,
+    /// The automatic replies' queue and runs (`0047_inbox_auto_reply`).
+    pub auto_reply: super::autoreply::MemAutoReply,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
     pub sessions: Vec<SessionRow>,

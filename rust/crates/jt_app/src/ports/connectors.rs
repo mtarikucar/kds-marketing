@@ -2014,6 +2014,12 @@ pub trait ConnectorRegistry: Send + Sync {
     fn agent_waker(&self) -> Option<Arc<dyn super::wake::AgentWaker>> {
         None
     }
+    /// The model the inbox's automatic replies ask (`usecases::inbox::autoreply`); `None`, the
+    /// default, when the platform has none configured: the automatic replies are then off in
+    /// every workspace, nothing is scheduled and the panel says so.
+    fn reply_model(&self) -> Option<Arc<dyn super::reply_model::ReplyModel>> {
+        None
+    }
 }
 
 #[cfg(test)]

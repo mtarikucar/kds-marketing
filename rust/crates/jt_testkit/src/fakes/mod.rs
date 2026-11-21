@@ -58,6 +58,8 @@ mod distribution;
 pub use distribution::MemDistribution;
 mod inbox;
 pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
+mod autoreply;
+pub use autoreply::MemAutoReply;
 mod knowledge;
 pub use knowledge::MemKnowledge;
 mod outreach;
@@ -77,8 +79,8 @@ mod tenant;
 mod user;
 
 pub use providers::{
-    ConnectorCall, FakeAppConfig, OAuthCall, PollCall, PublicCall, ScriptedConnector,
-    ScriptedOAuth, ScriptedPoller, ScriptedPublic, ScriptedRegistry, ScriptedWaker,
+    ConnectorCall, FakeAppConfig, ModelResult, OAuthCall, PollCall, PublicCall, ScriptedConnector,
+    ScriptedModel, ScriptedOAuth, ScriptedPoller, ScriptedPublic, ScriptedRegistry, ScriptedWaker,
     TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL, WakeCall,
 };
 pub use services::{
