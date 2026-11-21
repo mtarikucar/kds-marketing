@@ -289,7 +289,20 @@ pub struct AutoReply {
     /// `Some(false)` only when turned off; none is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_email: Option<bool>,
+    /// The discount the automatic replies may give when a customer bargains, in percent of the
+    /// journey's first automatic quote: the preferred step, then the largest (both 0: none).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub discount_preferred_pct: u8,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub discount_max_pct: u8,
 }
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+/// The largest discount the automatic replies may be allowed, in percent.
+pub const MAX_DISCOUNT_PCT: u8 = 50;
 
 fn default_valid_days() -> u32 {
     AUTO_QUOTE_VALID_DAYS
@@ -320,6 +333,39 @@ pub struct AutoReplyInput {
     /// The owner's email notices on or off; none keeps the stored setting.
     #[serde(default)]
     pub notify_email: Option<bool>,
+    /// The preferred and the largest bargaining discount, in percent (`0..=`
+    /// [`MAX_DISCOUNT_PCT`], preferred at most the largest); none keeps the stored ones.
+    #[serde(default)]
+    pub discount_preferred_pct: Option<u8>,
+    #[serde(default)]
+    pub discount_max_pct: Option<u8>,
+}
+
+/// The bargaining discount `input` sets, over `stored` (preferred, largest): each at most
+/// [`MAX_DISCOUNT_PCT`], the preferred at most the largest.
+pub fn validate_discount(input: &AutoReplyInput, stored: (u8, u8)) -> Result<(u8, u8), Invalid> {
+    let preferred = input.discount_preferred_pct.unwrap_or(stored.0);
+    let max = input.discount_max_pct.unwrap_or(stored.1);
+    for (field, pct) in [
+        ("auto_reply.discount_preferred_pct", preferred),
+        ("auto_reply.discount_max_pct", max),
+    ] {
+        if pct > MAX_DISCOUNT_PCT {
+            return Err(Invalid::new(
+                field,
+                "out_of_range",
+                format!("a discount is 0 to {MAX_DISCOUNT_PCT} percent"),
+            ));
+        }
+    }
+    if preferred > max {
+        return Err(Invalid::new(
+            "auto_reply.discount_preferred_pct",
+            "out_of_range",
+            "the preferred discount is at most the largest",
+        ));
+    }
+    Ok((preferred, max))
 }
 
 /// `Ok` with the range `input` gives (none when it gives none): `0 < min <= max <=`
@@ -386,6 +432,8 @@ mod auto_reply_tests {
             min_minor: min,
             max_minor: max,
             notify_email: None,
+            discount_preferred_pct: None,
+            discount_max_pct: None,
         }
     }
 
@@ -424,6 +472,8 @@ mod auto_reply_tests {
             min_minor: Some(1),
             max_minor: Some(2),
             notify_email: None,
+            discount_preferred_pct: None,
+            discount_max_pct: None,
         };
         assert_eq!(reason(&twice), "duplicate");
         assert_eq!(

@@ -291,6 +291,11 @@ async fn auto_reply_of(
 ) -> Result<Option<AutoReply>, AppError> {
     let stored_price = stored.and_then(|a| a.price.as_ref());
     let range = validate_auto_reply(input, stored_price).map_err(invalid)?;
+    let (discount_preferred_pct, discount_max_pct) = jt_knowledge::validate_discount(
+        input,
+        stored.map_or((0, 0), |a| (a.discount_preferred_pct, a.discount_max_pct)),
+    )
+    .map_err(invalid)?;
     for (i, id) in input.capability_ids.iter().enumerate() {
         let ok = r
             .capabilities()
@@ -343,6 +348,8 @@ async fn auto_reply_of(
             Some(false) => Some(false),
             _ => None,
         },
+        discount_preferred_pct,
+        discount_max_pct,
     }))
 }
 

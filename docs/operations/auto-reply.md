@@ -95,6 +95,20 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   discount or payment word, or a bare number such as "3500 olur"), it never quotes in that
   journey: a quote becomes a hand-over (`human_quoted`), and the model is told so. Replies that
   are not about price still go out, continuing from what the team said, never contradicting it.
+- **Bargaining.** In Kurallar, next to "En az / En çok", the owner sets "Pazarlık indirimi":
+  a preferred and a largest percent (0 to 50, preferred at most largest; both 0, the default: no
+  bargaining, and the request to the model is as before). Only a person saves them, from the
+  panel. When the customer bargains over the assistant's own quote (sent, still valid), the model
+  may call `discount`, which takes no amount: the server gives the next step, the preferred one,
+  then (only after that discounted quote went out and the customer still pushes) the largest,
+  priced from the journey's first automatic quote (never compounding), less the percent, rounded
+  up to a whole ten, never below the lowest price. The message is the model's short line (when
+  it names no money) and the server's line "İndirimli fiyatımız: {price}."; the discounted quote
+  replaces the earlier one (one current price per journey), and the run and the ledger record the
+  step (`discount_step`). A discount the customer did not ask for, or before any quote, is not
+  given; when nothing more can be given the assistant says it is the best price ("Size
+  sunabileceğimiz en iyi fiyat bu." when it asks again) and carries on, without a hand-over. A
+  person's price in the journey still hands over (`human_quoted`).
 - The capability's policy applies: approval (the reply waits in the approvals list and in the
   conversation, where it can be approved or discarded; automatic messages carry an "otomatik"
   mark there), working hours

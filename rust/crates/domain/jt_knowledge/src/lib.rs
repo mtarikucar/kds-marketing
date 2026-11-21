@@ -49,7 +49,8 @@ pub use revision::{Cause, KnowledgeRevisionId, Revision, Subject};
 pub use settings::{
     AUTO_QUOTE_VALID_DAYS, AUTO_REPLY_KINDS, AutoReply, AutoReplyInput, Cap, CapInput,
     KnowledgeSettings, MAX_AUTO_REPLY_CAPABILITIES, PriceRange, REPLY_STANDARD, SeedSource,
-    append_lines, validate_auto_reply, validate_cap, validate_goals, validate_prohibitions,
+    append_lines, validate_auto_reply, validate_cap, validate_discount, validate_goals,
+    validate_prohibitions,
 };
 pub use text::{cut, validate_lines, validate_text};
 
