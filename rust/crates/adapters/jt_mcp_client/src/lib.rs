@@ -39,9 +39,9 @@
 //!   `structuredContent`, `isError`): a tool that reports an error (`isError: true`) is an `Ok`
 //!   the caller reads. A failure before the call was sent (any failure of steps 1 and 2, a host
 //!   the egress client refuses, a connection that could not be opened, no time left) is
-//!   `Unavailable`, `Auth` or `Rejected` as above. Once it was sent: `401`/`403` is `Auth`,
-//!   another `3xx`/`4xx` is `Rejected` with the HTTP status, a JSON-RPC error `Rejected` with its
-//!   code, and anything else (a timeout, a broken connection, a `5xx`, an answer over the cap or
+//!   `Unavailable`, `Auth` or `Rejected` as above. Once it was sent: `401`/`403` is `Auth`, a
+//!   JSON-RPC error `Rejected` with its code (the tool's own refusal), and anything else (any
+//!   other status: `408`, `409`, `425`, `429`, another `3xx`/`4xx`), (a timeout, a broken connection, a `5xx`, an answer over the cap or
 //!   one that does not parse, a stream that ends without the response) is `ShopError::Unknown`:
 //!   the shop may have acted on it.
 //!
@@ -468,9 +468,10 @@ impl ShopClient for McpClient {
                 e.warn("tools/call");
                 match e {
                     StepError::Auth => ShopError::Auth,
-                    StepError::Status(s) if (300..500).contains(&s) => ShopError::Rejected {
-                        code: Some(s.to_string()),
-                    },
+                    // Once the call was sent, only the tool's own refusal (a JSON-RPC error; an
+                    // `isError` result is an `Ok` the caller reads) says nothing was done: any
+                    // other status (408, 409, 425, 429, another 4xx, a 3xx, a 5xx) may follow an
+                    // order the shop made.
                     StepError::Rpc(code) => ShopError::Rejected { code },
                     StepError::NotSent => ShopError::Unavailable,
                     StepError::Status(_)

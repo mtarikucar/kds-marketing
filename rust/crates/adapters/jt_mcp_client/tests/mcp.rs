@@ -354,20 +354,21 @@ async fn a_json_rpc_error_is_rejected_with_its_code() {
 }
 
 #[tokio::test]
-async fn another_client_error_on_the_call_is_rejected_with_its_status() {
-    let h = start(|method, body| match method {
-        "tools/call" => status_reply(422),
-        _ => plain_server(&[])(method, body),
-    })
-    .await;
-    assert_eq!(
-        h.client
-            .call_tool(h.ws, &h.endpoint, &bearer(), &order_call())
-            .await,
-        Err(ShopError::Rejected {
-            code: Some("422".into())
+async fn any_other_status_after_the_call_is_unknown() {
+    for status in [408, 409, 422, 425, 429, 404, 503] {
+        let h = start(move |method, body| match method {
+            "tools/call" => status_reply(status),
+            _ => plain_server(&[])(method, body),
         })
-    );
+        .await;
+        assert_eq!(
+            h.client
+                .call_tool(h.ws, &h.endpoint, &bearer(), &order_call())
+                .await,
+            Err(ShopError::Unknown),
+            "{status}"
+        );
+    }
 }
 
 #[tokio::test]
