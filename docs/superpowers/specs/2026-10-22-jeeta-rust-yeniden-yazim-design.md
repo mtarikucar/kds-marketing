@@ -1148,3 +1148,24 @@ Araç adları aynı tabloyu izler: `jeeta.strategy.start_consultation`, `jeeta.c
 `jeeta.inbox.reply`, `jeeta.inbox.report_event`, `jeeta.studio.pending_work`,
 `jeeta.studio.submit_piece`, `jeeta.studio.brake`. Belgenin gövdesindeki Türkçe araç adları bu
 tabloyla çevrilir.
+
+## Ek C. Gelen kutusunda otomatik yanıt (2026-11-21 eki)
+
+Sahibin 2026-11-21 kararıyla K1, §3, §4.2 kural 1–2 ve §16'daki "Jeeta'nın içinde yapay zekâ
+sağlayıcısı yok" ilkesi **yalnızca gelen kutusu yanıtları için** kaldırılır. Sunucu, sahibin
+Kurallar'da açtığı WhatsApp numaralarına gelen müşteri mesajlarını kendisi yanıtlayabilir: Claude
+API'sini (model `claude-haiku-5-5`) platformun tek anahtarıyla çağırır (`JEETA_ANTHROPIC_API_KEY`,
+`crates/adapters/jt_claude`, `jt_outbound` üzerinden ham HTTP). Anahtar yoksa ya da ayar kapalıysa
+hiçbir şey değişmez.
+
+- Kim neye yanıt verir: yalnızca ajanda (`executor = agent`) ve `ours` durumundaki özel
+  konuşmalar; bir kişinin devralması, telefondaki Business App yanıtı ya da yeni bir mesaj o
+  yanıtı düşürür. Ajanların ve kişilerin yanıtları eskisi gibidir.
+- Sunucunun kuralları (modelin ne yazdığından bağımsız): yanıtta para tutarı yoktur; fiyat yalnız
+  teklif olarak, sahibin aralığı içinde ve yolculuk başına bir kez verilir; kartlarda olmayan
+  bağlantı yoktur; günlük sınırlar ve yetenek politikası (onay, çalışma saatleri, günlük sınır)
+  uygulanır. Standart dışı her şey kişiye devredilir.
+- Müşteri metni hiçbir kayıtta ya da günlükte tutulmaz; çalıştırma satırları yalnız kod ve sayı
+  taşır, modelin maliyeti `auto_reply_runs` içinde mikro dolar olarak durur.
+- SDK crate'i eklenmez; `deny.toml` içindeki yapay zekâ crate yasağı sürer. Görseller, başka
+  kanallar ve sahibe e-posta sonraki adımlardır. Ayrıntı: `docs/operations/auto-reply.md`.

@@ -83,7 +83,9 @@ deny = [
   { crate = "attohttpc" },
   { crate = "curl" },
   { crate = "sqlx", wrappers = ["jt_pg", "jt_testkit", "jeeta"] },
-  # AI / media / speech providers: never, anywhere (spec §4.2).
+  # AI / media / speech provider crates: never, anywhere (spec §4.2). One exception to the rule
+  # behind it, not to this list (spec addendum C, 2026-11-21): the inbox's automatic replies call
+  # the Claude API through `jt_claude`, as raw HTTP over `jt_outbound`; no SDK crate is added.
   { crate = "async-openai" }, { crate = "openai" }, { crate = "openai-api-rs" }, { crate = "openai_api_rust" },
   { crate = "anthropic" }, { crate = "anthropic-sdk" }, { crate = "anthropic-rs" }, { crate = "misanthropic" }, { crate = "clust" },
   { crate = "genai" }, { crate = "rig-core" }, { crate = "langchain-rust" }, { crate = "llm" }, { crate = "llm-chain" },
