@@ -50,8 +50,8 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0047_inbox_auto_reply`.
-const MIGRATIONS: i64 = 47;
+/// Migrations `0001_foundation` through `0048_inbox_person_latest`.
+const MIGRATIONS: i64 = 48;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
@@ -89,6 +89,9 @@ async fn constraint_exists(pool: &PgPool, name: &str) -> bool {
 
 /// The index `0004_role_permissions_backfill` adds for the check-in lookup.
 const CHECKIN_INDEX: &str = "ledger_entries_agent_connection_idx";
+
+/// The index `0048_inbox_person_latest` adds for a conversation's latest message of a person.
+const PERSON_LATEST_INDEX: &str = "messages_person_latest";
 
 /// The trigger functions `0005_connectors` adds.
 const CONNECTOR_FUNCTIONS: [&str; 2] = ["inbound_events_guard", "probe_runs_immutable"];
@@ -185,6 +188,7 @@ async fn up_down_up_round_trip() {
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     assert_eq!(applied_count(&db.pool).await, MIGRATIONS);
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
+    assert!(index_exists(&db.pool, PERSON_LATEST_INDEX).await);
     for index in CONNECTOR_INDEXES {
         assert!(index_exists(&db.pool, index).await, "{index}");
     }
@@ -201,6 +205,7 @@ async fn up_down_up_round_trip() {
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     assert_eq!(applied_count(&db.pool).await, MIGRATIONS);
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
+    assert!(index_exists(&db.pool, PERSON_LATEST_INDEX).await);
     for index in CONNECTOR_INDEXES {
         assert!(index_exists(&db.pool, index).await, "{index}");
     }
@@ -252,6 +257,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     run(connectors_up.clone()).await;
     assert_eq!(table_count(&db.pool).await, TABLES_AFTER_ALL);
     assert!(index_exists(&db.pool, CHECKIN_INDEX).await);
+    assert!(index_exists(&db.pool, PERSON_LATEST_INDEX).await);
     for function in CONNECTOR_FUNCTIONS {
         assert!(function_exists(&db.pool, function).await, "{function}");
     }
@@ -263,6 +269,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0048_inbox_person_latest",
         "0047_inbox_auto_reply",
         "0046_knowledge_base",
         "0045_agent_wake",
@@ -1366,6 +1373,7 @@ async fn studio_migration_up_down_up() {
         include_str!("../../../../migrations/0045_agent_wake.up.sql"),
         include_str!("../../../../migrations/0046_knowledge_base.up.sql"),
         include_str!("../../../../migrations/0047_inbox_auto_reply.up.sql"),
+        include_str!("../../../../migrations/0048_inbox_person_latest.up.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
@@ -1402,6 +1410,7 @@ async fn project_tables_down(pool: &PgPool) {
     // tables after them), the lane approval record on `studio_control`, then the account snapshots
     // (they reference `capabilities`) and the pause columns on the posting policy.
     for down in [
+        include_str!("../../../../migrations/0048_inbox_person_latest.down.sql"),
         include_str!("../../../../migrations/0047_inbox_auto_reply.down.sql"),
         include_str!("../../../../migrations/0046_knowledge_base.down.sql"),
         include_str!("../../../../migrations/0045_agent_wake.down.sql"),

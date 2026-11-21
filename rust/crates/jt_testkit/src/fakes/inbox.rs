@@ -795,6 +795,35 @@ impl MessageRepo for MemTenant {
         Ok(rows.into_iter().skip(skip).collect())
     }
 
+    async fn person_last_at(
+        &mut self,
+        id: ConversationId,
+    ) -> Result<Option<OffsetDateTime>, AppError> {
+        let s = self.state();
+        let mut rows: Vec<&Message> = s
+            .inbox
+            .messages
+            .iter()
+            .filter(|m| {
+                m.workspace_id == self.ws
+                    && m.conversation_id == id
+                    && matches!(m.author, Author::Human(_) | Author::BusinessApp)
+            })
+            .collect();
+        rows.sort_by_key(|m| std::cmp::Reverse((m.at, m.id)));
+        Ok(rows
+            .into_iter()
+            .take(PERSON_SCAN as usize)
+            .find(|m| {
+                !s.inbox.outbox.iter().any(|o| {
+                    o.workspace_id == self.ws
+                        && o.message_id == m.id
+                        && o.intent.get("auto_reply").is_some()
+                })
+            })
+            .map(|m| m.at))
+    }
+
     async fn record_inbound_sender(
         &mut self,
         message: MessageId,

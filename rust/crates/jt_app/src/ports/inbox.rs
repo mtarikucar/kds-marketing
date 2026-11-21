@@ -19,6 +19,10 @@ use crate::error::AppError;
 
 /// Maximum page size for inbox reads; requested limits are clamped to 1..=500.
 pub const MAX_INBOX_PAGE: u32 = 500;
+/// How many of a conversation's latest messages of a person [`MessageRepo::person_last_at`] looks
+/// through for one that is not an approved automatic reply: more than twice the automatic
+/// replies' daily limit for one conversation.
+pub const PERSON_SCAN: u32 = 64;
 /// Fixed reducer stage keys accepted by workspace display labels.
 pub const INBOX_STATUS_KEYS: &[&str] = &[
     "new",
@@ -193,6 +197,15 @@ pub trait MessageRepo: Send + Sync {
 
     /// Latest messages in chronological order.
     async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError>;
+    /// When a person last wrote in conversation `id`: the time of its latest message authored
+    /// `Author::Human` (in the panel) or `Author::BusinessApp` (from the phone), an automatic
+    /// reply a person approved (its outbox row's intent holds `auto_reply`) not counted. One
+    /// indexed lookup (`messages_person_latest`) through at most [`PERSON_SCAN`] of the latest
+    /// such messages: past that many approved automatic replies in a row, none counts.
+    async fn person_last_at(
+        &mut self,
+        id: ConversationId,
+    ) -> Result<Option<OffsetDateTime>, AppError>;
     /// Consumer contract: after a NEW inbound insert, call in the SAME transaction with the
     /// normalized/scoped identity that matched its sender. Stores sender_identity_id on the
     /// message and updates the conversation's last_inbound_identity_id only for its latest

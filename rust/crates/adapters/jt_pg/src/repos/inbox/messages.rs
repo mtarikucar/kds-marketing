@@ -3,7 +3,7 @@ use crate::uow::PgTenantRepos;
 use async_trait::async_trait;
 use jt_app::{
     error::AppError,
-    ports::inbox::{MAX_INBOX_PAGE, MessageRepo},
+    ports::inbox::{MAX_INBOX_PAGE, MessageRepo, PERSON_SCAN},
 };
 use jt_capability::CapabilityId;
 use jt_inbox::{Author, ConversationId, IdentityId, Message, MessageId, MsgStatus};
@@ -30,6 +30,27 @@ impl MessageRepo for PgTenantRepos {
 
     async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError> {
         many!(sqlx::query_scalar("select to_jsonb(m) from (select * from messages where workspace_id=$1 and conversation_id=$2 order by at desc,id desc limit $3) m order by at,id").bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(i64::from(limit.clamp(1,500))),self,Message)
+    }
+
+    async fn person_last_at(
+        &mut self,
+        id: ConversationId,
+    ) -> Result<Option<time::OffsetDateTime>, AppError> {
+        // The inner select walks the partial index `messages_person_latest` (same predicate).
+        sqlx::query_scalar(
+            "select m.at from (select id, at from messages where workspace_id=$1 \
+             and conversation_id=$2 and (author ? 'human' or author = '\"business_app\"'::jsonb) \
+             order by at desc, id desc limit $3) m \
+             where not exists (select 1 from outbox o where o.workspace_id=$1 \
+             and o.message_id=m.id and o.intent ? 'auto_reply') \
+             order by m.at desc, m.id desc limit 1",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(id.as_uuid())
+        .bind(i64::from(PERSON_SCAN))
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read a person's latest message"))
     }
 
     async fn record_inbound_sender(
