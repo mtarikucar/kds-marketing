@@ -39,8 +39,11 @@ impl NoticeKind {
 /// Where a notice is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoticeState {
-    /// Waiting to be sent.
+    /// Waiting to be sent (from `next_at`).
     Queued,
+    /// Being sent: from just before the mail server is asked until its answer is stored. Found so
+    /// later (a crash in between), it is taken as sent, never sent again.
+    Sending,
     /// Sent (or handed to the mail server without a clear answer: never sent twice).
     Sent,
     /// Given up on.
@@ -53,6 +56,7 @@ impl NoticeState {
     pub fn key(self) -> &'static str {
         match self {
             NoticeState::Queued => "queued",
+            NoticeState::Sending => "sending",
             NoticeState::Sent => "sent",
             NoticeState::Failed => "failed",
             NoticeState::Skipped => "skipped",
@@ -62,6 +66,7 @@ impl NoticeState {
     pub fn parse(key: &str) -> Option<NoticeState> {
         match key {
             "queued" => Some(NoticeState::Queued),
+            "sending" => Some(NoticeState::Sending),
             "sent" => Some(NoticeState::Sent),
             "failed" => Some(NoticeState::Failed),
             "skipped" => Some(NoticeState::Skipped),
@@ -83,6 +88,9 @@ pub struct NoticeRow {
     pub created_at: OffsetDateTime,
     pub state: NoticeState,
     pub attempts: u32,
+    /// When a queued notice may be tried (again): none at once.
+    pub next_at: Option<OffsetDateTime>,
+    /// When it was sent; for `Sending`, when the send began.
     pub sent_at: Option<OffsetDateTime>,
     /// The mailbox it went out through.
     pub mailbox_capability_id: Option<CapabilityId>,
@@ -99,8 +107,12 @@ pub trait NoticeRepo: Send + Sync {
     async fn get(&mut self, id: Uuid) -> Result<Option<NoticeRow>, AppError>;
     /// [`NoticeRepo::get`], locked until the transaction ends.
     async fn lock(&mut self, id: Uuid) -> Result<Option<NoticeRow>, AppError>;
-    /// Updates the row's state, attempts, sent time and mailbox. An unknown id is `NOT_FOUND`.
+    /// Updates the row's state, attempts, next and sent times and mailbox. An unknown id is
+    /// `NOT_FOUND`.
     async fn save(&mut self, row: &NoticeRow) -> Result<(), AppError>;
-    /// The queued notices, oldest first, at most `limit`.
-    async fn queued(&mut self, limit: u32) -> Result<Vec<Uuid>, AppError>;
+    /// The queued notices due at `now` (no `next_at`, or one not after `now`), oldest first, at
+    /// most `limit`.
+    async fn due(&mut self, now: OffsetDateTime, limit: u32) -> Result<Vec<Uuid>, AppError>;
+    /// Takes every notice left `Sending` since before `before` as sent; how many.
+    async fn settle_sending(&mut self, before: OffsetDateTime) -> Result<u32, AppError>;
 }

@@ -1811,6 +1811,7 @@ async fn a_machines_message_says_so_and_asks_for_no_automatic_answer() {
     let (port, task) = smtp(SmtpMode::default()).await;
     let mut msg = message();
     msg.auto_submitted = true;
+    msg.notice_marker = Some("0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b".into());
     connector()
         .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
         .await
@@ -1828,7 +1829,11 @@ async fn a_machines_message_says_so_and_asks_for_no_automatic_answer() {
             .unwrap(),
         "All"
     );
-    // A person's message carries neither.
+    assert_eq!(
+        parsed.headers.get_first_value("X-Jeeta-Notice").unwrap(),
+        "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+    );
+    // A person's message carries none of them.
     let (port, task) = smtp(SmtpMode::default()).await;
     connector()
         .send(
@@ -1847,6 +1852,7 @@ async fn a_machines_message_says_so_and_asks_for_no_automatic_answer() {
             .get_first_value("X-Auto-Response-Suppress")
             .is_none()
     );
+    assert!(parsed.headers.get_first_value("X-Jeeta-Notice").is_none());
 }
 
 #[tokio::test]

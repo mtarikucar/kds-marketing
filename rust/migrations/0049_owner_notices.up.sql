@@ -14,8 +14,13 @@ create table if not exists owner_notices (
     -- The hand-over's reason code (or `daily_cap` for a skipped notice).
     reason text,
     created_at timestamptz not null,
-    state text not null check (state in ('queued', 'sent', 'failed', 'skipped')),
+    -- `sending` from just before the mail server is asked until the answer is stored; a row left
+    -- `sending` (a crash in between) is taken as sent, never sent again.
+    state text not null check (state in ('queued', 'sending', 'sent', 'failed', 'skipped')),
     attempts integer not null default 0 check (attempts >= 0),
+    -- When a queued notice may be tried (again): null at once, later after a failed attempt.
+    next_at timestamptz,
+    -- When it was sent (for `sending`: when the send began).
     sent_at timestamptz,
     -- The mailbox the notice goes out through, chosen when it is sent.
     mailbox_capability_id uuid,
@@ -24,7 +29,7 @@ create table if not exists owner_notices (
 );
 
 create index if not exists owner_notices_created on owner_notices (workspace_id, created_at);
-create index if not exists owner_notices_queued on owner_notices (state) where state = 'queued';
+create index if not exists owner_notices_queued on owner_notices (next_at) where state in ('queued', 'sending');
 
 alter table owner_notices enable row level security;
 alter table owner_notices force row level security;

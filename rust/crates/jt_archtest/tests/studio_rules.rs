@@ -1294,7 +1294,7 @@ fn all_connector_write_sites_have_reservation_paths() {
         // rolling day where they are queued (`queue_in` counts them, below).
         (
             "crates/jt_app/src/usecases/inbox/notices.rs".into(),
-            "send_all".into(),
+            "send_one".into(),
             "send".into(),
         ),
     ]);

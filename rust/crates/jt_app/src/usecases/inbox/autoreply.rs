@@ -635,8 +635,6 @@ pub async fn run(deps: &Deps, now: OffsetDateTime) -> JobReport {
                 }
             }
         }
-        // The owner's notices of this turn's hand-overs.
-        super::notices::send_queued(deps, ws, deps.clock.now().max(now)).await;
     }
     report
 }
@@ -664,8 +662,6 @@ pub async fn reconcile(deps: &Deps, now: OffsetDateTime, deadline: std::time::In
         if std::time::Instant::now() >= deadline {
             return;
         }
-        // The owner's notices left queued (a failed send, a crash after the hand-over).
-        super::notices::send_queued(deps, ws, now).await;
         let found = async {
             let mut r = deps.uow.tenant(ws).await?;
             let Some(auto) = r.knowledge().settings().await?.and_then(|s| s.auto_reply) else {
@@ -1035,7 +1031,7 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 json!({ "run_id": null, "reason": "failed", "by": By::Server.key() }),
             )
             .await?;
-            super::notices::queue_in(
+            super::notices::queue_best_effort(
                 deps,
                 ctx,
                 r.as_mut(),
@@ -1992,7 +1988,7 @@ async fn hand_over(
     )
     .await?;
     // The owner is told by email, once for this hand-over.
-    super::notices::queue_in(
+    super::notices::queue_best_effort(
         deps,
         ctx,
         r,

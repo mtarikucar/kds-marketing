@@ -684,6 +684,13 @@ impl PlatformRepos for PgPlatformRepos {
         crate::repos::autoreply::workspaces_with_auto_reply(&mut self.tx).await
     }
 
+    async fn workspaces_with_due_notices(
+        &mut self,
+        now: time::OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        crate::repos::notices::workspaces_with_due_notices(&mut self.tx, now).await
+    }
+
     async fn workspaces_with_due_auto_replies(
         &mut self,
         now: OffsetDateTime,

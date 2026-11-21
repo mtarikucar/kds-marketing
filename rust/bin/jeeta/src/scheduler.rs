@@ -84,6 +84,7 @@ pub struct Intervals {
     pub purge_request_keys: Duration,
     pub agent_wake: Duration,
     pub inbox_auto_reply: Duration,
+    pub owner_notices: Duration,
     pub knowledge_settle: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
@@ -141,6 +142,7 @@ impl Default for Intervals {
             agent_wake: Duration::from_secs(10),
             knowledge_settle: 10 * MINUTE,
             inbox_auto_reply: Duration::from_secs(3),
+            owner_notices: Duration::from_secs(30),
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -188,6 +190,7 @@ impl Intervals {
             Job::AgentWake => self.agent_wake,
             Job::KnowledgeSettle => self.knowledge_settle,
             Job::InboxAutoReply => self.inbox_auto_reply,
+            Job::OwnerNotices => self.owner_notices,
         }
     }
 }
@@ -514,6 +517,7 @@ mod tests {
             agent_wake: every,
             knowledge_settle: every,
             inbox_auto_reply: every,
+            owner_notices: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -651,6 +655,8 @@ mod tests {
         assert_eq!(Job::AgentWake.lock_name(), "jeeta.jobs.agent_wake");
         assert_eq!(i.of(Job::KnowledgeSettle), 10 * MINUTE);
         assert_eq!(i.of(Job::InboxAutoReply), Duration::from_secs(3));
+        assert_eq!(i.of(Job::OwnerNotices), Duration::from_secs(30));
+        assert_eq!(Job::OwnerNotices.lock_name(), "jeeta.jobs.owner_notices");
         assert_eq!(
             Job::InboxAutoReply.lock_name(),
             "jeeta.jobs.inbox_auto_reply"

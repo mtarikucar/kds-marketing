@@ -482,6 +482,7 @@ pub fn message() -> MailMessage {
         list_unsubscribe: None,
         attachment_files: vec![],
         auto_submitted: false,
+        notice_marker: None,
     }
 }
 

@@ -2038,6 +2038,12 @@ pub trait PlatformRepos: Send + Sync {
     /// (`knowledge_settings.auto_reply.capability_ids` not empty): those the job's sweep for
     /// unscheduled customer messages looks in.
     async fn workspaces_with_auto_reply(&mut self) -> Result<Vec<WorkspaceId>, AppError>;
+    /// The workspaces with an owner's notice to send at `now` (`inbox::notices`): a queued one
+    /// due, or one left being sent; in id order. One platform-wide read.
+    async fn workspaces_with_due_notices(
+        &mut self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError>;
     /// Appends a ledger entry to `entry.workspace_id` on behalf of the platform.
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;

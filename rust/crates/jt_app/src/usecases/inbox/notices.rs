@@ -2,24 +2,31 @@
 //! conversation to a person (or, from the orders' release, create an order), the workspace's team
 //! managers are told by email, through the workspace's own oldest verified mailbox.
 //!
-//! - **Written** in the hand-over's own transaction (`queue_in`): one row per hand-over (its
-//!   dedupe key names the conversation and the executor generation the hand-over wrote). Nothing at
-//!   all while the setting is off (`AutoReply::notify_email`) or no verified mailbox exists; over
-//!   [`DAILY_NOTICES`] in a rolling day the row is kept as `skipped` (`daily_cap`).
-//! - **Sent** after each workspace's turn of the automatic replies' job and in its minute sweep
-//!   ([`send_queued`]): claimed (one attempt counted) in a transaction of its own, then sent with no
-//!   lock held, one email to each of at most [`MAX_RECIPIENTS`] active members whose role has
-//!   `team.manage`. A transient failure is asked again, up to [`MAX_ATTEMPTS`] attempts; an
-//!   answer that may have reached the mail server (`Unknown`) counts as sent, never again.
+//! - **Written** in the hand-over's own transaction, inside a savepoint (`queue_best_effort`): one
+//!   row per hand-over (its dedupe key names the conversation and the executor generation the
+//!   hand-over wrote). A failure undoes only the notice (logged by code): the hand-over commits.
+//!   Nothing at all while the setting is off (`AutoReply::notify_email`) or no verified mailbox
+//!   exists; over [`DAILY_NOTICES`] in a rolling day the row is kept as `skipped` (`daily_cap`).
+//! - **Sent** by a job of its own ([`run`], `owner_notices`), never by the automatic replies'
+//!   job: at most [`RUN_PER_WORKSPACE`] notices per workspace and [`RUN_BUDGET`] per run. Each is
+//!   claimed (one attempt counted) and marked `sending` in a transaction of its own, then sent
+//!   with no lock held, each email within [`SEND_TIMEOUT`], one to each of at most
+//!   [`MAX_RECIPIENTS`] active members whose role has `team.manage`. A transient failure (or any
+//!   error before the send) waits [`BACKOFF_MINUTES`] before the next of at most [`MAX_ATTEMPTS`]
+//!   attempts; an answer that may have reached the mail server (`Unknown`, a timeout) counts as
+//!   sent, never again, and so does a row found still `sending` later (a crash in between).
 //! - **What it says**: what happened, the reason in plain words (a fixed table of codes) and the
 //!   conversation's link in the panel. Never a customer's name, text or summary; the row holds
 //!   codes and ids only.
-//! - **Never back in the inbox**: each email's `Message-ID` is `<jeeta-notice.{id}.{n}@{domain}>`.
-//!   The consumer drops a polled mail (its inbox copy, its Sent copy, an answer to it) whose
-//!   `Message-ID` or `In-Reply-To` names a notice the workspace holds (`own_notice`).
+//! - **Never back in the inbox** (`own_notice`): a polled mail (the notice's inbox copy, its Sent
+//!   copy, an answer to it, or a bounce of it) is dropped when its `Message-ID` or `In-Reply-To` is
+//!   `<jeeta-notice.{id}.…>`, or it comes from the workspace's own mailbox address with
+//!   `Auto-Submitted` and `X-Jeeta-Notice: {id}`, or it is a delivery report that quotes such an id
+//!   (or bears a notice's subject within [`BOUNCE_WINDOW`] of a notice): each id one the workspace
+//!   holds.
 
 use jt_capability::{Capability, StoredStatus};
-use jt_connector::Provider;
+use jt_connector::{ConnectorError, Provider};
 use jt_inbox::ConversationId;
 use jt_tenancy::{MembershipStatus, Permission, WorkspaceId};
 use serde_json::Value;
@@ -33,17 +40,33 @@ use crate::ports::notices::{NoticeKind, NoticeRow, NoticeState};
 use crate::ports::{CapabilityFilter, TenantRepos};
 use crate::usecases::Deps;
 use crate::usecases::connector::open_credential;
+use crate::usecases::jobs::JobReport;
 
 /// The most notices a workspace is sent in a rolling day; past it they are kept as skipped.
 pub const DAILY_NOTICES: u32 = 20;
 /// The most people one notice is sent to.
 pub const MAX_RECIPIENTS: usize = 5;
 /// The most attempts at one notice.
-pub const MAX_ATTEMPTS: u32 = 3;
-/// The most notices one turn sends for a workspace.
-const SEND_BATCH: u32 = 10;
+pub const MAX_ATTEMPTS: u32 = 4;
+/// How long a notice waits after its first, second and third failed attempt, in minutes.
+pub const BACKOFF_MINUTES: [i64; 3] = [1, 5, 15];
+/// The most notices one run of the job sends for a workspace.
+pub const RUN_PER_WORKSPACE: u32 = 3;
+/// How long one run of the job starts new notices for.
+pub const RUN_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+/// How long one email may take; past it, it may have gone out, so it counts as sent.
+pub const SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+/// A notice left `sending` this long is taken as sent.
+const SENDING_STALE: Duration = Duration::minutes(10);
+/// How long after a notice a delivery report bearing its subject is taken as its bounce.
+pub const BOUNCE_WINDOW: Duration = Duration::minutes(30);
 /// What every notice's `Message-ID` starts with.
 const ID_PREFIX: &str = "jeeta-notice.";
+/// The subjects of the notices.
+const SUBJECTS: [&str; 2] = [
+    "Jeeta: bir konuşma sizi bekliyor",
+    "Jeeta: yeni sipariş oluşturuldu",
+];
 
 /// The workspace's mailbox the notices go out through: its oldest live, verified mailbox.
 pub(crate) fn mailbox(capabilities: &[Capability]) -> Option<&Capability> {
@@ -61,6 +84,33 @@ async fn mailboxes(r: &mut dyn TenantRepos) -> Result<Vec<Capability>, AppError>
             ..Default::default()
         })
         .await
+}
+
+/// [`queue_in`] inside a savepoint of the caller's transaction: a failure (a settings read, the
+/// mailbox list, the count, the insert) undoes only the notice and is logged by code; the caller's
+/// work (a hand-over) commits all the same. `Err` only when the savepoint itself cannot be undone.
+/// A bundle without savepoints writes no notice.
+pub(crate) async fn queue_best_effort(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    kind: NoticeKind,
+    conversation: ConversationId,
+    dedupe_key: String,
+    reason: Option<&str>,
+) -> Result<(), AppError> {
+    if let Err(e) = r.savepoint().await {
+        warn(ctx.workspace_id, e.code.as_str());
+        return Ok(());
+    }
+    match queue_in(deps, ctx, r, kind, conversation, dedupe_key, reason).await {
+        Ok(()) => r.release_savepoint().await,
+        Err(e) => {
+            warn(ctx.workspace_id, e.code.as_str());
+            r.rollback_to_savepoint().await?;
+            r.release_savepoint().await
+        }
+    }
 }
 
 /// Queues a notice of `kind` about conversation `conversation`, in the caller's transaction: at
@@ -100,6 +150,7 @@ pub(crate) async fn queue_in(
             created_at: ctx.now,
             state,
             attempts: 0,
+            next_at: None,
             sent_at: None,
             mailbox_capability_id: None,
         })
@@ -107,19 +158,78 @@ pub(crate) async fn queue_in(
     Ok(())
 }
 
-/// Whether polled mail `payload` (its `message_id` and `in_reply_to`) is one of the workspace's own
-/// notices, or an answer to one: a `Message-ID` `<jeeta-notice.{id}.…>` whose id the workspace
-/// holds. An id it does not hold is not (the mail is consumed as any other).
-pub(crate) async fn own_notice(r: &mut dyn TenantRepos, payload: &Value) -> Result<bool, AppError> {
+/// Whether polled mail `payload`, received at `at`, is one of the workspace's own notices, an
+/// answer to one or a bounce of one (see the module docs). A `jeeta-notice` id the workspace does
+/// not hold is not: the mail is consumed as any other.
+pub(crate) async fn own_notice(
+    r: &mut dyn TenantRepos,
+    payload: &Value,
+    at: OffsetDateTime,
+) -> Result<bool, AppError> {
+    let text = |key: &str| payload[key].as_str().unwrap_or_default();
+    // 1. Its `Message-ID`, or the one it answers.
     for field in ["message_id", "in_reply_to"] {
-        let Some(id) = payload[field].as_str().and_then(notice_id) else {
-            continue;
-        };
+        if let Some(id) = notice_id(text(field))
+            && r.notices().get(id).await?.is_some()
+        {
+            return Ok(true);
+        }
+    }
+    let ours = |address: &str, mailboxes: &[Capability]| {
+        let address = address.trim().to_ascii_lowercase();
+        !address.is_empty()
+            && mailboxes.iter().any(|m| {
+                m.external_id
+                    .as_deref()
+                    .is_some_and(|a| a.trim().eq_ignore_ascii_case(&address))
+            })
+    };
+    // 2. From the workspace's own mailbox, a machine's message, with the notice's marker.
+    let auto = text("auto_submitted")
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("auto-generated");
+    if auto
+        && let Ok(id) = text("jeeta_notice").trim().parse::<Uuid>()
+        && ours(text("from"), &mailboxes(r).await?)
+        && r.notices().get(id).await?.is_some()
+    {
+        return Ok(true);
+    }
+    // 3. A delivery report: from a mail daemon, or a `multipart/report`.
+    let from = text("from").trim().to_ascii_lowercase();
+    let daemon = from
+        .split('@')
+        .next()
+        .is_some_and(|local| local.starts_with("mailer-daemon") || local == "postmaster");
+    if !(daemon || payload["report"] == true) {
+        return Ok(false);
+    }
+    let body = format!("{}\n{}", text("subject"), text("text"));
+    for id in quoted_ids(&body) {
         if r.notices().get(id).await?.is_some() {
             return Ok(true);
         }
     }
+    // Its subject, addressed back to the mailbox, shortly after a notice.
+    let subject = text("subject");
+    if SUBJECTS.iter().any(|s| subject.contains(s)) {
+        let caps = mailboxes(r).await?;
+        if text("to").split(',').any(|to| ours(bare(to), &caps))
+            && r.notices().count_since(at - BOUNCE_WINDOW).await? > 0
+        {
+            return Ok(true);
+        }
+    }
     Ok(false)
+}
+
+/// The address in `Name <address>`, or the text itself.
+fn bare(field: &str) -> &str {
+    match (field.find('<'), field.rfind('>')) {
+        (Some(a), Some(b)) if a < b => &field[a + 1..b],
+        _ => field,
+    }
 }
 
 /// The notice id in a `Message-ID` `<jeeta-notice.{uuid}.{n}@{domain}>` (with or without the
@@ -133,40 +243,175 @@ fn notice_id(header: &str) -> Option<Uuid> {
     })
 }
 
-/// Sends workspace `ws`'s queued notices (see the module docs); failures are logged by code and
-/// never stop the job.
-pub async fn send_queued(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime) {
-    if let Err(e) = send_all(deps, ws, now).await {
-        warn(ws, e.code.as_str());
+/// Every notice id a delivery report's text quotes: `jeeta-notice.{uuid}` (its Message-ID) or
+/// `X-Jeeta-Notice: {uuid}` (its marker header).
+fn quoted_ids(body: &str) -> Vec<Uuid> {
+    let mut out = Vec::new();
+    for (i, _) in body.match_indices(ID_PREFIX) {
+        let rest = &body[i + ID_PREFIX.len()..];
+        if let Some(id) = rest.get(..36).and_then(|s| s.parse().ok()) {
+            out.push(id);
+        }
     }
+    let lower = body.to_ascii_lowercase();
+    for (i, _) in lower.match_indices("x-jeeta-notice:") {
+        let rest = body[i + "x-jeeta-notice:".len()..].trim_start();
+        if let Some(id) = rest.get(..36).and_then(|s| s.parse().ok()) {
+            out.push(id);
+        }
+    }
+    out
 }
 
 fn warn(ws: WorkspaceId, code: &str) {
-    tracing::warn!(job = "inbox_auto_reply", workspace_id = %ws, code, "an owner notice failed");
+    tracing::warn!(job = "owner_notices", workspace_id = %ws, code, "an owner notice failed");
 }
 
-async fn send_all(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<(), AppError> {
+/// One run of the `owner_notices` job: the due notices of every workspace holding one (found with
+/// one platform-wide read), at most [`RUN_PER_WORKSPACE`] each, within [`RUN_BUDGET`]. Nothing
+/// without a mail sender.
+pub async fn run(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let mut report = JobReport::default();
+    let Some(sender) = deps.connectors.mail_sender(Provider::Mail) else {
+        return report;
+    };
+    let workspaces = async {
+        let mut platform = deps.uow.platform().await?;
+        platform.workspaces_with_due_notices(now).await
+    };
+    let workspaces = match workspaces.await {
+        Ok(found) => found,
+        Err(e) => {
+            report.failed += 1;
+            tracing::warn!(
+                job = "owner_notices",
+                code = e.code.as_str(),
+                "owner notices failed"
+            );
+            return report;
+        }
+    };
+    let deadline = std::time::Instant::now() + RUN_BUDGET;
+    for ws in workspaces {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        match send_due(deps, sender.as_ref(), ws, now, deadline).await {
+            Ok((sent, failed)) => {
+                report.touched += u64::from(sent + failed);
+                report.changed += u64::from(sent);
+                report.failed += u64::from(failed);
+            }
+            Err(e) => {
+                report.failed += 1;
+                warn(ws, e.code.as_str());
+            }
+        }
+    }
+    report
+}
+
+/// Workspace `ws`'s turn: rows left `sending` are taken as sent, then its due notices are sent one
+/// after the other (each failure counted on its row, the next tried all the same). How many went
+/// out and how many failed.
+async fn send_due(
+    deps: &Deps,
+    sender: &dyn crate::ports::connectors::MailSender,
+    ws: WorkspaceId,
+    now: OffsetDateTime,
+    deadline: std::time::Instant,
+) -> Result<(u32, u32), AppError> {
     let ids = {
         let mut r = deps.uow.tenant(ws).await?;
-        r.notices().queued(SEND_BATCH).await?
+        r.notices().settle_sending(now - SENDING_STALE).await?;
+        let ids = r.notices().due(now, RUN_PER_WORKSPACE).await?;
+        r.commit().await?;
+        ids
     };
     if ids.is_empty() {
-        return Ok(());
+        return Ok((0, 0));
     }
-    let Some(sender) = deps.connectors.mail_sender(Provider::Mail) else {
+    crate::usecases::connector::refresh_tenant_hosts(deps, ws).await?;
+    let (mut sent, mut failed) = (0, 0);
+    for id in ids {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        match send_one(deps, sender, ws, id, now).await {
+            Ok(true) => sent += 1,
+            Ok(false) => failed += 1,
+            Err(e) => {
+                failed += 1;
+                warn(ws, e.code.as_str());
+                if let Err(e) = attempt_failed(deps, ws, id, now).await {
+                    warn(ws, e.code.as_str());
+                }
+            }
+        }
+    }
+    Ok((sent, failed))
+}
+
+/// The state a notice takes after a failed attempt: queued again after its backoff, or failed once
+/// its attempts are spent.
+fn after_failure(row: &mut NoticeRow, now: OffsetDateTime) {
+    if row.attempts >= MAX_ATTEMPTS {
+        row.state = NoticeState::Failed;
+        row.next_at = None;
+    } else {
+        let wait =
+            BACKOFF_MINUTES[(row.attempts.max(1) as usize - 1).min(BACKOFF_MINUTES.len() - 1)];
+        row.state = NoticeState::Queued;
+        row.next_at = Some(now + Duration::minutes(wait));
+    }
+}
+
+/// An error before the send (the claim, the credential): the attempt is counted on the row, which
+/// waits its backoff or fails. A row already `sending` is left to be taken as sent.
+async fn attempt_failed(
+    deps: &Deps,
+    ws: WorkspaceId,
+    id: Uuid,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    let mut r = deps.uow.tenant(ws).await?;
+    let Some(mut row) = r.notices().lock(id).await? else {
         return Ok(());
     };
-    crate::usecases::connector::refresh_tenant_hosts(deps, ws).await?;
-    for id in ids {
-        // Claim: one attempt counted before anything is sent.
+    if row.state != NoticeState::Queued {
+        return Ok(());
+    }
+    row.attempts += 1;
+    after_failure(&mut row, now);
+    r.notices().save(&row).await?;
+    r.commit().await
+}
+
+/// Sends notice `id`: `Ok(true)` when it went out (or may have), `Ok(false)` when this attempt
+/// failed or it was not due, `Err` for an error before the send (the caller counts the attempt).
+async fn send_one(
+    deps: &Deps,
+    sender: &dyn crate::ports::connectors::MailSender,
+    ws: WorkspaceId,
+    id: Uuid,
+    now: OffsetDateTime,
+) -> Result<bool, AppError> {
+    // Claim: the attempt counted, `sending` from here; the credential opened first, so an error
+    // before the send leaves the row queued for `attempt_failed`.
+    let (row, credential, to, domain) = {
         let mut r = deps.uow.tenant(ws).await?;
         let Some(mut row) = r.notices().lock(id).await? else {
-            continue;
+            return Ok(false);
         };
-        if row.state != NoticeState::Queued {
-            continue;
+        if row.state != NoticeState::Queued || row.next_at.is_some_and(|at| at > now) {
+            return Ok(false);
         }
-        row.attempts += 1;
+        if row.attempts >= MAX_ATTEMPTS {
+            row.state = NoticeState::Failed;
+            r.notices().save(&row).await?;
+            r.commit().await?;
+            return Ok(false);
+        }
         let caps = mailboxes(r.as_mut()).await?;
         let mailbox = mailbox(&caps).cloned();
         let sealed = match &mailbox {
@@ -174,23 +419,21 @@ async fn send_all(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<(
             None => None,
         };
         let to = recipients(r.as_mut()).await?;
+        row.attempts += 1;
         let (Some(mailbox), Some(sealed)) = (mailbox, sealed) else {
             row.state = NoticeState::Failed;
             r.notices().save(&row).await?;
             r.commit().await?;
             warn(ws, "no_mailbox");
-            continue;
+            return Ok(false);
         };
         if to.is_empty() {
             row.state = NoticeState::Failed;
             r.notices().save(&row).await?;
             r.commit().await?;
             warn(ws, "no_recipient");
-            continue;
+            return Ok(false);
         }
-        row.mailbox_capability_id = Some(mailbox.id);
-        r.notices().save(&row).await?;
-        r.commit().await?;
         let credential = open_credential(deps, ws, &sealed)?;
         let domain = mailbox
             .external_id
@@ -202,53 +445,63 @@ async fn send_all(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime) -> Result<(
                     .and_then(|u| u.host_str().map(str::to_owned))
             })
             .unwrap_or_else(|| "jeeta.invalid".to_owned());
-        let (subject, text) = words(deps, &row);
-        // Sent: any mail that went out, or that may have.
-        let mut reached = false;
-        let mut transient = false;
-        for (n, address) in to.iter().enumerate() {
-            let mail = MailMessage {
-                to: address.clone(),
-                subject: subject.to_owned(),
-                text: text.clone(),
-                message_id: format!("<{ID_PREFIX}{}.{n}@{domain}>", row.id),
-                in_reply_to: None,
-                references: Vec::new(),
-                attachments: Vec::new(),
-                from_name: Some("Jeeta".to_owned()),
-                list_unsubscribe: None,
-                attachment_files: Vec::new(),
-                auto_submitted: true,
-            };
-            match sender.send(ws, &credential, mail).await {
-                Ok(_) => reached = true,
-                Err(jt_connector::ConnectorError::Unknown { .. }) => reached = true,
-                Err(
-                    jt_connector::ConnectorError::Transient { .. }
-                    | jt_connector::ConnectorError::Throttle { .. },
-                ) => transient = true,
-                Err(_) => {}
-            }
-        }
-        let mut r = deps.uow.tenant(ws).await?;
-        let Some(mut done) = r.notices().lock(id).await? else {
-            continue;
-        };
-        done.state = if reached {
-            done.sent_at = Some(now);
-            NoticeState::Sent
-        } else if transient && done.attempts < MAX_ATTEMPTS {
-            NoticeState::Queued
-        } else {
-            NoticeState::Failed
-        };
-        r.notices().save(&done).await?;
+        row.state = NoticeState::Sending;
+        row.sent_at = Some(now);
+        row.mailbox_capability_id = Some(mailbox.id);
+        r.notices().save(&row).await?;
         r.commit().await?;
-        if !reached {
-            warn(ws, "send_failed");
+        (row, credential, to, domain)
+    };
+    let (subject, text) = words(deps, &row);
+    // Sent: any mail that went out, or that may have.
+    let mut reached = false;
+    let mut transient = false;
+    for (n, address) in to.iter().enumerate() {
+        let mail = MailMessage {
+            to: address.clone(),
+            subject: subject.to_owned(),
+            text: text.clone(),
+            message_id: format!("<{ID_PREFIX}{}.{n}@{domain}>", row.id),
+            in_reply_to: None,
+            references: Vec::new(),
+            attachments: Vec::new(),
+            from_name: Some("Jeeta".to_owned()),
+            list_unsubscribe: None,
+            attachment_files: Vec::new(),
+            auto_submitted: true,
+            notice_marker: Some(row.id.to_string()),
+        };
+        match tokio::time::timeout(SEND_TIMEOUT, sender.send(ws, &credential, mail)).await {
+            Ok(Ok(_)) | Ok(Err(ConnectorError::Unknown { .. })) | Err(_) => reached = true,
+            Ok(Err(ConnectorError::Transient { .. } | ConnectorError::Throttle { .. })) => {
+                transient = true
+            }
+            Ok(Err(_)) => {}
         }
     }
-    Ok(())
+    let mut r = deps.uow.tenant(ws).await?;
+    let Some(mut done) = r.notices().lock(id).await? else {
+        return Ok(reached);
+    };
+    if done.state != NoticeState::Sending {
+        return Ok(reached);
+    }
+    if reached {
+        done.state = NoticeState::Sent;
+        done.sent_at = Some(now);
+    } else if transient {
+        done.sent_at = None;
+        after_failure(&mut done, now);
+    } else {
+        done.state = NoticeState::Failed;
+        done.sent_at = None;
+    }
+    r.notices().save(&done).await?;
+    r.commit().await?;
+    if !reached {
+        warn(ws, "send_failed");
+    }
+    Ok(reached)
 }
 
 /// The addresses a notice goes to: active members whose role has `team.manage`, each once, at
@@ -351,6 +604,45 @@ mod tests {
         );
         assert_eq!(notice_id("<jeeta-notice.not-a-uuid.0@example.com>"), None);
         assert_eq!(notice_id(&format!("<{id}@example.com>")), None);
+    }
+
+    #[test]
+    fn a_report_quotes_a_notice_by_its_message_id_or_its_marker() {
+        let (a, b) = (Uuid::now_v7(), Uuid::now_v7());
+        let body = format!(
+            "Original-Message-ID: <jeeta-notice.{a}.0@example.com>
+x-jeeta-notice:  {b}
+"
+        );
+        assert_eq!(quoted_ids(&body), vec![a, b]);
+        assert!(quoted_ids("jeeta-notice.short X-Jeeta-Notice: nope").is_empty());
+    }
+
+    #[test]
+    fn a_failed_attempt_waits_one_five_then_fifteen_minutes_and_then_fails() {
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let mut row = NoticeRow {
+            id: Uuid::now_v7(),
+            kind: NoticeKind::HandedOver,
+            conversation_id: ConversationId::new_v7(),
+            dedupe_key: "k".into(),
+            reason: None,
+            created_at: now,
+            state: NoticeState::Sending,
+            attempts: 0,
+            next_at: None,
+            sent_at: None,
+            mailbox_capability_id: None,
+        };
+        for (attempts, wait) in [(1, 1), (2, 5), (3, 15)] {
+            row.attempts = attempts;
+            after_failure(&mut row, now);
+            assert_eq!(row.state, NoticeState::Queued);
+            assert_eq!(row.next_at, Some(now + Duration::minutes(wait)));
+        }
+        row.attempts = MAX_ATTEMPTS;
+        after_failure(&mut row, now);
+        assert_eq!(row.state, NoticeState::Failed);
     }
 
     #[test]

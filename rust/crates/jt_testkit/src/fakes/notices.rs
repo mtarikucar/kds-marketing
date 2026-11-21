@@ -13,6 +13,9 @@ use super::tenant::MemTenant;
 #[async_trait]
 impl NoticeRepo for MemTenant {
     async fn insert(&mut self, row: &NoticeRow) -> Result<bool, AppError> {
+        if self.tx.notice_insert_fails() {
+            return self.call(|_| Err(AppError::internal("injected notice write failure")));
+        }
         let ws = self.ws;
         if self
             .state()
@@ -59,6 +62,7 @@ impl NoticeRepo for MemTenant {
                     if *w == ws && n.id == row.id {
                         n.state = row.state;
                         n.attempts = row.attempts;
+                        n.next_at = row.next_at;
                         n.sent_at = row.sent_at;
                         n.mailbox_capability_id = row.mailbox_capability_id;
                     }
@@ -68,13 +72,15 @@ impl NoticeRepo for MemTenant {
         })
     }
 
-    async fn queued(&mut self, limit: u32) -> Result<Vec<Uuid>, AppError> {
+    async fn due(&mut self, now: OffsetDateTime, limit: u32) -> Result<Vec<Uuid>, AppError> {
         let ws = self.ws;
         let mut rows: Vec<&NoticeRow> = self
             .state()
             .notices
             .iter()
-            .filter(|(w, n)| *w == ws && n.state == NoticeState::Queued)
+            .filter(|(w, n)| {
+                *w == ws && n.state == NoticeState::Queued && n.next_at.is_none_or(|at| at <= now)
+            })
             .map(|(_, n)| n)
             .collect();
         rows.sort_by_key(|n| (n.created_at, n.id));
@@ -83,6 +89,31 @@ impl NoticeRepo for MemTenant {
             .take(limit.clamp(1, 100) as usize)
             .map(|n| n.id)
             .collect())
+    }
+
+    async fn settle_sending(&mut self, before: OffsetDateTime) -> Result<u32, AppError> {
+        let ws = self.ws;
+        let n = self
+            .state()
+            .notices
+            .iter()
+            .filter(|(w, n)| {
+                *w == ws
+                    && n.state == NoticeState::Sending
+                    && n.sent_at.is_some_and(|at| at < before)
+            })
+            .count() as u32;
+        self.tx.write(move |s| {
+            for (w, n) in &mut s.notices {
+                if *w == ws
+                    && n.state == NoticeState::Sending
+                    && n.sent_at.is_some_and(|at| at < before)
+                {
+                    n.state = NoticeState::Sent;
+                }
+            }
+        });
+        Ok(n)
     }
 }
 

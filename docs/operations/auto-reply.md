@@ -114,12 +114,23 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   and the dialog's checkbox "Devir ve siparişleri e-postayla bildir" turns them off. No mailbox:
   no line, no checkbox, no email.
 - At most 20 per workspace in a rolling day; past that a notice is kept as `skipped`
-  (`daily_cap`). One per hand-over. A transient send failure is tried again, up to three attempts;
-  a send whose outcome is unknown counts as sent and is never repeated.
+  (`daily_cap`). One per hand-over, written in a savepoint of the hand-over's transaction: a
+  failing notice write never undoes the hand-over (logged by code).
+- Sent by a job of its own, `owner_notices`, every 30 s (never by `inbox_auto_reply`): at most
+  three notices per workspace and 20 s per run, each email within 15 s. A failed attempt (a
+  transient send failure, or an error before the send) waits 1, 5 then 15 minutes; after the
+  fourth the notice is `failed`. A send whose outcome is unknown (or that timed out) counts as
+  sent and is never repeated; so does a notice found still `sending` ten minutes later.
 - Each email's `Message-ID` is `<jeeta-notice.{id}.{n}@{mailbox domain}>`, with
-  `Auto-Submitted: auto-generated` and `X-Auto-Response-Suppress: All`. When the mailbox polls the
-  notice back (its inbox copy, its Sent copy, or an answer to it), the consumer drops it
-  (`own_notice`): it never becomes a conversation.
+  `Auto-Submitted: auto-generated`, `X-Auto-Response-Suppress: All` and `X-Jeeta-Notice: {id}`.
+  The consumer drops a polled mail (`own_notice`, it never becomes a conversation) when its
+  `Message-ID` or `In-Reply-To` names a notice the workspace holds (the inbox copy, the Sent copy,
+  an answer); when it comes from the workspace's own mailbox address with `Auto-Submitted` and the
+  marker of a notice it holds (a provider that rewrote the `Message-ID`); and when it is a
+  delivery report (from `mailer-daemon` or `postmaster`, or a `multipart/report`) that quotes a
+  notice's `Message-ID` or marker, or bears a notice's subject, addressed back to the mailbox
+  within 30 minutes of a notice. A standard failed delivery report is already turned by `jt_mail`
+  into a delivery status keyed by the original `Message-ID`, which the first rule catches.
 - `owner_notices` (migration `0049_owner_notices`) holds codes and ids only.
 
 ## What is kept
