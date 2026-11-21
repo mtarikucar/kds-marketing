@@ -105,10 +105,17 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   up to a whole ten, never below the lowest price. The message is the model's short line (when
   it names no money) and the server's line "İndirimli fiyatımız: {price}."; the discounted quote
   replaces the earlier one (one current price per journey), and the run and the ledger record the
-  step (`discount_step`). A discount the customer did not ask for, or before any quote, is not
-  given; when nothing more can be given the assistant says it is the best price ("Size
-  sunabileceğimiz en iyi fiyat bu." when it asks again) and carries on, without a hand-over. A
-  person's price in the journey still hands over (`human_quoted`).
+  step (`discount_step`). The customer bargains only with a bargaining word (indirim, pahalı,
+  son fiyat …) or a lower price in a money form ("3.500 TL", "3 bin", "3,5k"); a bare number (an
+  address, a quantity) does not. A discount the customer did not ask for, or with no current
+  quote, is not given, and bargaining never ends in a hand-over: the model is told where the
+  conversation stands in a note of its own (uncached; the policy itself sits in the cached
+  workspace part), and when it asks again anyway the server answers "Size sunabileceğimiz en iyi
+  fiyat bu." (nothing more to give, or not asked) or "Size en uygun teklifi hazırlayalım:
+  isteğinizi biraz daha anlatır mısınız?" (no current quote). A discounted quote is sent only as
+  the second check saw it: a bargain that moved during the call is asked again. A person's price
+  in the journey still hands over (`human_quoted`). A stored percent that is not a whole number
+  from 0 to 50, or a preferred above the largest, reads as no discount.
 - The capability's policy applies: approval (the reply waits in the approvals list and in the
   conversation, where it can be approved or discarded; automatic messages carry an "otomatik"
   mark there), working hours

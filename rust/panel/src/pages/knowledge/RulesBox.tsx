@@ -250,7 +250,7 @@ function AutoReplyField({
             min={0}
             max={50}
             value={discount[0]}
-            disabled={!auto.available}
+            disabled={!auto.available || !on}
             onChange={(e) => onDiscount([percent(e.target.value), discount[1]])}
           />
           <Label htmlFor="knowledge-discount-max">{t('knowledge.rules.dialog.discountMax')}</Label>
@@ -261,7 +261,7 @@ function AutoReplyField({
             min={0}
             max={50}
             value={discount[1]}
-            disabled={!auto.available}
+            disabled={!auto.available || !on}
             onChange={(e) => onDiscount([discount[0], percent(e.target.value)])}
           />
         </div>

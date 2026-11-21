@@ -429,11 +429,8 @@ fn rules_view(
                 kind: c.kind_key.clone(),
             })
             .collect(),
-        discount_preferred_pct: s
-            .auto_reply
-            .as_ref()
-            .map_or(0, |a| a.discount_preferred_pct),
-        discount_max_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount_max_pct),
+        discount_preferred_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount().0),
+        discount_max_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount().1),
         notify: {
             let mailbox = crate::usecases::inbox::notices::mailbox(capabilities);
             NotifyView {

@@ -101,7 +101,6 @@ size, the deadline, a photo when one helps); then quote within the price range, 
 time only as the cards give them; then move to the order.
 - A price is only ever given with the `quote` tool, whose message states that one amount. Never \
 write an amount in a `reply`.
-- Never bargain in plain words or invent a price. If the customer asks for a lower price and no discount can be given, say kindly that this is the best price you can offer and carry on; do not hand over for this.
 - Never write digits in a reply except inside a `quote`: write counts and durations in words \
 unless the cards give them as numbers. Never mention prices, discounts or payment outside a \
 `quote`.
@@ -699,7 +698,10 @@ pub async fn work(
         && let Some(note) = repair_note(first, &snapshot, ctx.now.year())
         && within_limits(deps, &ctx, &snapshot).await?
     {
-        request.system_note = Some(note.to_owned());
+        request.system_note = Some(match &request.system_note {
+            Some(state) => format!("{state}\n{note}"),
+            None => note.to_owned(),
+        });
         let second = model.answer(&request).await;
         let ctx = system_ctx(ws, deps.clock.now().max(now));
         let mut repair = called(deps, &ctx, model.model(), &snapshot, &second).await?;
@@ -751,6 +753,9 @@ the best price. Say kindly, in words, that this is the best price you can offer,
 not hand over for this and do not promise that someone will call.";
 /// The server's line when no further discount can be given and the model asked again.
 const BEST_PRICE_LINE: &str = "Size sunabileceğimiz en iyi fiyat bu.";
+/// The server's line when the model asked for a discount with no quote of its own to discount.
+const NO_QUOTE_LINE: &str = "Size en uygun teklifi hazırlayalım: isteğinizi biraz daha anlatır \
+mısınız?";
 
 /// What the model is told when `answer` is worth asking for once more ([`work`]): a `reply` the
 /// server's rules refuse for money, a number or a link; a `discount` that cannot be given (no
@@ -820,9 +825,47 @@ const BARGAIN_STEMS: &[&str] = &[
     "best price",
 ];
 
-fn bargains(text: &str, year: i32) -> bool {
+/// Whether a customer's `text` bargains over the current price `current` (minor units): a word or
+/// phrase of [`BARGAIN_STEMS`], or an amount in a money form (beside a currency, or with "bin" or
+/// "k") lower than `current`. A bare number (an address, a quantity, a postcode) does not.
+fn bargains(text: &str, year: i32, current: i64) -> bool {
     let lower = text.to_lowercase();
-    BARGAIN_STEMS.iter().any(|s| lower.contains(s)) || rules::states_money(text, year)
+    if BARGAIN_STEMS.iter().any(|s| lower.contains(s)) {
+        return true;
+    }
+    if rules::scan(text, year)
+        .amounts
+        .iter()
+        .any(|(_, minor)| *minor < current)
+    {
+        return true;
+    }
+    let words: Vec<&str> = lower
+        .split(|c: char| c.is_whitespace() || matches!(c, '?' | '!' | ';' | '(' | ')'))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let number = |t: &str| -> Option<f64> {
+        let t = t.trim_matches(|c: char| !c.is_ascii_digit());
+        (!t.is_empty())
+            .then(|| t.replace(',', "."))
+            .and_then(|t| t.parse::<f64>().ok())
+    };
+    words.iter().enumerate().any(|(i, w)| {
+        let thousands = if let Some(n) = w.strip_suffix('k').and_then(number) {
+            Some(n)
+        } else if let Some(n) = w
+            .strip_suffix("bin")
+            .filter(|n| !n.is_empty())
+            .and_then(number)
+        {
+            Some(n)
+        } else if words.get(i + 1).is_some_and(|n| n.starts_with("bin")) {
+            number(w)
+        } else {
+            None
+        };
+        thousands.is_some_and(|n| (n * 100_000.0) < current as f64)
+    })
 }
 
 /// [`Bargain`] for conversation `c` at `now`, by the workspace's policy `auto` and price range;
@@ -835,7 +878,8 @@ async fn bargain(
     range: Range,
     now: OffsetDateTime,
 ) -> Result<Option<Bargain>, AppError> {
-    if auto.discount_max_pct == 0 {
+    let (preferred, largest) = auto.discount();
+    if largest == 0 {
         return Ok(None);
     }
     let Some(journey) = r.journeys().open_for(c.person_id).await? else {
@@ -859,14 +903,11 @@ async fn bargain(
     }
     let original = original.quote.amount_minor;
     let now_price = current.quote.amount_minor;
-    let next = [
-        ("preferred", auto.discount_preferred_pct),
-        ("largest", auto.discount_max_pct),
-    ]
-    .into_iter()
-    .filter(|(_, pct)| *pct > 0)
-    .map(|(step, pct)| (step, discounted(original, pct, range.min_minor)))
-    .find(|(_, price)| *price < now_price);
+    let next = [("preferred", preferred), ("largest", largest)]
+        .into_iter()
+        .filter(|(_, pct)| *pct > 0)
+        .map(|(step, pct)| (step, discounted(original, pct, range.min_minor)))
+        .find(|(_, price)| *price < now_price);
     let year = now.year();
     let asked = r
         .messages()
@@ -876,7 +917,7 @@ async fn bargain(
         .any(|m| {
             m.direction == Direction::Inbound
                 && m.at >= current.created_at
-                && bargains(&m.body, year)
+                && bargains(&m.body, year, current.quote.amount_minor)
         });
     Ok(Some(Bargain {
         current: current.clone(),
@@ -905,27 +946,42 @@ async fn went_out(r: &mut dyn TenantRepos, quote: Uuid) -> Result<bool, AppError
     Ok(sent || matches!(row.state.as_str(), "sent" | "sending" | "unknown"))
 }
 
-/// The workspace part's bargaining section: only while the workspace allows a discount, with
-/// its percentages and where the journey stands.
-fn bargaining_part(
+/// The workspace part's bargaining section: only while the workspace allows a discount, the same
+/// for every conversation of the workspace (it sits in the cached block): its percentages and
+/// the rules. Where a conversation stands goes in its own note ([`bargaining_note`]).
+fn bargaining_part(auto: &AutoReply) -> Option<String> {
+    let (preferred, largest) = auto.discount();
+    if largest == 0 {
+        return None;
+    }
+    let steps = if preferred > 0 && preferred < largest {
+        format!(
+            "{preferred}% first, and only if the customer still bargains after that discounted \
+             quote, at most {largest}%"
+        )
+    } else {
+        format!("at most {largest}%")
+    };
+    Some(format!(
+        "\n# Bargaining\nWhen the customer bargains over the price you quoted (asks for a \
+         discount, says it is expensive, names a lower price), use `discount`: the business \
+         allows {steps} off its first quote, and the server sets the price. Never offer a \
+         discount the customer did not ask for. Never bargain in plain words or invent a price. \
+         If the customer asks for a lower price and no discount can be given, say kindly that \
+         this is the best price you can offer and carry on; do not hand over for this.\n"
+    ))
+}
+
+/// Where a conversation stands in its bargaining, for the uncached note of its request: only
+/// while the workspace allows a discount.
+fn bargaining_note(
     auto: &AutoReply,
     bargain: Option<&Bargain>,
     human_priced: bool,
 ) -> Option<String> {
-    if auto.discount_max_pct == 0 {
+    if auto.discount().1 == 0 {
         return None;
     }
-    let steps = if auto.discount_preferred_pct > 0
-        && auto.discount_preferred_pct < auto.discount_max_pct
-    {
-        format!(
-            "{}% first, and only if the customer still bargains after that discounted quote, at \
-             most {}%",
-            auto.discount_preferred_pct, auto.discount_max_pct
-        )
-    } else {
-        format!("at most {}%", auto.discount_max_pct)
-    };
     let now = match (human_priced, bargain) {
         (true, _) => "A person on the team discussed the price: no discount; hand over when the \
                       customer asks about price."
@@ -941,12 +997,7 @@ fn bargaining_part(
                              for this."
             .to_owned(),
     };
-    Some(format!(
-        "\n# Bargaining\nWhen the customer bargains over the price you quoted (asks for a \
-         discount, says it is expensive, names a lower price), use `discount`: the business \
-         allows {steps} off its first quote, and the server sets the price. Never offer a \
-         discount the customer did not ask for.\n{now}\n"
-    ))
+    Some(format!("Bargaining in this conversation: {now}"))
 }
 
 /// A whole amount as the customer reads it: `4.680 TL`, `1.250,50 TL`.
@@ -1467,9 +1518,10 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     };
     let bargain = bargain(r.as_mut(), &c, &auto, range, now).await?;
     let mut system_workspace = workspace_part(&live, frame.as_ref(), &price, human_priced);
-    if let Some(policy) = bargaining_part(&auto, bargain.as_ref(), human_priced) {
+    if let Some(policy) = bargaining_part(&auto) {
         system_workspace.push_str(&policy);
     }
+    let system_note = bargaining_note(&auto, bargain.as_ref(), human_priced);
     let snapshot = Snapshot {
         generation: c.executor_generation,
         activity_revision: r.conversations().send_state(id).await?.activity_revision,
@@ -1489,8 +1541,8 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     let request = ModelRequest {
         system_fixed: SYSTEM_FIXED.to_owned(),
         system_workspace,
-        system_note: None,
-        offer_discount: auto.discount_max_pct > 0,
+        system_note,
+        offer_discount: auto.discount().1 > 0,
         history,
         max_tokens: MAX_OUTPUT_TOKENS,
     };
@@ -1802,6 +1854,16 @@ async fn settle(
     let activity = r.conversations().send_state(id).await?.activity_revision;
     run.outcome = RunOutcome::Skipped;
     run.reason = None;
+    // The second check approved the discounted quote of the step-1 snapshot: a bargain that
+    // moved since (its step, price or the customer's ask) is not sent, and the run is asked again.
+    let bargain_moved = match (&answer.tool, &c) {
+        (Some(ModelTool::Discount { .. }), Some(c)) if !s.human_priced => {
+            let fresh = bargain(r.as_mut(), c, &s.policy, s.range, ctx.now).await?;
+            fresh.as_ref().map(|b| (b.next, b.asked))
+                != s.bargain.as_ref().map(|b| (b.next, b.asked))
+        }
+        _ => false,
+    };
     let changed = match &c {
         None => Some("conversation_gone"),
         Some(_) if row.is_none() => Some("withdrawn"),
@@ -1810,10 +1872,17 @@ async fn settle(
         }
         Some(c) if c.state != ConvState::Ours => Some("not_ours"),
         Some(_) if activity != s.activity_revision => Some("activity_changed"),
+        Some(_) if bargain_moved => Some("bargain_changed"),
         Some(_) => None,
     };
     if let Some(reason) = changed {
         run.reason = Some(reason.into());
+        let mut row = row;
+        if reason == "bargain_changed"
+            && let Some(row) = row.as_mut()
+        {
+            row.due_at = Some(ctx.now);
+        }
         finish(r.as_mut(), row, &run).await?;
         record(
             r.as_mut(),
@@ -2049,11 +2118,22 @@ async fn decide(
                 return server_refused(deps, ctx, r, c, run_id, "human_quoted").await;
             }
             let fresh = bargain(r, c, &s.policy, s.range, ctx.now).await?;
+            // Never a hand-over for bargaining: no quote of its own to discount, the server's line
+            // carries on without a price (a quote can follow on the next message).
             let Some(b) = fresh else {
-                return server_refused(deps, ctx, r, c, run_id, "discount_no_quote").await;
+                return queue(deps, ctx, r, s, c, run_id, NO_QUOTE_LINE, None).await;
             };
+            // The customer did not bargain: the model's own line when it passes the rules, else
+            // the best-price line.
             if !b.asked {
-                return server_refused(deps, ctx, r, c, run_id, "discount_unprompted").await;
+                let line = if !text.trim().is_empty()
+                    && rules::check_reply(&text, &s.cards, year).is_ok()
+                {
+                    text.trim()
+                } else {
+                    BEST_PRICE_LINE
+                };
+                return queue(deps, ctx, r, s, c, run_id, line, None).await;
             }
             // Nothing more to give: the best price, in words; never a hand-over for this.
             let Some((step, price)) = b.next else {
