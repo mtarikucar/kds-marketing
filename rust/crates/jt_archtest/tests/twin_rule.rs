@@ -180,7 +180,7 @@ fn the_registry_holds_exactly_the_documented_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 250);
+    assert_eq!(catalog, 252);
 }
 
 /// These MCP-only use cases are agent workflows without a panel route.
