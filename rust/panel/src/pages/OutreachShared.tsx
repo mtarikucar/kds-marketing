@@ -39,8 +39,8 @@ export function LockNotice({ settings }: { settings: OutreachSettingsOut | undef
       {!settings.sender_identity_complete && (
         <Callout tone="info" title={t('leads.outreach.identityMissing.title')}>
           <p>{t('leads.outreach.identityMissing.body')}</p>
-          <Link className="mt-1 inline-block text-primary underline" to="/outreach/settings">
-            {t('leads.outreach.settingsLink')}
+          <Link className="mt-1 inline-block text-primary underline" to="/settings/email">
+            {t('email.title')}
           </Link>
         </Callout>
       )}

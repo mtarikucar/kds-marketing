@@ -88,6 +88,11 @@ export const addSuppression = (id: string, channel: import('./types').ContactCha
   request('POST', `${root}/people/${seg(id)}/suppressions`, { body: { channel, reason: 'manual' } });
 export const removeSuppression = (id: string, channel: import('./types').ContactChannel, reason: import('./types').SuppressionReason) =>
   request('DELETE', `${root}/people/${seg(id)}/suppressions/${seg(channel)}/${seg(reason)}`);
+/** `GET /api/inbox/email-settings`: the sender identity and the business basis (`inbox.work`). */
+export const getEmailSettings = () => request<import('./types').EmailSettingsOut>('GET', `${root}/email-settings`);
+/** `PUT /api/inbox/email-settings`: only the keys given change; the basis is a human owner's. */
+export const setEmailSettings = (input: import('./types').EmailSettingsInput) =>
+  request<import('./types').EmailSettingsOut>('PUT', `${root}/email-settings`, { body: input });
 export const sendCommercial = (id: string, input: { channel: import('./types').SendChannel; text: string; intent: 'commercial'; request_key: string; subject?: string }) =>
   request<InboxReplyOut>('POST', `${root}/people/${seg(id)}/send`, { body: input });
 export const listQuotes = (id: string) => request<import('./types').InboxQuote[]>('GET', `${journey(id)}/quotes`);

@@ -169,7 +169,7 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
 #[test]
 fn the_registry_holds_exactly_the_documented_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 250);
+    assert_eq!(specs.len(), 252);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
     assert_eq!(total, 250);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
@@ -325,7 +325,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 326);
+    assert_eq!(CATALOG.len(), 328);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

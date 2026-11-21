@@ -3142,7 +3142,6 @@
       "title": "Campaigns",
       "description": "Plain-text email campaigns and their steps, sent from your own mailbox.",
       "templatesLink": "Templates",
-      "settingsLink": "Email settings",
       "newCampaign": "New campaign",
       "statusFilter": "Status",
       "columns": {
@@ -3682,8 +3681,7 @@
     },
     "settings": {
       "title": "Email settings",
-      "description": "Campaigns' sender details, approval, warm-up and frequency limits.",
-      "descriptionEmail": "The sender details added under your emails, and the permission for first messages to businesses.",
+      "description": "Campaigns' approval, warm-up and frequency limits.",
       "general": "General settings",
       "readOnly": "Only managers can change these settings.",
       "identity": "Sender details (the footer of every email)",
@@ -3713,7 +3711,8 @@
         "note": "Note on the confirmation (who, when, what)",
         "notInForce": "The basis is recorded, but it is not in force while cold sending is off on the platform.",
         "save": "Save the basis"
-      }
+      },
+      "campaignTitle": "Campaign settings"
     },
     "filteredEmpty": {
       "title": "No matching results",
@@ -4961,5 +4960,11 @@
       "brake": "Stop all posting",
       "brakeHelp": "While it is on nothing goes out; switching it off lets the agent give the waiting posts a time again."
     }
+  },
+  "email": {
+    "title": "Email settings",
+    "description": "The sender details added under your emails, and the permission for first messages to businesses.",
+    "platformOff": "First messages to businesses without consent are off on this server; you can write to people who consented.",
+    "senderLink": "Sender details and first-message permission: Email settings"
   }
 }

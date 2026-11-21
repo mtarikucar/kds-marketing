@@ -130,7 +130,7 @@ const FIELDS: &[&str] = &[
     "click_tracking_default",
 ];
 
-fn settings_out(deps: &Deps, policy: OutreachPolicy) -> SettingsOut {
+pub(crate) fn settings_out(deps: &Deps, policy: OutreachPolicy) -> SettingsOut {
     let platform_enabled = deps.apps.outreach_enabled();
     SettingsOut {
         sender_identity_complete: policy.sender_identity_complete(),
@@ -189,6 +189,17 @@ pub async fn settings_set(
     input: SettingsInput,
 ) -> Result<SettingsOut, AppError> {
     ctx.require(Permission::OutreachManage)?;
+    Ok(settings_out(deps, apply(deps, ctx, input).await?))
+}
+
+/// What `outreach.settings_set` and `inbox.email_settings_set` store, after the caller's
+/// permission was checked: the keys given and only those, the business-recipient basis opened
+/// only by a human owner with the counsel's confirmation. Answers the stored policy.
+pub(crate) async fn apply(
+    deps: &Deps,
+    ctx: &Ctx,
+    input: SettingsInput,
+) -> Result<OutreachPolicy, AppError> {
     let given = [
         input.requires_approval.is_some(),
         input.b2b_basis.is_some(),
@@ -396,5 +407,5 @@ pub async fn settings_set(
         .await?;
     }
     r.commit().await?;
-    Ok(settings_out(deps, policy))
+    Ok(policy)
 }

@@ -175,6 +175,8 @@ pub const ROUTES: &[(&str, &str)] = &[
         "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}",
     ),
     ("POST", "/api/inbox/people/{person_id}/send"),
+    ("GET", "/api/inbox/email-settings"),
+    ("PUT", "/api/inbox/email-settings"),
     ("POST", "/api/inbox/journeys/{journey_id}/quotes"),
     ("POST", "/api/inbox/quotes/{id}/accept"),
     ("GET", "/api/inbox/journeys/{journey_id}/quotes"),
@@ -1065,6 +1067,18 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/inbox/people/{person_id}/send",
             "inbox.send",
             inbox::send,
+        ),
+        api_route(
+            "GET",
+            "/inbox/email-settings",
+            "inbox.email_settings_get",
+            inbox::email_settings_get,
+        ),
+        api_route(
+            "PUT",
+            "/inbox/email-settings",
+            "inbox.email_settings_set",
+            inbox::email_settings_set,
         ),
         api_route(
             "POST",

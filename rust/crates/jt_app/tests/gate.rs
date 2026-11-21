@@ -629,8 +629,14 @@ fn a_one_to_one_email_never_waits_for_the_campaigns_module() {
         "outreach.settings_set",
         "inbox.suppressions.add",
         "inbox.consent.record",
+        "inbox.email_settings_get",
+        "inbox.email_settings_set",
     ] {
         assert!(check(id, &Removed("outreach")).is_ok(), "{id}");
+    }
+    // The email facts are the inbox's, never the campaigns' module.
+    for id in ["inbox.email_settings_get", "inbox.email_settings_set"] {
+        assert_eq!(gating_module(id), Some("inbox"), "{id}");
     }
     // Their checks still hold: no sending channel, no settings.
     for id in ["outreach.settings_get", "outreach.settings_set"] {
