@@ -89,8 +89,12 @@ pub enum Speaker {
 
 /// The most images of a customer the model is shown at once: the latest ones.
 pub const MAX_IMAGES: usize = 4;
-/// The largest image the model is shown, in bytes; a larger one is left out, and the model told.
-pub const MAX_IMAGE_BYTES: usize = 5 << 20;
+/// The largest image the model is shown, in bytes (3.5 MiB: about 4.7 MB in base64); a larger one
+/// is left out, and the model told.
+pub const MAX_IMAGE_BYTES: usize = 7 << 19;
+/// The most bytes of images one request carries, all together (12 MiB); an image past it is left
+/// out, and the model told. The request then stays well inside the provider's size limit.
+pub const MAX_IMAGES_BYTES: usize = 12 << 20;
 
 /// The image types the model reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

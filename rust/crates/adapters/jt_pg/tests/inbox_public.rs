@@ -778,3 +778,15 @@ async fn auto_reply_rows() {
     let db = TestDb::new().await;
     jt_testkit::inbox_contract::auto_reply_rows(uow(&db)).await;
 }
+
+#[tokio::test]
+async fn person_last_message_and_page_outbox() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::person_last_message_and_page_outbox(uow(&db)).await;
+}
+
+#[tokio::test]
+async fn savepoint_undoes_only_what_follows() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::savepoint_undoes_only_what_follows(uow(&db)).await;
+}

@@ -562,6 +562,8 @@ pub(super) struct MemTx {
     ops: Vec<Op>,
     /// Set once a call on the bundle has failed; `commit` then refuses.
     spoiled: bool,
+    /// The working copy, the number of writes and the spoiled flag at the savepoint.
+    saved: Option<(MemState, usize, bool)>,
 }
 
 impl MemTx {
@@ -602,6 +604,7 @@ impl MemTx {
             inbox_write_at: None,
             ops: Vec::new(),
             spoiled: false,
+            saved: None,
         }
     }
 
@@ -643,6 +646,31 @@ impl MemTx {
     pub(super) fn write(&mut self, op: impl Fn(&mut MemState) + Send + Sync + 'static) {
         op(&mut self.work);
         self.ops.push(Box::new(op));
+    }
+
+    /// `TenantRepos::savepoint`: keeps the working copy, the writes so far and the spoiled flag.
+    pub(super) fn savepoint(&mut self) {
+        self.saved = Some((self.work.clone(), self.ops.len(), self.spoiled));
+    }
+
+    /// `TenantRepos::rollback_to_savepoint`: back to the savepoint, which stays.
+    pub(super) fn rollback_to_savepoint(&mut self) -> Result<(), AppError> {
+        let (work, ops, spoiled) = self
+            .saved
+            .clone()
+            .ok_or_else(|| AppError::internal("no savepoint"))?;
+        self.work = work;
+        self.ops.truncate(ops);
+        self.spoiled = spoiled;
+        Ok(())
+    }
+
+    /// `TenantRepos::release_savepoint`.
+    pub(super) fn release_savepoint(&mut self) -> Result<(), AppError> {
+        self.saved
+            .take()
+            .map(|_| ())
+            .ok_or_else(|| AppError::internal("no savepoint"))
     }
 
     /// Replays the writes onto the shared tables, or, when a call failed, refuses with `INTERNAL`

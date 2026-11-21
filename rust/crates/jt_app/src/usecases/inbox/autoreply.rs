@@ -325,8 +325,43 @@ async fn served(
 /// hand-back's own transaction (its workspace lock held): a person's earlier message no longer
 /// keeps the automatic replies out. The mark commits with the hand-back, so no agent sees the
 /// conversation as its work in between (`pending_in`) and answers it beside the automatic reply.
-/// Nothing at all while the replies are off for it.
+/// It runs inside a savepoint: when it fails, only the mark is undone (logged by its code), the
+/// hand-back commits all the same and the conversation stays the agents' work, as before. `Err`
+/// only when the savepoint itself cannot be undone. Nothing at all while the replies are off.
 pub(crate) async fn handed_back(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    id: ConversationId,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if deps.connectors.reply_model().is_none() {
+        return Ok(());
+    }
+    if let Err(e) = r.savepoint().await {
+        mark_failed(&e);
+        return Ok(());
+    }
+    match mark_handed_back(deps, r, id, now).await {
+        Ok(()) => r.release_savepoint().await,
+        Err(e) => {
+            mark_failed(&e);
+            r.rollback_to_savepoint().await?;
+            r.release_savepoint().await
+        }
+    }
+}
+
+fn mark_failed(e: &AppError) {
+    tracing::warn!(
+        job = "inbox_auto_reply",
+        code = e.code.as_str(),
+        reason = "hand_back_mark_failed",
+        "a hand-back could not be marked"
+    );
+}
+
+/// [`handed_back`]'s mark itself.
+async fn mark_handed_back(
     deps: &Deps,
     r: &mut dyn TenantRepos,
     id: ConversationId,
@@ -576,7 +611,9 @@ pub async fn run(deps: &Deps, now: OffsetDateTime) -> JobReport {
             report.touched += 1;
             // Each conversation at its own time: the lease runs from when it is taken.
             let at = deps.clock.now().max(now);
-            match work(deps, &model, ws, id, at).await {
+            // The images stop a little before the tick's budget, so the call still fits.
+            let deadline = started + AUTOREPLY_TICK_BUDGET - IMAGE_MIN_LEFT;
+            match work(deps, &model, ws, id, at, deadline).await {
                 Ok(Worked::Answered | Worked::HandedOver) => report.changed += 1,
                 Ok(Worked::Skipped) => report.skipped += 1,
                 Ok(Worked::Retrying) => report.failed += 1,
@@ -676,13 +713,15 @@ struct Snapshot {
     cards: String,
 }
 
-/// Works conversation `id` of workspace `ws` at `now`.
+/// Works conversation `id` of workspace `ws` at `now`; the customer's images are fetched only
+/// until `deadline`.
 pub async fn work(
     deps: &Deps,
     model: &Arc<dyn ReplyModel>,
     ws: WorkspaceId,
     id: ConversationId,
     now: OffsetDateTime,
+    deadline: std::time::Instant,
 ) -> Result<Worked, AppError> {
     let ctx = system_ctx(ws, now);
     match take(deps, &ctx, id).await? {
@@ -695,7 +734,7 @@ pub async fn work(
         Prepared::Done(worked) => return Ok(worked),
     };
     // The customer's latest images, read now, without a lock, and held for this call only.
-    let seen = see(deps, ws, &looking).await;
+    let seen = see(deps, ws, &looking, deadline).await;
     request.history = history(&looking.messages, &seen);
     drop(seen);
     let answer = model.answer(&request).await;
@@ -1228,37 +1267,55 @@ fn media_id(payload: &serde_json::Value) -> Option<String> {
 const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 /// How long fetching a run's images may take in all; those left are not shown.
 const IMAGES_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+/// No fetch starts with less time than this left (of the images' budget or the job's tick).
+const IMAGE_MIN_LEFT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Fetches the images `looking` names, one after the other, outside any lock, into memory for one
-/// model call: never written anywhere, never logged. One that fails, takes too long, is larger
-/// than [`MAX_IMAGE_BYTES`] or is not a JPEG, PNG or WebP by its bytes is [`Seen::Unseen`] (a log
-/// line with a code only).
-async fn see(deps: &Deps, ws: WorkspaceId, looking: &Looking) -> HashMap<MessageId, Seen> {
+/// Fetches the images `looking` names, newest first, one after the other, outside any lock, into
+/// memory for one model call: never written anywhere, never logged. Each fetch gets only the time
+/// left of [`IMAGES_BUDGET`] (at most [`IMAGE_TIMEOUT`]), and none starts with less than
+/// [`IMAGE_MIN_LEFT`] left of it or before `deadline` (the job's tick). Each image is at most
+/// [`MAX_IMAGE_BYTES`], and all of them together at most [`MAX_IMAGES_BYTES`]. One that fails,
+/// takes too long, is over a size or is not a JPEG, PNG or WebP by its bytes, or is skipped, is
+/// [`Seen::Unseen`] (a log line with a code only).
+async fn see(
+    deps: &Deps,
+    ws: WorkspaceId,
+    looking: &Looking,
+    deadline: std::time::Instant,
+) -> HashMap<MessageId, Seen> {
     let mut seen = HashMap::new();
     let sender = deps.connectors.messaging(jt_connector::Provider::Meta);
-    let started = tokio::time::Instant::now();
+    let stop = (std::time::Instant::now() + IMAGES_BUDGET).min(deadline);
+    let mut total = 0usize;
     for (message, media) in &looking.images {
+        let left = stop.saturating_duration_since(std::time::Instant::now());
+        let room = MAX_IMAGES_BYTES.saturating_sub(total).min(MAX_IMAGE_BYTES);
         let image = match (media, &looking.access, &sender) {
             (Some(media), Some((credential, public)), Some(sender))
-                if started.elapsed() < IMAGES_BUDGET =>
+                if left >= IMAGE_MIN_LEFT && room > 0 =>
             {
-                let fetch = sender.fetch_media(credential, public, media, MAX_IMAGE_BYTES);
-                match tokio::time::timeout(IMAGE_TIMEOUT, fetch).await {
-                    Ok(Ok(Some(file))) if file.data.len() <= MAX_IMAGE_BYTES => {
-                        ImageType::sniff(&file.data).map(|kind| Image {
+                let fetch = sender.fetch_media(credential, public, media, room);
+                match tokio::time::timeout(left.min(IMAGE_TIMEOUT), fetch).await {
+                    Ok(Ok(Some(file))) if file.data.len() <= room => ImageType::sniff(&file.data)
+                        .map(|kind| Image {
                             kind,
                             data: file.data,
-                        })
-                    }
+                        }),
                     _ => None,
                 }
             }
             _ => None,
         };
-        if image.is_none() {
-            warn(Some(ws), "image_unseen");
+        match image {
+            Some(image) => {
+                total += image.data.len();
+                seen.insert(*message, Seen::Image(image));
+            }
+            None => {
+                warn(Some(ws), "image_unseen");
+                seen.insert(*message, Seen::Unseen);
+            }
         }
-        seen.insert(*message, image.map_or(Seen::Unseen, Seen::Image));
     }
     seen
 }

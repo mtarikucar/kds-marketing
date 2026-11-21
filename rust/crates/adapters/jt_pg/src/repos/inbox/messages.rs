@@ -3,7 +3,7 @@ use crate::uow::PgTenantRepos;
 use async_trait::async_trait;
 use jt_app::{
     error::AppError,
-    ports::inbox::{MAX_INBOX_PAGE, MessageRepo, PERSON_SCAN},
+    ports::inbox::{MAX_INBOX_PAGE, MessageRepo},
 };
 use jt_capability::CapabilityId;
 use jt_inbox::{Author, ConversationId, IdentityId, Message, MessageId, MsgStatus};
@@ -36,18 +36,17 @@ impl MessageRepo for PgTenantRepos {
         &mut self,
         id: ConversationId,
     ) -> Result<Option<time::OffsetDateTime>, AppError> {
-        // The inner select walks the partial index `messages_person_latest` (same predicate).
+        // Walks the partial index `messages_person_latest` (same predicate) newest first; each
+        // step is one lookup of the message's outbox row (`outbox_message_lookup`).
         sqlx::query_scalar(
-            "select m.at from (select id, at from messages where workspace_id=$1 \
-             and conversation_id=$2 and (author ? 'human' or author = '\"business_app\"'::jsonb) \
-             order by at desc, id desc limit $3) m \
-             where not exists (select 1 from outbox o where o.workspace_id=$1 \
+            "select m.at from messages m where m.workspace_id=$1 and m.conversation_id=$2 \
+             and (m.author ? 'human' or m.author = '\"business_app\"'::jsonb) \
+             and not exists (select 1 from outbox o where o.workspace_id=m.workspace_id \
              and o.message_id=m.id and o.intent ? 'auto_reply') \
              order by m.at desc, m.id desc limit 1",
         )
         .bind(self.workspace_id().as_uuid())
         .bind(id.as_uuid())
-        .bind(i64::from(PERSON_SCAN))
         .fetch_optional(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "read a person's latest message"))

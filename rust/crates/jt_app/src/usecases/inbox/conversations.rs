@@ -237,6 +237,14 @@ pub async fn messages(
     let reasons = r.outbox().failure_reasons(&failed).await?;
     let ids: Vec<_> = items.iter().map(|m| m.id).collect();
     let files = r.mail_files().for_messages(&ids).await?;
+    // The page's outbox rows in one read: which messages the automatic replies wrote, and which
+    // of those wait for approval.
+    let outbound: Vec<_> = items
+        .iter()
+        .filter(|m| m.direction == Direction::Outbound)
+        .map(|m| m.id)
+        .collect();
+    let rows = r.outbox().for_messages(&outbound).await?;
     let mut views = Vec::with_capacity(items.len());
     for message in items {
         let item = if public {
@@ -244,15 +252,14 @@ pub async fn messages(
         } else {
             None
         };
-        let outbox = match message.direction {
-            Direction::Outbound => r.outbox().for_message(message.id).await?,
-            Direction::Inbound => None,
-        };
-        let automatic = outbox
-            .as_ref()
-            .is_some_and(|row| row.intent.get("auto_reply").is_some());
-        let held = outbox
-            .filter(|row| row.state == "held" && message.status == MsgStatus::Queued)
+        let row = rows.iter().find(|row| row.message_id == message.id);
+        let automatic = row.is_some_and(|row| row.intent.get("auto_reply").is_some());
+        // Only a held automatic reply of a private conversation is handled in the thread; any
+        // other held reply keeps its own place (the approvals list, the public card).
+        let held = row
+            .filter(|row| {
+                automatic && !public && row.state == "held" && message.status == MsgStatus::Queued
+            })
             .map(|row| row.id);
         views.push(MessageView {
             automatic,

@@ -813,7 +813,6 @@ impl MessageRepo for MemTenant {
         rows.sort_by_key(|m| std::cmp::Reverse((m.at, m.id)));
         Ok(rows
             .into_iter()
-            .take(PERSON_SCAN as usize)
             .find(|m| {
                 !s.inbox.outbox.iter().any(|o| {
                     o.workspace_id == self.ws
@@ -1974,6 +1973,16 @@ impl OutboxRepo for MemTenant {
         rows.truncate(limit as usize);
         Ok(rows)
     }
+    async fn for_messages(&mut self, messages: &[MessageId]) -> Result<Vec<OutboxRow>, AppError> {
+        let mut out = Vec::new();
+        for message in messages {
+            if let Some(row) = self.for_message(*message).await? {
+                out.push(row);
+            }
+        }
+        Ok(out)
+    }
+
     async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
         Ok(self
             .state()

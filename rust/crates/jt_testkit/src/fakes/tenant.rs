@@ -285,6 +285,19 @@ impl TenantRepos for MemTenant {
         self
     }
 
+    async fn savepoint(&mut self) -> Result<(), AppError> {
+        self.tx.savepoint();
+        Ok(())
+    }
+
+    async fn rollback_to_savepoint(&mut self) -> Result<(), AppError> {
+        self.tx.rollback_to_savepoint()
+    }
+
+    async fn release_savepoint(&mut self) -> Result<(), AppError> {
+        self.tx.release_savepoint()
+    }
+
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.tx.commit()
     }

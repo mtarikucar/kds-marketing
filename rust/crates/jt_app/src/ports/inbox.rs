@@ -19,10 +19,6 @@ use crate::error::AppError;
 
 /// Maximum page size for inbox reads; requested limits are clamped to 1..=500.
 pub const MAX_INBOX_PAGE: u32 = 500;
-/// How many of a conversation's latest messages of a person [`MessageRepo::person_last_at`] looks
-/// through for one that is not an approved automatic reply: more than twice the automatic
-/// replies' daily limit for one conversation.
-pub const PERSON_SCAN: u32 = 64;
 /// Fixed reducer stage keys accepted by workspace display labels.
 pub const INBOX_STATUS_KEYS: &[&str] = &[
     "new",
@@ -199,9 +195,8 @@ pub trait MessageRepo: Send + Sync {
     async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError>;
     /// When a person last wrote in conversation `id`: the time of its latest message authored
     /// `Author::Human` (in the panel) or `Author::BusinessApp` (from the phone), an automatic
-    /// reply a person approved (its outbox row's intent holds `auto_reply`) not counted. One
-    /// indexed lookup (`messages_person_latest`) through at most [`PERSON_SCAN`] of the latest
-    /// such messages: past that many approved automatic replies in a row, none counts.
+    /// reply a person approved (its outbox row's intent holds `auto_reply`) not counted, however
+    /// many follow. One query, walking the partial index `messages_person_latest` newest first.
     async fn person_last_at(
         &mut self,
         id: ConversationId,
@@ -602,6 +597,9 @@ pub trait OutboxRepo: Send + Sync {
     /// The outbox row that sends outbound message `message`, if any (the oldest, should there be
     /// more than one).
     async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError>;
+    /// [`OutboxRepo::for_message`] of each of `messages` that has a row, in one read (a page of a
+    /// conversation's messages).
+    async fn for_messages(&mut self, messages: &[MessageId]) -> Result<Vec<OutboxRow>, AppError>;
     /// Capability `capability`'s uncertain public replies: its outbox rows in state `unknown` whose
     /// intent names a public item (`intent.public.item_id`), the most recently updated first, at
     /// most `limit`. Only that capability's: uncertain rows of other capabilities or channels,
