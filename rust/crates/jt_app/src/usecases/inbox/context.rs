@@ -281,9 +281,21 @@ pub(crate) async fn all_conversations(
 pub async fn pending(deps: &Deps, ctx: &Ctx) -> Result<PendingOut, AppError> {
     ctx.require(Permission::InboxWork)?;
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
-    pending_in(r.as_mut(), ctx).await
+    pending_in(deps, r.as_mut(), ctx).await
 }
-pub(crate) async fn pending_in(r: &mut dyn TenantRepos, ctx: &Ctx) -> Result<PendingOut, AppError> {
+/// The caller's inbox work. An agent is not offered the conversations the automatic replies
+/// answer (`autoreply::serving`), so the two never both answer; an agent's `inbox.reply` to one is
+/// still allowed.
+pub(crate) async fn pending_in(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+) -> Result<PendingOut, AppError> {
+    let served = if matches!(ctx.actor, Actor::Agent { .. }) {
+        super::autoreply::serving(deps, r).await?
+    } else {
+        Vec::new()
+    };
     let conversations = all_conversations(r).await?;
     let mut out = PendingOut {
         ours: vec![],
@@ -328,7 +340,7 @@ pub(crate) async fn pending_in(r: &mut dyn TenantRepos, ctx: &Ctx) -> Result<Pen
             .is_some_and(|j| j.status == JourneyStatus::Lost)
         {
             out.reopen_questions.push(c);
-        } else {
+        } else if !(c.executor == Executor::Agent && served.contains(&c.capability_id.as_uuid())) {
             out.ours.push(c);
         }
     }

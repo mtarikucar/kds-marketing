@@ -519,7 +519,7 @@ async fn pending_as_seen(
     let inbox = if ctx.permissions.contains(&Permission::InboxWork)
         && status_exemption("inbox.pending").allows(status)
     {
-        Some(super::inbox::context::pending_in(repos.as_mut(), ctx).await?)
+        Some(super::inbox::context::pending_in(deps, repos.as_mut(), ctx).await?)
     } else {
         None
     };

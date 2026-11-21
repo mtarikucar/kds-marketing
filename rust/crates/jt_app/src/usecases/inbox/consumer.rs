@@ -764,6 +764,9 @@ async fn message(
         activity_at(event),
     )
     .await?;
+    // A customer's message may be answered automatically (`autoreply`); shared history, the
+    // business app's own messages and other echoes never get here.
+    super::autoreply::schedule(deps, r, conv.id, ctx.now).await?;
     Ok("consumed")
 }
 async fn outbound(

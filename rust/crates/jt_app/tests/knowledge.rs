@@ -173,6 +173,7 @@ fn rules(expected_revision: u64) -> RulesInput {
         message_budget: None,
         post_approval: false,
         post_approval_accounts: None,
+        auto_reply: None,
     }
 }
 
@@ -811,6 +812,7 @@ fn as_read(s: &KnowledgeSettings) -> RulesInput {
                 .map(jt_capability::CapabilityId)
                 .collect(),
         ),
+        auto_reply: None,
     }
 }
 

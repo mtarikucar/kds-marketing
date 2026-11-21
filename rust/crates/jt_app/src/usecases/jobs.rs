@@ -155,11 +155,12 @@ pub enum Job {
     PurgeRequestKeys,
     AgentWake,
     KnowledgeSettle,
+    InboxAutoReply,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 37] = [
+    pub const ALL: [Job; 38] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -197,6 +198,7 @@ impl Job {
         Job::PurgeRequestKeys,
         Job::AgentWake,
         Job::KnowledgeSettle,
+        Job::InboxAutoReply,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -240,6 +242,7 @@ impl Job {
             Job::PurgeRequestKeys => "purge_request_keys",
             Job::AgentWake => "agent_wake",
             Job::KnowledgeSettle => "knowledge_settle",
+            Job::InboxAutoReply => "inbox_auto_reply",
         }
     }
 
@@ -288,6 +291,7 @@ impl Job {
             Job::PurgeRequestKeys => run_purge_request_keys(deps, now).await,
             Job::AgentWake => run_agent_wake(deps, now).await,
             Job::KnowledgeSettle => run_knowledge_settle(deps, now).await,
+            Job::InboxAutoReply => run_inbox_auto_reply(deps, now).await,
         }
     }
 }
@@ -1754,6 +1758,14 @@ pub async fn run_inbox_consume(deps: &Deps, now: OffsetDateTime) -> JobReport {
         report.failed += result.failed;
     }
     finish(Job::InboxConsume, report)
+}
+
+/// Answers the conversations whose automatic reply is due (`inbox::autoreply`), in every workspace
+/// holding one (found with one platform-wide read), through the registry's model; without one
+/// (`ConnectorRegistry::reply_model`) nothing runs.
+pub async fn run_inbox_auto_reply(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let report = super::inbox::autoreply::run(deps, now).await;
+    finish(Job::InboxAutoReply, report)
 }
 
 /// Hand overdue agent conversations to their journey owner or the unassigned queue.

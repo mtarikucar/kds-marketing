@@ -1186,6 +1186,7 @@ async fn lowering_the_ad_budget_stops_what_reached_it() {
             message_budget: None,
             post_approval: s.post_approval,
             post_approval_accounts: None,
+            auto_reply: None,
         },
     )
     .await

@@ -38,7 +38,11 @@ pub async fn erase(
     if p.merged_into.is_some() {
         return Err(AppError::conflict("erase the surviving person"));
     }
-    r.conversations().lock_for_person(person).await?;
+    let conversations = r.conversations().lock_for_person(person).await?;
+    // Nothing waits to answer the person automatically.
+    for c in &conversations {
+        r.auto_reply().queue_delete(c.id).await?;
+    }
     // The pool forgets the business too (spec 2026-10-30-leads-pool-outreach-design.md §3.6):
     // read the person's phone and email before the scrub removes them.
     let contact = contact_keys(r.as_mut(), person).await?;
