@@ -87,15 +87,75 @@ pub enum Speaker {
     Business,
 }
 
+/// The most images of a customer the model is shown at once: the latest ones.
+pub const MAX_IMAGES: usize = 4;
+/// The largest image the model is shown, in bytes; a larger one is left out, and the model told.
+pub const MAX_IMAGE_BYTES: usize = 5 << 20;
+
+/// The image types the model reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageType {
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl ImageType {
+    /// The media type, as the model's provider names it.
+    pub fn mime(self) -> &'static str {
+        match self {
+            ImageType::Jpeg => "image/jpeg",
+            ImageType::Png => "image/png",
+            ImageType::Webp => "image/webp",
+        }
+    }
+
+    /// The type of `data` by its first bytes; `None` for anything but JPEG, PNG and WebP. A
+    /// file's own name for its type is not trusted: the bytes decide.
+    pub fn sniff(data: &[u8]) -> Option<ImageType> {
+        if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            Some(ImageType::Jpeg)
+        } else if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+            Some(ImageType::Png)
+        } else if data.len() >= 12 && data.starts_with(b"RIFF") && &data[8..12] == b"WEBP" {
+            Some(ImageType::Webp)
+        } else {
+            None
+        }
+    }
+}
+
+/// An image a customer sent, held in memory for one request: never stored or logged. Its `Debug`
+/// shows its type and size alone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Image {
+    pub kind: ImageType,
+    pub data: Vec<u8>,
+}
+
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Image")
+            .field("kind", &self.kind)
+            .field("bytes", &self.data.len())
+            .finish()
+    }
+}
+
 /// A piece of a turn.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Part {
-    Text { text: String },
+    Text {
+        text: String,
+    },
+    /// An image the customer sent (only ever in a customer's turn).
+    Image {
+        image: Image,
+    },
 }
 
 /// One turn: consecutive messages of one speaker.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Turn {
     pub speaker: Speaker,
     pub parts: Vec<Part>,
@@ -103,7 +163,7 @@ pub struct Turn {
 
 /// What the model is asked. `history` starts and ends with a customer's turn and never holds two
 /// turns of the same speaker in a row.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelRequest {
     /// The instructions every workspace shares (a constant of the use case).
     pub system_fixed: String,

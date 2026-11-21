@@ -489,19 +489,53 @@ struct Content {
     external_id: String,
     name: String,
 }
+/// The stored text of a WhatsApp image a person sent: this marker, then its caption on the next
+/// line when it has one. The image itself is never stored: the automatic replies read it from the
+/// provider, in memory, by the inbound event's media id.
+pub(crate) const IMAGE_MARKER: &str = "[image]";
+/// The stored text of a WhatsApp document a person sent: this marker (with the file's name,
+/// `[document: name]`, when it has one), then its caption on the next line when it has one.
+pub(crate) const DOCUMENT_MARKER: &str = "[document";
+
+/// The text a WhatsApp message of a person is stored with: a text's body, a button's or a list
+/// item's title, or for an image or a document its marker and its caption.
+fn whatsapp_body(m: &Value) -> Option<String> {
+    let plain = m["text"]["body"]
+        .as_str()
+        .or(m["button"]["text"].as_str())
+        .or(m["interactive"]["button_reply"]["title"].as_str())
+        .or(m["interactive"]["list_reply"]["title"].as_str());
+    if let Some(plain) = plain {
+        return Some(plain.to_owned());
+    }
+    let marker = match m["type"].as_str()? {
+        "image" => IMAGE_MARKER.to_owned(),
+        "document" => match text(&m["document"], "filename") {
+            Some(name) => format!("{DOCUMENT_MARKER}: {}]", clean_name(name)),
+            None => format!("{DOCUMENT_MARKER}]"),
+        },
+        _ => return None,
+    };
+    let kind = m["type"].as_str()?;
+    Some(match text(&m[kind], "caption") {
+        Some(caption) => format!("{marker}\n{}", caption.trim()),
+        None => marker,
+    })
+}
+
 fn decode(event: &InboundEvent, channel: Channel, echo: bool) -> Result<Content, AppError> {
     let p = &event.payload;
+    let whatsapp;
     let (sender, body, id, name) = match (event.provider, channel) {
-        (Provider::Meta, Channel::WhatsApp) => (
-            text(&p["message"], "from"),
-            p["message"]["text"]["body"]
-                .as_str()
-                .or(p["message"]["button"]["text"].as_str())
-                .or(p["message"]["interactive"]["button_reply"]["title"].as_str())
-                .or(p["message"]["interactive"]["list_reply"]["title"].as_str()),
-            text(&p["message"], "id"),
-            p["contact"]["profile"]["name"].as_str(),
-        ),
+        (Provider::Meta, Channel::WhatsApp) => {
+            whatsapp = whatsapp_body(&p["message"]);
+            (
+                text(&p["message"], "from"),
+                whatsapp.as_deref(),
+                text(&p["message"], "id"),
+                p["contact"]["profile"]["name"].as_str(),
+            )
+        }
         (Provider::Meta, Channel::Messenger | Channel::InstagramDm) => {
             let m = &p["messaging"];
             (

@@ -2681,6 +2681,99 @@ async fn sender_name_reads_the_profile_by_kind() {
     assert!(m.recorded().is_empty());
 }
 
+#[tokio::test]
+async fn fetch_media_reads_the_address_graph_names_with_the_numbers_token() {
+    let r = rig().await;
+    let m = &r.mock;
+    let file = m.base("/media/file?mid=1&ext=2");
+    m.on(
+        "GET",
+        "/fb/v19.0/1500000000000001",
+        ok(json!({
+            "url": file.as_str(),
+            "mime_type": "image/webp",
+            "file_size": 12,
+            "id": "1500000000000001",
+            "messaging_product": "whatsapp",
+        })),
+    );
+    m.on(
+        "GET",
+        "/media/file",
+        raw(200, "RIFF\u{0}\u{0}\u{0}\u{0}WEBP").with_header("content-type", "image/webp"),
+    );
+    let wa = public("whatsapp_cloud", Some(PHONE));
+    let media = r
+        .meta
+        .fetch_media(&wa_cred(None), &wa, "1500000000000001", 1024)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(media.mime, "image/webp");
+    assert_eq!(media.data, b"RIFF\0\0\0\0WEBP");
+    // Its Debug never shows the bytes.
+    assert_eq!(
+        format!("{media:?}"),
+        r#"Media { mime: "image/webp", bytes: 12 }"#
+    );
+    assert_graph_auth(&m.request("GET", "/fb/v19.0/1500000000000001"), WA_TOKEN);
+    let download = m.request("GET", "/media/file");
+    assert_eq!(download.bearer(), Some(WA_TOKEN));
+    assert_eq!(download.param("mid"), Some("1"));
+    assert_eq!(download.param("access_token"), None);
+
+    // Larger than allowed: by Graph's size, without a download; or as it is read.
+    m.clear();
+    assert_eq!(
+        kind_of(
+            r.meta
+                .fetch_media(&wa_cred(None), &wa, "1500000000000001", 8)
+                .await
+        ),
+        "permanent"
+    );
+    assert!(m.requests("GET", "/media/file").is_empty());
+    m.set(
+        "GET",
+        "/fb/v19.0/1500000000000001",
+        ok(json!({ "url": file.as_str(), "mime_type": "image/webp" })),
+    );
+    assert_eq!(
+        kind_of(
+            r.meta
+                .fetch_media(&wa_cred(None), &wa, "1500000000000001", 8)
+                .await
+        ),
+        "permanent"
+    );
+
+    // The file gone: an error, no bytes.
+    m.set("GET", "/media/file", raw(404, "gone"));
+    assert!(
+        r.meta
+            .fetch_media(&wa_cred(None), &wa, "1500000000000001", 1024)
+            .await
+            .is_err()
+    );
+
+    // Another kind asks nothing; a bad media id is refused before a call.
+    m.clear();
+    assert_eq!(
+        r.meta
+            .fetch_media(&page_cred(), &public("messenger", Some(PAGE)), "1", 1024)
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        r.meta
+            .fetch_media(&wa_cred(None), &wa, "../me", 1024)
+            .await
+            .is_err()
+    );
+    assert!(m.recorded().is_empty());
+}
+
 // ---------------------------------------------------------------------------------------------
 // Lead-gen and ads
 // ---------------------------------------------------------------------------------------------

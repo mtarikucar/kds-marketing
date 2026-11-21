@@ -9,7 +9,7 @@ use jt_app::ports::connectors::{
 
 use jt_app::ports::connectors::{
     AccountMetrics, AdBudgetWriter, AdInsights, AdSet, AppSync, Asset, Connector,
-    InboundEventDraft, InsightsReader, LeadGenFetcher, LeadGenRecord, MessagingSender,
+    InboundEventDraft, InsightsReader, LeadGenFetcher, LeadGenRecord, Media, MessagingSender,
     ModerationAction, OAuthApp, OAuthFlow, OAuthProvider, PlatformScheduled, PostMetrics,
     PrivateReceipt, PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest,
     Publisher, Scheduled, SendReceipt, SubjectFacts,
@@ -222,6 +222,16 @@ impl MessagingSender for MetaConnector {
         sync: AppSync,
     ) -> Result<Option<SendReceipt>, ConnectorError> {
         messaging::request_app_sync(self, cred, public, sync).await
+    }
+
+    async fn fetch_media(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        media_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Media>, ConnectorError> {
+        messaging::fetch_media(self, cred, public, media_id, max_bytes).await
     }
 }
 

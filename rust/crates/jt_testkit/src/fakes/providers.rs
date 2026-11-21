@@ -28,11 +28,11 @@ use jt_app::ports::connectors::{
     AppSync, Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports,
     DeliveryStatus, GoogleApp, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer,
     LeadGenFetcher, LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor,
-    MailboxPoller, MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow, OAuthProvider,
-    PlatformAppConfig, PlatformScheduled, PolledMail, PostMetrics, PrivateReceipt, PublicPoller,
-    PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution, Publisher,
-    RecentPost, Scheduled, SendReceipt, SmsConsentFilter, SmsSender, SubjectFacts, Telephony,
-    TiktokAdsApp, TiktokApp, TiktokCreator, Url, XApp,
+    MailboxPoller, Media, MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow,
+    OAuthProvider, PlatformAppConfig, PlatformScheduled, PolledMail, PostMetrics, PrivateReceipt,
+    PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution,
+    Publisher, RecentPost, Scheduled, SendReceipt, SmsConsentFilter, SmsSender, SubjectFacts,
+    Telephony, TiktokAdsApp, TiktokApp, TiktokCreator, Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -493,6 +493,10 @@ pub struct ScriptedConnector {
     /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::sender_name_calls`]).
     sender_name: Script<Result<Option<String>, ConnectorError>>,
     sender_name_calls: Mutex<Vec<String>>,
+    /// Media files answer from here, `Ok(None)` when the script runs dry; the media ids asked
+    /// for (with the largest size allowed) are kept apart from [`ScriptedConnector::calls`].
+    media: Script<Result<Option<Media>, ConnectorError>>,
+    media_calls: Mutex<Vec<(String, usize)>>,
     /// The WhatsApp Business app's one-time sharing answers from here, `Ok(None)` (the trait's
     /// default) when nothing is queued; the requests (their `public`'s external id, and what was
     /// asked) are kept apart from [`ScriptedConnector::calls`] (see
@@ -612,6 +616,8 @@ impl ScriptedConnector {
             send_text: Script::default(),
             sender_name: Script::default(),
             sender_name_calls: Mutex::default(),
+            media: Script::default(),
+            media_calls: Mutex::default(),
             app_sync: Script::default(),
             app_sync_calls: Mutex::default(),
             set_status: Script::default(),
@@ -833,6 +839,15 @@ impl ScriptedConnector {
     /// The sender ids whose names were asked for, in order.
     pub fn sender_name_calls(&self) -> Vec<String> {
         lock(&self.sender_name_calls).clone()
+    }
+
+    pub fn push_media(&self, result: Result<Option<Media>, ConnectorError>) {
+        self.media.push(result);
+    }
+
+    /// The media ids asked for so far, each with the largest size allowed.
+    pub fn media_calls(&self) -> Vec<(String, usize)> {
+        lock(&self.media_calls).clone()
     }
 
     pub fn push_app_sync(&self, result: Result<Option<SendReceipt>, ConnectorError>) {
@@ -1174,6 +1189,17 @@ impl MessagingSender for ScriptedConnector {
     ) -> Result<Option<SendReceipt>, ConnectorError> {
         lock(&self.app_sync_calls).push((public["external_id"].clone(), sync));
         self.app_sync.try_next().unwrap_or(Ok(None))
+    }
+
+    async fn fetch_media(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        media_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Media>, ConnectorError> {
+        lock(&self.media_calls).push((media_id.to_owned(), max_bytes));
+        self.media.try_next().unwrap_or(Ok(None))
     }
 }
 

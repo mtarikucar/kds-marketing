@@ -3,11 +3,13 @@
 //! message). The sender's name: `GET /{psid}?fields=name` (Messenger), `GET /{igsid}?fields=
 //! name,username` (Instagram, on `graph.instagram.com` for an Instagram Login token). The
 //! one-time sharing of a WhatsApp Business app's contacts or history:
-//! `POST /{phone_number_id}/smb_app_data` ([`request_app_sync`]).
+//! `POST /{phone_number_id}/smb_app_data` ([`request_app_sync`]). A media file a person sent to a
+//! WhatsApp number: `GET /{media-id}`, then its address ([`fetch_media`]).
 
-use jt_app::ports::connectors::{AppSync, SendReceipt};
+use jt_app::ports::connectors::{AppSync, Media, SendReceipt};
 use jt_connector::{ConnectorError, Credential};
 use serde_json::{Value, json};
+use url::Url;
 
 use crate::MetaConnector;
 use crate::credential::{MetaCred, account_of, kind_of};
@@ -231,4 +233,41 @@ pub(crate) async fn request_app_sync(
         provider_id: id,
         cost_minor: None,
     }))
+}
+
+/// The media file `media_id` names, one a person sent to a `whatsapp_cloud` number: `GET
+/// /{media-id}` names its address (`url`, on `lookaside.fbsbx.com`), its `mime_type` and its
+/// `file_size`; the address is then read with the number's token as the bearer
+/// (<https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media>). A file larger than
+/// `max_bytes` (by its `file_size`, or as it is read) is `Permanent`. The type is Graph's, else
+/// the download's. `None` for another kind, without a call.
+pub(crate) async fn fetch_media(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    media_id: &str,
+    max_bytes: usize,
+) -> Result<Option<Media>, ConnectorError> {
+    if kind_of(public)? != "whatsapp_cloud" {
+        return Ok(None);
+    }
+    let MetaCred::WhatsApp { token, .. } = MetaCred::of(cred, "read a media file")? else {
+        return Ok(None);
+    };
+    let app = connector.graph_app()?;
+    let answer = connector
+        .graph_get(&app, token, &[node(media_id)?], &[])
+        .await?;
+    let size = answer["file_size"]
+        .as_u64()
+        .or_else(|| answer["file_size"].as_str().and_then(|s| s.parse().ok()));
+    if size.is_some_and(|size| size > max_bytes as u64) {
+        return Err(ConnectorError::permanent("the media file is too large"));
+    }
+    let url = text(&answer["url"]).ok_or_else(|| missing("media address"))?;
+    let url = Url::parse(&url)
+        .map_err(|_| ConnectorError::permanent("the media file's address is unreadable"))?;
+    let (kind, data) = connector.download(url, token, max_bytes).await?;
+    let mime = text(&answer["mime_type"]).or(kind).unwrap_or_default();
+    Ok(Some(Media { mime, data }))
 }

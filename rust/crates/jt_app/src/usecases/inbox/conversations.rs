@@ -56,6 +56,14 @@ pub struct MessageView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<MessageItem>,
     pub attachments: Vec<super::attachments::AttachmentView>,
+    /// An outbound message the automatic replies wrote (`auto_reply` in its outbox intent),
+    /// whoever approved it; left out otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automatic: bool,
+    /// For a reply held for approval, its outbox row: what `approve` and `discard` take; left
+    /// out otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<uuid::Uuid>,
 }
 
 /// The public item a message is or answers.
@@ -236,7 +244,19 @@ pub async fn messages(
         } else {
             None
         };
+        let outbox = match message.direction {
+            Direction::Outbound => r.outbox().for_message(message.id).await?,
+            Direction::Inbound => None,
+        };
+        let automatic = outbox
+            .as_ref()
+            .is_some_and(|row| row.intent.get("auto_reply").is_some());
+        let held = outbox
+            .filter(|row| row.state == "held" && message.status == MsgStatus::Queued)
+            .map(|row| row.id);
         views.push(MessageView {
+            automatic,
+            held,
             failure_reason: reasons
                 .iter()
                 .find(|(id, _)| *id == message.id)
@@ -304,12 +324,12 @@ async fn mutate(
         )
         .await?;
     }
-    r.commit().await?;
     if action == "inbox.conversation.handed_to_agent" {
-        // A person's earlier message no longer keeps the automatic replies out; best effort, in
-        // a transaction of its own, nothing at all while the replies are off.
-        super::autoreply::handed_back_after(deps, ctx.workspace_id, id, ctx.now).await;
+        // A person's earlier message no longer keeps the automatic replies out, from this very
+        // commit on; nothing at all while the replies are off.
+        super::autoreply::handed_back(deps, r.as_mut(), id, ctx.now).await?;
     }
+    r.commit().await?;
     Ok(row)
 }
 pub async fn take_over(

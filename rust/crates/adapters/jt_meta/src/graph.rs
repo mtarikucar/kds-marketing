@@ -349,6 +349,67 @@ impl MetaConnector {
             .await
     }
 
+    /// GET the media file at `url` (the address Graph names for a media id, on
+    /// `lookaside.fbsbx.com`: the egress allowlist keeps it to Meta's hosts) with `token` as the
+    /// bearer, and its content type and bytes: at most `max_bytes`, else `Permanent` before more
+    /// is read. A redirect is not followed. No error quotes the bytes.
+    pub(crate) async fn download(
+        &self,
+        url: Url,
+        token: &str,
+        max_bytes: usize,
+    ) -> Result<(Option<String>, Vec<u8>), ConnectorError> {
+        let too_large = || ConnectorError::permanent("the media file is too large");
+        let mut response = self
+            .egress
+            .prepare(Method::GET, without_params(&url, &["access_token"]))
+            .bearer(token)
+            .send(SCOPE)
+            .await
+            .map_err(|e| egress_error(e, true))?;
+        let status = response.status();
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(ConnectorError::throttle(retry_after(response.headers())));
+        }
+        if !status.is_success() {
+            let reason = format!("HTTP {} for the media file", status.as_u16());
+            return Err(if status.is_server_error() {
+                ConnectorError::transient(reason)
+            } else {
+                ConnectorError::permanent(reason)
+            });
+        }
+        if response
+            .content_length()
+            .is_some_and(|len| len > max_bytes as u64)
+        {
+            return Err(too_large());
+        }
+        let kind = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.split(';').next().unwrap_or_default().trim().to_owned());
+        let mut data = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    if data.len() + chunk.len() > max_bytes {
+                        return Err(too_large());
+                    }
+                    data.extend_from_slice(&chunk);
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    return Err(ConnectorError::transient(
+                        "the media file broke off in transit",
+                    ));
+                }
+            }
+        }
+        Ok((kind, data))
+    }
+
     /// POST a JSON `body` to `segments` on the Graph API with `token`, and its answer.
     pub(crate) async fn graph_post(
         &self,

@@ -108,13 +108,15 @@ pub use webhook::{
 };
 
 /// The hosts the adapter reaches, exactly the `meta` entries of `jt_outbound::FIXED_HOSTS`: the
-/// Graph API, the Instagram Graph API, Instagram Login's token endpoint and the resumable media
-/// upload (not used in M1b; listed so a capability names every host its connector may reach).
+/// Graph API, the Instagram Graph API, Instagram Login's token endpoint, the resumable media
+/// upload (not used in M1b; listed so a capability names every host its connector may reach) and
+/// the download of a media file a person sent to a WhatsApp number.
 pub const META_HOSTS: &[&str] = &[
     "graph.facebook.com",
     "graph.instagram.com",
     "api.instagram.com",
     "rupload.facebook.com",
+    "lookaside.fbsbx.com",
 ];
 
 /// How many times an Instagram media container is read before giving up, by default.
