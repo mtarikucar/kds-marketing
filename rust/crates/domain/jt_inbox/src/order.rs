@@ -14,8 +14,8 @@
 //!   customer wrote; the item naming no money and no link. They exist in memory only, between the
 //!   model's answer and the shop's call: `Debug` masks every one of them.
 //! - **The confirmation**: before the shop is asked, the customer is shown a fixed summary
-//!   ([`summary`]) and must answer it with an explicit yes ([`explicit_yes`]); the details are
-//!   compared across the two steps by their canonical form ([`canonical`]).
+//!   ([`summary`]) and must answer it with an explicit yes ([`explicit_yes`]); the use case
+//!   compares the two steps by a keyed hash of exactly what the shop would receive.
 //! - **The answer** ([`read_result`]): an `isError` result, or one whose `ok` is not `true`, is a
 //!   refusal; otherwise the link (a bare `https` URL, at most [`MAX_URL_CHARS`]), the amount (always
 //!   mapped) and the reference when mapped ([`clean_reference`] says what may be shown of it).
