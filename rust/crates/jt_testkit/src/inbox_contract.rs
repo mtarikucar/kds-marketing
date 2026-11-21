@@ -2659,6 +2659,7 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
         lease_until: None,
         attempts: 0,
         handed_back_at: Some(at(-5)),
+        handled_at: Some(at(-1)),
     };
     let mut t = uow.tenant(f.ws).await.unwrap();
     t.auto_reply().queue_save(&row).await.unwrap();

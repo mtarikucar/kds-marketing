@@ -22,6 +22,8 @@ create table if not exists auto_reply_queue (
     attempts integer not null default 0 check (attempts >= 0),
     -- When a person last handed the conversation back to the agent.
     handed_back_at timestamptz,
+    -- When the customer's messages were last looked at for a schedule.
+    handled_at timestamptz,
     -- No foreign key to `conversations`: the inbox's own downs drop that table, and erasure
     -- removes a person's rows (`inbox/erasure.rs`).
     primary key (workspace_id, conversation_id)

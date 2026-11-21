@@ -30,8 +30,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jt_app::ports::reply_model::{
-    HAND_OVER_REASONS, ModelAnswer, ModelError, ModelRequest, ModelStop, ModelTool, Part,
-    ReplyModel, Speaker, Usage,
+    HAND_OVER_REASONS, JudgeAnswer, JudgeRequest, ModelAnswer, ModelError, ModelRequest, ModelStop,
+    ModelTool, Part, ReplyModel, Speaker, Usage,
 };
 use jt_outbound::{Egress, EgressError, EgressScope, Method, Url, header};
 use serde::Deserialize;
@@ -342,15 +342,7 @@ fn tool_of(block: &Value) -> Option<ModelTool> {
 
 /// `response` as the use case reads it, priced at `prices`.
 pub fn answer_of(response: &MessageResponse, prices: &Prices) -> ModelAnswer {
-    let u = response.usage.unwrap_or_default();
-    let mut usage = Usage {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-        cache_write_tokens: u.cache_creation_input_tokens,
-        cache_read_tokens: u.cache_read_input_tokens,
-        cost_micro_usd: 0,
-    };
-    usage.cost_micro_usd = prices.cost_micro_usd(&usage);
+    let usage = usage_of(response, prices);
     let tool = response.content.iter().find_map(tool_of);
     let stop = match (response.stop_reason.as_deref(), &tool) {
         (Some("refusal"), _) => ModelStop::Refusal,
@@ -363,6 +355,20 @@ pub fn answer_of(response: &MessageResponse, prices: &Prices) -> ModelAnswer {
         stop,
         usage,
     }
+}
+
+/// The usage of `response`, priced at `prices`.
+fn usage_of(response: &MessageResponse, prices: &Prices) -> Usage {
+    let u = response.usage.unwrap_or_default();
+    let mut usage = Usage {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+        cache_write_tokens: u.cache_creation_input_tokens,
+        cache_read_tokens: u.cache_read_input_tokens,
+        cost_micro_usd: 0,
+    };
+    usage.cost_micro_usd = prices.cost_micro_usd(&usage);
+    usage
 }
 
 /// The error a non-`2xx` status means.
@@ -390,6 +396,19 @@ impl ReplyModel for ClaudeModel {
     }
 
     async fn answer(&self, request: &ModelRequest) -> Result<ModelAnswer, ModelError> {
+        let body = self.post(&request_body(&self.model, request)).await?;
+        Ok(answer_of(&body, &self.prices))
+    }
+
+    async fn judge(&self, request: &JudgeRequest) -> Result<JudgeAnswer, ModelError> {
+        let body = self.post(&judge_body(&self.model, request)).await?;
+        Ok(verdict_of(&body, &self.prices))
+    }
+}
+
+impl ClaudeModel {
+    /// Sends `body` to the Messages endpoint and reads a `2xx` answer (see the crate docs).
+    async fn post(&self, body: &Value) -> Result<MessageResponse, ModelError> {
         let url = self
             .bases
             .anthropic
@@ -400,7 +419,7 @@ impl ReplyModel for ClaudeModel {
             .prepare(Method::POST, url)
             .header("x-api-key", self.key.expose())
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .json(&request_body(&self.model, request))
+            .json(body)
             .timeout(REQUEST_TIMEOUT)
             .send(SCOPE)
             .await;
@@ -432,16 +451,68 @@ impl ReplyModel for ClaudeModel {
             tracing::warn!(status, request_id = %request_id, "the model refused a request");
             return Err(error_of_status(status, retry_after.as_deref()));
         }
-        match response.json::<MessageResponse>().await {
-            Ok(body) => Ok(answer_of(&body, &self.prices)),
-            Err(_) => {
-                tracing::warn!(status, request_id = %request_id, "the model's answer did not parse");
-                Err(ModelError::Unavailable {
-                    status: Some(status),
-                })
+        response.json::<MessageResponse>().await.map_err(|_| {
+            tracing::warn!(status, request_id = %request_id, "the model's answer did not parse");
+            ModelError::Unavailable {
+                status: Some(status),
             }
-        }
+        })
     }
+}
+
+/// The check's one tool: `verdict {allowed}`, strict.
+pub fn verdict_tool() -> Value {
+    json!([{
+        "name": "verdict",
+        "description": "Whether the message may be sent as it is.",
+        "strict": true,
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["allowed"],
+            "properties": { "allowed": { "type": "boolean" } }
+        }
+    }])
+}
+
+/// The request body of a check (see [`JudgeRequest`]): the instructions, then the cards with a
+/// cache breakpoint, the one strict tool, forced, and the text as the one user turn.
+pub fn judge_body(model: &str, request: &JudgeRequest) -> Value {
+    json!({
+        "model": model,
+        "max_tokens": request.max_tokens,
+        "output_config": { "effort": EFFORT },
+        "system": [
+            { "type": "text", "text": request.system },
+            {
+                "type": "text",
+                "text": request.cards,
+                "cache_control": { "type": "ephemeral" }
+            }
+        ],
+        "tools": verdict_tool(),
+        "tool_choice": tool_choice(),
+        "messages": [
+            { "role": "user", "content": [ { "type": "text", "text": request.text } ] }
+        ],
+    })
+}
+
+/// A check's answer: `allowed` only from a `verdict` tool call with a boolean, and only when the
+/// answer neither was refused nor ran out of tokens.
+pub fn verdict_of(response: &MessageResponse, prices: &Prices) -> JudgeAnswer {
+    let usage = usage_of(response, prices);
+    let stopped = matches!(
+        response.stop_reason.as_deref(),
+        Some("refusal" | "max_tokens")
+    );
+    let allowed = response
+        .content
+        .iter()
+        .find(|b| b["type"] == "tool_use" && b["name"] == "verdict")
+        .and_then(|b| b["input"]["allowed"].as_bool())
+        .filter(|_| !stopped);
+    JudgeAnswer { allowed, usage }
 }
 
 #[cfg(test)]

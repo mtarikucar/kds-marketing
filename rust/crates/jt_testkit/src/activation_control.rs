@@ -493,6 +493,9 @@ impl PlatformRepos for Platform {
     ) -> Result<Vec<WorkspaceId>, AppError> {
         self.inner.workspaces_with_due_wakes(now).await
     }
+    async fn workspaces_with_auto_reply(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        self.inner.workspaces_with_auto_reply().await
+    }
     async fn workspaces_with_due_auto_replies(
         &mut self,
         now: time::OffsetDateTime,

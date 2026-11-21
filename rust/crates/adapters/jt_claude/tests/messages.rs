@@ -10,7 +10,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use jt_app::ports::reply_model::{
-    ModelError, ModelRequest, ModelStop, ModelTool, Part, ReplyModel, Speaker, Turn,
+    JudgeRequest, ModelError, ModelRequest, ModelStop, ModelTool, Part, ReplyModel, Speaker, Turn,
 };
 use jt_claude::{ApiKey, ClaudeBases, ClaudeModel, DEFAULT_MODEL};
 use jt_outbound::{Egress, FIXED_HOSTS, Url};
@@ -246,4 +246,52 @@ fn an_unknown_model_is_refused() {
         )
         .is_none()
     );
+}
+
+fn judge_request() -> JudgeRequest {
+    JudgeRequest {
+        system: "Check the text.".into(),
+        cards: "Ürünler: el yapımı figür.".into(),
+        text: "Merhaba, figürünüz hazır.".into(),
+        max_tokens: 1024,
+    }
+}
+
+#[tokio::test]
+async fn a_check_sends_one_strict_forced_tool_and_reads_its_verdict() {
+    let (model, seen) = mock(200, vec![], include_str!("fixtures/judge_allowed_200.json")).await;
+    let verdict = model.judge(&judge_request()).await.unwrap();
+    assert_eq!(verdict.allowed, Some(true));
+    assert_eq!(verdict.usage.input_tokens, 80);
+    let requests = seen.requests.lock().unwrap();
+    let body: Value = serde_json::from_str(&requests[0].2).unwrap();
+    assert_eq!(body["output_config"], json!({ "effort": "low" }));
+    assert_eq!(body["max_tokens"], 1024);
+    assert_eq!(body["tools"][0]["name"], "verdict");
+    assert_eq!(body["tools"][0]["strict"], true);
+    assert_eq!(
+        body["tools"][0]["input_schema"]["additionalProperties"],
+        false
+    );
+    assert_eq!(body["tool_choice"]["type"], "any");
+    assert_eq!(
+        body["system"][1]["cache_control"],
+        json!({"type": "ephemeral"})
+    );
+    assert_eq!(body["messages"][0]["role"], "user");
+    assert!(body.get("temperature").is_none());
+}
+
+#[tokio::test]
+async fn a_refused_or_tool_less_check_has_no_verdict() {
+    for fixture in [
+        include_str!("fixtures/messages_refusal_200.json"),
+        include_str!("fixtures/messages_no_tool_200.json"),
+        include_str!("fixtures/messages_max_tokens_200.json"),
+    ] {
+        let (model, _) = mock(200, vec![], fixture).await;
+        assert_eq!(model.judge(&judge_request()).await.unwrap().allowed, None);
+    }
+    let (model, _) = mock(500, vec![], include_str!("fixtures/messages_500.json")).await;
+    assert!(model.judge(&judge_request()).await.is_err());
 }

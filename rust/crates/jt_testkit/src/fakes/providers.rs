@@ -2110,7 +2110,13 @@ pub struct ScriptedModel {
     answers: Mutex<VecDeque<ModelResult>>,
     requests: Mutex<Vec<jt_app::ports::reply_model::ModelRequest>>,
     hooks: Mutex<VecDeque<ModelHook>>,
+    verdicts: Mutex<VecDeque<JudgeResult>>,
+    judged: Mutex<Vec<jt_app::ports::reply_model::JudgeRequest>>,
 }
+
+/// What a [`ScriptedModel`] answers one check with.
+pub type JudgeResult =
+    Result<jt_app::ports::reply_model::JudgeAnswer, jt_app::ports::reply_model::ModelError>;
 
 impl ScriptedModel {
     pub fn new() -> Arc<Self> {
@@ -2135,6 +2141,16 @@ impl ScriptedModel {
     pub fn requests(&self) -> Vec<jt_app::ports::reply_model::ModelRequest> {
         lock(&self.requests).clone()
     }
+
+    /// Queues `verdict` for the next check (a check past the script answers `allowed: true`).
+    pub fn verdict(&self, verdict: JudgeResult) {
+        lock(&self.verdicts).push_back(verdict);
+    }
+
+    /// The checks asked so far, oldest first.
+    pub fn judged(&self) -> Vec<jt_app::ports::reply_model::JudgeRequest> {
+        lock(&self.judged).clone()
+    }
 }
 
 #[async_trait]
@@ -2153,6 +2169,15 @@ impl jt_app::ports::reply_model::ReplyModel for ScriptedModel {
         next.unwrap_or(Ok(jt_app::ports::reply_model::ModelAnswer {
             tool: None,
             stop: jt_app::ports::reply_model::ModelStop::NoTool,
+            usage: Default::default(),
+        }))
+    }
+
+    async fn judge(&self, request: &jt_app::ports::reply_model::JudgeRequest) -> JudgeResult {
+        lock(&self.judged).push(request.clone());
+        let next = lock(&self.verdicts).pop_front();
+        next.unwrap_or(Ok(jt_app::ports::reply_model::JudgeAnswer {
+            allowed: Some(true),
             usage: Default::default(),
         }))
     }
