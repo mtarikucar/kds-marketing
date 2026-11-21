@@ -428,6 +428,7 @@ async fn strategy_get_answers_the_owners_live_words_in_the_old_shape() {
             }),
             post_approval: kb.rules.post_approval,
             post_approval_accounts: None,
+            auto_reply: None,
         },
     )
     .await
@@ -581,6 +582,7 @@ async fn inbox_context_carries_the_knowledge_base_with_or_without_a_frame() {
             message_budget: None,
             post_approval: false,
             post_approval_accounts: None,
+            auto_reply: None,
         },
     )
     .await

@@ -1452,6 +1452,7 @@ async fn rules_input(
         message_budget: cap(&s.message_cap),
         post_approval: s.post_approval,
         post_approval_accounts: None,
+        auto_reply: None,
     };
     edit(&mut input);
     input
@@ -2406,6 +2407,7 @@ async fn an_old_approval_of_the_frame_in_force_changes_no_card_it_did_not_change
             }),
             post_approval: s.post_approval,
             post_approval_accounts: None,
+            auto_reply: None,
         },
     )
     .await

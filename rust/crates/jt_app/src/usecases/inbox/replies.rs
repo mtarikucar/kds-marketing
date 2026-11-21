@@ -227,6 +227,29 @@ pub(crate) enum Purpose<'a> {
     /// A campaign step's test email to the requesting member's own login address
     /// (`outreach.test_send`).
     TestSend(&'a TestSend),
+    /// An automatic reply (`usecases::inbox::autoreply`): a reply, a quote, or a hand-over's line.
+    AutoReply(&'a AutoSend<'a>),
+}
+
+/// An automatic message's facts (`usecases::inbox::autoreply`). Its intent records
+/// `auto_reply: {run_id}`. Unlike a reply an agent or a person sends, it is held to the
+/// capability's whole policy, on a direct message too: it waits for a person when the capability
+/// requires approval (`held`, ledger `inbox.reply.held`), and it is refused outside the
+/// capability's working hours (`outside_active_hours`) and once the capability's daily cap is
+/// reached (`daily_ops_cap`, counting the automatic messages of its local day).
+pub(crate) struct AutoSend<'a> {
+    pub run_id: Uuid,
+    /// The executor generation the message is for: the one the model was asked under, so that a
+    /// hand-over since refuses it (at queueing, at claim and at approval alike).
+    pub expected_generation: u32,
+    /// The conversation's activity revision the run answered: a newer message since refuses it
+    /// at claim and at approval (`stale`, `autoreply::still_current`).
+    pub activity_revision: i64,
+    /// The quote it delivers, when it is one.
+    pub quote: Option<&'a crate::ports::compliance::QuoteRow>,
+    /// A hand-over's line to the customer: written as the system's (a person holds the
+    /// conversation from now on), for the generation the hand-over left.
+    pub handing_over: bool,
 }
 
 /// A test email's facts (spec 2026-10-30-leads-pool-outreach-design.md §7.1
@@ -273,6 +296,8 @@ fn queued_by(target: &Target, purpose: &Purpose<'_>) -> &'static str {
         (_, Purpose::Appointment(_)) => "inbox.appointments.book",
         (_, Purpose::Outreach(_)) => "outreach.dispatch",
         (_, Purpose::TestSend(_)) => "outreach.test_send",
+        (_, Purpose::AutoReply(a)) if a.quote.is_some() => "inbox.quotes.send",
+        (_, Purpose::AutoReply(_)) => "inbox.reply",
         (Target::Conversation(_), Purpose::Reply) => "inbox.reply",
         (Target::Person(..) | Target::PersonVia(..), Purpose::Reply) => "inbox.send",
     }
@@ -431,6 +456,10 @@ pub(crate) async fn enqueue_in(
         Purpose::TestSend(t) => Some(*t),
         _ => None,
     };
+    let auto = match &purpose {
+        Purpose::AutoReply(a) => Some(*a),
+        _ => None,
+    };
     let id = c.id;
     let opens_conversation = r.conversations().get(id).await?.is_none();
     // A comment is answered by naming it; a direct message never names one.
@@ -449,11 +478,15 @@ pub(crate) async fn enqueue_in(
     }
     let visibility = input.visibility.unwrap_or_default();
     let j = lock_current_journey(r, c.person_id).await?;
-    let author = match ctx.actor {
-        Actor::Human { user_id } => Author::Human(user_id),
-        Actor::Agent { .. } => Author::Agent,
-        Actor::System { .. } => Author::System,
+    let author = match (ctx.actor.clone(), auto) {
+        // An automatic reply is the agent's: a person's hold stops it as it stops an agent's.
+        (_, Some(a)) if !a.handing_over => Author::Agent,
+        (_, Some(_)) => Author::System,
+        (Actor::Human { user_id }, None) => Author::Human(user_id),
+        (Actor::Agent { .. }, None) => Author::Agent,
+        (Actor::System { .. }, None) => Author::System,
     };
+    let generation = auto.map_or(c.executor_generation, |a| a.expected_generation);
     let cap = capability(r, &c).await?;
     let fenced = match fence_all(
         deps,
@@ -463,7 +496,7 @@ pub(crate) async fn enqueue_in(
             c: &c,
             j: j.as_ref(),
             cap: &cap,
-            generation: c.executor_generation,
+            generation,
             author,
             intent: input.intent,
             text: &text,
@@ -477,9 +510,12 @@ pub(crate) async fn enqueue_in(
     )
     .await
     {
-        Ok(passed) => commercial_identity(r, &cap, input.intent)
-            .await
-            .map(|identity| (passed, identity)),
+        Ok(passed) => match auto_policy(r, ctx, &cap, auto.is_some()).await {
+            Ok(()) => commercial_identity(r, &cap, input.intent)
+                .await
+                .map(|identity| (passed, identity)),
+            Err(error) => Err(error),
+        },
         Err(error) => Err(error),
     };
     let (passed, identity) = match fenced {
@@ -536,8 +572,22 @@ pub(crate) async fn enqueue_in(
         });
         held = cap.policy.requires_human_approval && !matches!(ctx.actor, Actor::Human { .. });
     }
+    if auto.is_some() {
+        held = cap.policy.requires_human_approval;
+    }
     match &purpose {
         Purpose::Reply => {}
+        Purpose::AutoReply(a) => {
+            intent["auto_reply"] = json!({
+                "run_id": a.run_id,
+                "activity_revision": a.activity_revision,
+                "handing_over": a.handing_over,
+            });
+            if let Some(quote) = a.quote {
+                intent["quote_id"] = json!(quote.id);
+                intent["quote_response"] = serde_json::to_value(quote)?;
+            }
+        }
         Purpose::Quote(quote, key) => {
             intent["quote_id"] = json!(quote.id);
             intent["quote_response"] = serde_json::to_value(quote)?;
@@ -714,7 +764,7 @@ pub(crate) async fn enqueue_in(
         message_id,
         capability_id: c.capability_id,
         intent,
-        expected_generation: c.executor_generation,
+        expected_generation: generation,
         fence_snapshot: None,
         conversation_merged: false,
         state: if held { "held" } else { "queued" }.into(),
@@ -759,7 +809,17 @@ pub(crate) async fn enqueue_in(
         json!({"conversation_id":id,"message_id":message_id}),
     )
     .await?;
-    if held {
+    if held && fenced.is_none() {
+        record(
+            r,
+            ctx,
+            "inbox.reply.held",
+            "outbox",
+            row.id,
+            json!({"conversation_id":id,"message_id":message_id}),
+        )
+        .await?;
+    } else if held {
         record(
             r,
             ctx,
@@ -771,6 +831,35 @@ pub(crate) async fn enqueue_in(
         .await?;
     }
     Ok(Enqueued::New(row.id))
+}
+
+/// The capability's policy an automatic message is held to beyond every reply's fences (see
+/// [`AutoSend`]): its working hours, then its daily cap, counted under the capability's lock with
+/// the automatic messages already queued in its local day. Nothing for any other send.
+async fn auto_policy(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    cap: &Capability,
+    auto: bool,
+) -> Result<(), AppError> {
+    if !auto {
+        return Ok(());
+    }
+    if !crate::usecases::calls::within_hours(cap, ctx.now)? {
+        return Err(refused("outside_active_hours"));
+    }
+    let locked = crate::usecases::capabilities::locked(r, cap.id).await?;
+    if let Some(per_day) = locked.policy.daily_ops_cap {
+        let (day_start, _) = crate::usecases::calls::local_day(&locked, ctx.now);
+        let today = r
+            .auto_reply()
+            .runs_sent_since(None, Some(cap.id), day_start)
+            .await?;
+        if today >= per_day {
+            return Err(refused("daily_ops_cap"));
+        }
+    }
+    Ok(())
 }
 
 /// What one fencing of a reply reads (see [`fence_all`]).
@@ -1306,6 +1395,14 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
         .await
         .map(|passed| passed.basis),
     };
+    // An automatic message goes out only into the conversation it answered (spec addendum C).
+    let fenced = match fenced {
+        Ok(basis) => super::autoreply::still_current(r.as_mut(), &c, &row, ctx.now)
+            .await?
+            .map(|()| basis)
+            .map_err(refused),
+        Err(e) => Err(e),
+    };
     let basis = match fenced.and_then(|basis| footer_ready(&row, &cap).map(|()| basis)) {
         Ok(basis) => basis,
         Err(e) if !matches!(e.code, ErrorCode::Forbidden | ErrorCode::Validation) => {
@@ -1808,7 +1905,11 @@ async fn record_result_with(
                     json!({"message_id":row.message_id,"journey_id":journey_id}),
                 )
                 .await?;
-            } else if !row.conversation_merged {
+            } else if !row.conversation_merged
+                // A hand-over's line to the customer leaves the conversation owed to the person
+                // it went to (`autoreply`): it does not answer the customer.
+                && row.intent["auto_reply"]["handing_over"] != true
+            {
                 // Coalesced sends reconcile receipts and journeys but never conversation activity,
                 // even if undo has restored the original conversation before this receipt.
                 // A moved outbox must not compare revisions from different conversations.
@@ -1940,6 +2041,34 @@ pub(super) async fn approve_in(
         None => message.body.clone(),
     };
     let edited = text != message.body;
+    if let Err(reason) = super::autoreply::still_current(r, &c, &row, ctx.now).await? {
+        // A held automatic reply approved after a newer message (the customer's or a person's)
+        // is refused: it answered a conversation that has moved on.
+        row.state = "refused".into();
+        row.last_error = Some(reason.into());
+        row.updated_at = ctx.now;
+        r.messages()
+            .set_status(
+                row.message_id,
+                MsgStatus::Refused {
+                    reason: reason.into(),
+                },
+                None,
+                None,
+            )
+            .await?;
+        save_result(r, ctx, &row).await?;
+        record(
+            r,
+            ctx,
+            "inbox.send.refused",
+            "person",
+            c.person_id,
+            json!({"person_id":c.person_id,"reason":reason}),
+        )
+        .await?;
+        return Err(refused(reason));
+    }
     let author = Author::Human(approver);
     let cap = capability(r, &c).await?;
     let public = super::public::intent_of(&row.intent)?;
@@ -2088,6 +2217,41 @@ pub(super) async fn discard_in(
     )
     .await?;
     Ok(output(&row))
+}
+
+/// Refuses the held automatic replies of conversation `id` (reason `superseded`): a newer one is
+/// about to be queued, and only one waits for approval at a time. In the caller's transaction.
+pub(crate) async fn supersede_held_auto(
+    r: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    id: ConversationId,
+) -> Result<(), AppError> {
+    for hint in super::context::held_replies(r, ctx.now).await? {
+        if hint.conversation_id != id || hint.intent.get("auto_reply").is_none() {
+            continue;
+        }
+        let Some(mut row) = r.outbox().lock(hint.id).await? else {
+            continue;
+        };
+        if row.state != "held" {
+            continue;
+        }
+        row.state = "refused".into();
+        row.last_error = Some("superseded".into());
+        row.updated_at = ctx.now;
+        r.messages()
+            .set_status(
+                row.message_id,
+                MsgStatus::Refused {
+                    reason: "superseded".into(),
+                },
+                None,
+                None,
+            )
+            .await?;
+        save_result(r, ctx, &row).await?;
+    }
+    Ok(())
 }
 
 /// The refusal of approving or discarding a reply that is not held (any more).

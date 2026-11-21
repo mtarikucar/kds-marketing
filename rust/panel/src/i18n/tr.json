@@ -4473,6 +4473,9 @@
       "approvalExcept": "Paylaşımlar onay beklemeden çıkar; {{accounts}} hariç.",
       "tiktok": "TikTok'u sen tamamlarsın.",
       "stopped": "{{n}} reklam kampanyası yeni sınıra ulaştığı için durdu.",
+      "autoReplyOn": "Mesajlara otomatik yanıt: {{channels}} · {{min}}–{{max}}.",
+      "autoReplyWaiting": "Mesajlara otomatik yanıt, “Standart iş ve fiyat” kartı dolunca başlar.",
+      "autoReplyNoKey": "Mesajlara otomatik yanıt kapalı: sunucuda Claude anahtarı yok.",
       "dialog": {
         "help": "Bütçeyi, mesaj sınırını ve onayı sistem uygular; yasakları ajanlar her işte okur ve uyar.",
         "prohibitions": "Yasaklar",
@@ -4494,7 +4497,13 @@
         "stillWaits": "{{accounts}} hesaplarındaki paylaşımlar yine onayına gelir.",
         "clearAccounts": "Bunlarda da kapat",
         "approvalOwnerOnly": "Onayı yalnızca sahip ya da yönetici kapatır.",
-        "approvalAll": "Tüm paylaşımlar onayına geliyor; önce Kurallar'da kapat."
+        "approvalAll": "Tüm paylaşımlar onayına geliyor; önce Kurallar'da kapat.",
+        "autoReply": "Mesajlara otomatik yanıt",
+        "autoReplyNoKey": "Sunucuda Claude anahtarı yok, otomatik yanıt kapalı.",
+        "autoReplyMin": "En az",
+        "autoReplyMax": "En çok",
+        "autoReplyHelp": "Fiyatı nasıl vereceğini “Standart iş ve fiyat” kartına yaz. Standart dışı istekler sana gelir.",
+        "autoReplyInvalid": "En az ve en çok tutarı yaz; en az, en çoktan büyük olamaz."
       }
     },
     "goals": {
@@ -4543,7 +4552,8 @@
         "who_we_seek": "Hangi işletmelere ulaşmak istiyorsun? Sektör, şehir, büyüklük.",
         "accounts_channels": "Hangi hesabı ne için kullanıyorsun?",
         "references": "Adını anabileceğin müşteriler ve projeler; izin durumlarıyla.",
-        "own": "Ajanların bilmesi gerekeni yaz."
+        "own": "Ajanların bilmesi gerekeni yaz.",
+        "reply_standard": "Standart işin ne, fiyatı aralığın neresine koyan ne, neler standart dışı?"
       }
     },
     "history": {

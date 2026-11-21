@@ -331,6 +331,7 @@ async fn the_brand_rules_and_the_goals_are_the_owners_live_words() {
             message_budget: cap(&kb.rules.message_cap),
             post_approval: kb.rules.post_approval,
             post_approval_accounts: None,
+            auto_reply: None,
         },
     )
     .await

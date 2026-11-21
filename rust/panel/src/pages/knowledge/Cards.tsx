@@ -42,7 +42,7 @@ import { isStale, useKnowledgeMutation } from './queries';
 import { knowledgeError } from './words';
 
 /** The seed cards' keys whose placeholder the page shows while their text is empty (§4.11). */
-const PLACEHOLDER_KEYS = ['who_we_are', 'products_prices', 'voice', 'customers', 'post_ideas', 'who_we_seek', 'accounts_channels', 'references'] as const;
+const PLACEHOLDER_KEYS = ['who_we_are', 'products_prices', 'voice', 'customers', 'post_ideas', 'who_we_seek', 'accounts_channels', 'references', 'reply_standard'] as const;
 type PlaceholderKey = (typeof PLACEHOLDER_KEYS)[number];
 const isPlaceholderKey = (key: string | null): key is PlaceholderKey => !!key && (PLACEHOLDER_KEYS as readonly string[]).includes(key);
 

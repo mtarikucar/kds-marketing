@@ -143,6 +143,7 @@ pub async fn consume_event(
         now,
         agent_connection_id: None,
     };
+    let mut scheduled = None;
     let outcome = match route(
         deps,
         &ctx,
@@ -151,6 +152,7 @@ pub async fn consume_event(
         lead.as_ref(),
         name.as_deref(),
         subject.as_ref(),
+        &mut scheduled,
     )
     .await
     {
@@ -189,8 +191,13 @@ pub async fn consume_event(
         )
         .await?;
     r.commit().await?;
+    // Never part of consuming the message: a failure to schedule is logged, the message stays.
+    if let Some(id) = scheduled.filter(|_| outcome == "consumed") {
+        super::autoreply::mark_due_after(deps, event.workspace_id, id, now).await;
+    }
     Ok(outcome)
 }
+#[allow(clippy::too_many_arguments)]
 async fn route(
     deps: &Deps,
     ctx: &Ctx,
@@ -199,6 +206,7 @@ async fn route(
     lead: Option<&super::leadgen::Fetched>,
     sender_name: Option<&str>,
     subject: Option<&crate::ports::connectors::SubjectFacts>,
+    scheduled: &mut Option<ConversationId>,
 ) -> Result<&'static str, AppError> {
     // TikTok's webhooks are about the account and its posts, never a conversation: the intake
     // takes their effect (`webhook::receive_tiktok`); here they are done with, never deferred.
@@ -312,7 +320,7 @@ async fn route(
                     | (Provider::Mail, Channel::Email)
             ) =>
         {
-            message(deps, ctx, r, event, &cap, channel, sender_name).await
+            message(deps, ctx, r, event, &cap, channel, sender_name, scheduled).await
         }
         EventKind::MessageEcho
             if event.provider == Provider::Meta
@@ -669,6 +677,7 @@ pub(crate) async fn apply_from(
     )
     .await
 }
+#[allow(clippy::too_many_arguments)]
 async fn message(
     deps: &Deps,
     ctx: &Ctx,
@@ -677,6 +686,7 @@ async fn message(
     cap: &Capability,
     channel: Channel,
     sender_name: Option<&str>,
+    scheduled: &mut Option<ConversationId>,
 ) -> Result<&'static str, AppError> {
     let key = format!("inbound:{}", event.id);
     if r.journeys().event_by_key(&key).await?.is_some() {
@@ -764,6 +774,10 @@ async fn message(
         activity_at(event),
     )
     .await?;
+    // A customer's message may be answered automatically (`autoreply`), scheduled once this
+    // transaction commits; shared history, the business app's own messages and other echoes
+    // never get here.
+    *scheduled = Some(conv.id);
     Ok("consumed")
 }
 async fn outbound(

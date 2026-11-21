@@ -356,6 +356,7 @@ fn only_outbound_uses_reqwest_and_only_pg_uses_sqlx() {
         "jt_linkedin",
         "jt_google",
         "jt_wake",
+        "jt_claude",
         "jt_webhook",
         "jt_testkit",
         "jeeta",
@@ -537,6 +538,7 @@ const CONNECTOR_ADAPTERS: &[&str] = &[
     "jt_google",
     "jt_mail",
     "jt_wake",
+    "jt_claude",
 ];
 
 #[test]
@@ -552,7 +554,9 @@ fn connector_adapters_reach_out_only_through_the_egress_client() {
                     // Google takes a campaign's days in the ad account's own time zone.
                     || (*c == "jt_google" && matches!(d.as_str(), "chrono" | "chrono-tz"))
                     // TikTok checks an uploaded ad image against its MD5.
-                    || (*c == "jt_tiktok" && d == "md-5"),
+                    || (*c == "jt_tiktok" && d == "md-5")
+                    // The platform's Claude API key wipes itself from memory.
+                    || (*c == "jt_claude" && d == "zeroize"),
                 "{c} depends on {d}, which is not on its allowlist"
             );
         }

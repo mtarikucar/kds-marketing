@@ -1325,6 +1325,7 @@ dependencies = [
  "hex",
  "jt_app",
  "jt_capability",
+ "jt_claude",
  "jt_connector",
  "jt_files",
  "jt_google",
@@ -1505,6 +1506,22 @@ dependencies = [
  "thiserror 2.0.21",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "jt_claude"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "jt_app",
+ "jt_outbound",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]

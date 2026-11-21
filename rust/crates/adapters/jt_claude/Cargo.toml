@@ -1,0 +1,30 @@
+[package]
+name = "jt_claude"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The inbox's automatic replies' model (`jt_app::ports::reply_model::ReplyModel`): the Claude API's
+# Messages endpoint, spoken as raw HTTP (there is no SDK crate, and none may be added: deny.toml).
+# It holds no HTTP client: every request goes through `jt_outbound::Egress` under the `anthropic`
+# connector scope, whose one fixed host is `api.anthropic.com`.
+[dependencies]
+jt_app.workspace = true
+jt_outbound.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tracing.workspace = true
+async-trait.workspace = true
+# The platform's API key wipes itself from memory when dropped.
+zeroize.workspace = true
+
+[dev-dependencies]
+# Plain http to the in-process mock on 127.0.0.1, for the tests only (see jt_outbound's docs).
+jt_outbound = { workspace = true, features = ["test-loopback"] }
+axum.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time"] }
+
+[lints]
+workspace = true

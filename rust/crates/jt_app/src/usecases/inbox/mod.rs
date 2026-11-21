@@ -1,6 +1,7 @@
 //! Inbox operations shared by the panel, MCP and trusted inbound consumers.
 pub mod appointments;
 pub mod attachments;
+pub mod autoreply;
 pub mod consent;
 pub mod consumer;
 pub mod context;

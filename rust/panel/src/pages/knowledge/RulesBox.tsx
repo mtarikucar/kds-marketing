@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Plus, X } from 'lucide-react';
 import { listBudgetItems } from '@/api/budget';
-import { CAP_PERIODS, LIMITS, saveRules, type ApprovalAccount, type CapInput, type CapPeriod, type RulesInput, type RulesOut } from '@/api/knowledge';
+import { CAP_PERIODS, LIMITS, saveRules, type ApprovalAccount, type AutoReplyView, type CapInput, type CapPeriod, type RulesInput, type RulesOut } from '@/api/knowledge';
 import { useSession } from '@/auth/useSession';
 import { MoneyInput } from '@/components/forms';
 import {
@@ -27,7 +27,7 @@ import {
 } from '@/components/ui';
 import { can, isOwnerOrManager } from '@/lib/roles';
 import { isStale, useKnowledgeMutation } from './queries';
-import { adLine, approvalLine, knowledgeError, listedNames, messageLine } from './words';
+import { adLine, approvalLine, autoReplyLine, knowledgeError, listedNames, messageLine } from './words';
 
 /** How many prohibitions the box shows before "{n} kural daha". */
 const SHOWN = 2;
@@ -182,6 +182,70 @@ function CapField({
 }
 
 /**
+ * The automatic replies in the Kurallar dialog: a switch for each WhatsApp number, and the range
+ * of their quotes ("En az", "En çok"). Without a model on the server the switches are disabled
+ * and the section says so.
+ */
+function AutoReplyField({
+  auto,
+  ids,
+  min,
+  max,
+  onIds,
+  onMin,
+  onMax,
+  invalid,
+}: {
+  auto: AutoReplyView;
+  ids: string[];
+  min: number | null;
+  max: number | null;
+  onIds: (ids: string[]) => void;
+  onMin: (minor: number | null) => void;
+  onMax: (minor: number | null) => void;
+  invalid: boolean;
+}) {
+  const { t } = useTranslation();
+  const currency = auto.price?.currency ?? 'TRY';
+  const on = ids.length > 0;
+  return (
+    <section className="flex flex-col gap-2" aria-label={t('knowledge.rules.dialog.autoReply')}>
+      <h3 className="text-sm font-medium">{t('knowledge.rules.dialog.autoReply')}</h3>
+      {!auto.available && <p className="text-caption text-muted-foreground">{t('knowledge.rules.dialog.autoReplyNoKey')}</p>}
+      {auto.accounts.map((a) => (
+        <label key={a.capability_id} className="flex items-center gap-2 text-sm">
+          <Switch
+            checked={ids.includes(a.capability_id)}
+            disabled={!auto.available}
+            onCheckedChange={(checked) => onIds(checked ? [...ids, a.capability_id] : ids.filter((id) => id !== a.capability_id))}
+          />
+          {a.name}
+        </label>
+      ))}
+      {(on || auto.price) && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <Label htmlFor="knowledge-auto-min">{t('knowledge.rules.dialog.autoReplyMin')}</Label>
+          <div className="w-32">
+            <MoneyInput id="knowledge-auto-min" currency={currency} minor={min} onChange={onMin} disabled={!auto.available} />
+          </div>
+          <Label htmlFor="knowledge-auto-max">{t('knowledge.rules.dialog.autoReplyMax')}</Label>
+          <div className="w-32">
+            <MoneyInput id="knowledge-auto-max" currency={currency} minor={max} onChange={onMax} disabled={!auto.available} />
+          </div>
+        </div>
+      )}
+      {on && <p className="text-caption text-muted-foreground">{t('knowledge.rules.dialog.autoReplyHelp')}</p>}
+      {invalid && <p role="alert" className="text-caption text-danger">{t('knowledge.rules.dialog.autoReplyInvalid')}</p>}
+    </section>
+  );
+}
+
+/** Whether two lists hold the same ids, in any order. */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+/**
  * "Düzenle" of Kurallar: the prohibitions, the two ceilings and post approval, saved whole over
  * the rules as they were when the dialog opened (`base`; the page reads again on its own
  * meanwhile). A stale save shows the rules as they now are, under the sentence that says so.
@@ -214,6 +278,10 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
   const [approval, setApproval] = useState(false);
   const [accounts, setAccounts] = useState<ApprovalAccount[]>([]);
   const [invalid, setInvalid] = useState(false);
+  const [autoIds, setAutoIds] = useState<string[]>([]);
+  const [autoMin, setAutoMin] = useState<number | null>(null);
+  const [autoMax, setAutoMax] = useState<number | null>(null);
+  const [autoInvalid, setAutoInvalid] = useState(false);
   const showMessage = !!base.message_cap || base.metered;
 
   const save = useKnowledgeMutation(
@@ -238,6 +306,9 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     setMsgAmount(from.message_cap?.amount_minor ?? null);
     setApproval(from.post_approval);
     setAccounts(from.post_approval_accounts);
+    setAutoIds(from.auto_reply.capability_ids);
+    setAutoMin(from.auto_reply.price?.min_minor ?? null);
+    setAutoMax(from.auto_reply.price?.max_minor ?? null);
   };
 
   // The rules as read each time the dialog opens; a later read leaves the person's edits alone.
@@ -245,6 +316,7 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     if (!open) return;
     load(rules);
     setInvalid(false);
+    setAutoInvalid(false);
     setReload(false);
     save.reset();
   }, [open]);
@@ -262,11 +334,10 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     e.preventDefault();
     const adMissing = money && !adOff && adAmount === null;
     const msgMissing = money && showMessage && !msgOff && msgAmount === null;
-    if (adMissing || msgMissing) {
-      setInvalid(true);
-      return;
-    }
-    setInvalid(false);
+    const autoBad = autoIds.length > 0 && (autoMin === null || autoMax === null || autoMin <= 0 || autoMin > autoMax);
+    setInvalid(adMissing || msgMissing);
+    setAutoInvalid(autoBad);
+    if (adMissing || msgMissing || autoBad) return;
     const input: RulesInput = {
       expected_revision: base.revision,
       prohibitions: fromLines(lines),
@@ -280,6 +351,15 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
       post_approval: approval,
     };
     if (accounts.length !== base.post_approval_accounts.length) input.post_approval_accounts = accounts.map((a) => a.capability_id);
+    const stored = base.auto_reply;
+    const rangeMoved = autoMin !== (stored.price?.min_minor ?? null) || autoMax !== (stored.price?.max_minor ?? null);
+    if (!sameIds(autoIds, stored.capability_ids) || rangeMoved) {
+      input.auto_reply = { capability_ids: autoIds };
+      if (autoMin !== null && autoMax !== null) {
+        input.auto_reply.min_minor = autoMin;
+        input.auto_reply.max_minor = autoMax;
+      }
+    }
     save.mutate(input);
   };
 
@@ -351,6 +431,18 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
               </p>
             )}
           </section>
+          {base.auto_reply.accounts.length > 0 && (
+            <AutoReplyField
+              auto={base.auto_reply}
+              ids={autoIds}
+              min={autoMin}
+              max={autoMax}
+              onIds={setAutoIds}
+              onMin={setAutoMin}
+              onMax={setAutoMax}
+              invalid={autoInvalid}
+            />
+          )}
           {save.error && <p role="alert" className="text-sm text-danger">{knowledgeError(t, save.error)}</p>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
@@ -376,6 +468,7 @@ export function RulesBox({ rules, editable }: { rules: RulesOut; editable: boole
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const message = messageLine(t, rules.message_cap, i18n.language);
+  const auto = autoReplyLine(t, rules.auto_reply, i18n.language);
   const first = rules.prohibitions.slice(0, SHOWN);
   const rest = rules.prohibitions.slice(SHOWN);
   return (
@@ -396,6 +489,7 @@ export function RulesBox({ rules, editable }: { rules: RulesOut; editable: boole
         <li>{adLine(t, rules.ad_cap, i18n.language)}</li>
         {message && <li>{message}</li>}
         <li>{approvalLine(t, rules)}</li>
+        {auto && <li>{auto}</li>}
       </ul>
       {rest.length > 0 && (
         <button type="button" className="self-start text-sm text-muted-foreground underline-offset-4 hover:underline" aria-expanded={expanded} onClick={() => setExpanded((x) => !x)}>

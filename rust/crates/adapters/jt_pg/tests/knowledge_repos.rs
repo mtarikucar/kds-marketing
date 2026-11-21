@@ -952,6 +952,7 @@ async fn rules_saves_spends_budget_edits_and_frame_applies_never_deadlock_on_pos
                     }),
                     post_approval: s.post_approval,
                     post_approval_accounts: None,
+                    auto_reply: None,
                 };
                 settled("rules_save", rules::rules_save(&d, &c, input).await);
             }

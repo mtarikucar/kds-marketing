@@ -585,6 +585,7 @@ impl Journey {
             message_budget: cap(&s.message_cap),
             post_approval: s.post_approval,
             post_approval_accounts: None,
+            auto_reply: None,
         };
         edit(&mut input);
         kb_rules::rules_save(&self.w.d, &self.w.ctx, input)

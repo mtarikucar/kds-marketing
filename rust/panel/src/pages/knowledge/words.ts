@@ -1,6 +1,6 @@
 import type { TFunction } from 'i18next';
 import { isApiError } from '@/api/client';
-import type { Cap, RulesOut } from '@/api/knowledge';
+import type { AutoReplyView, Cap, RulesOut } from '@/api/knowledge';
 import { errorMessage } from '@/lib/errors';
 import { minorDigits } from '@/lib/format';
 
@@ -36,6 +36,22 @@ export function messageLine(t: TFunction, cap: Cap | null, language: string): st
   if (!cap) return null;
   const amount = capMoney(cap.amount_minor, cap.currency, language);
   return cap.period === 'weekly' ? t('knowledge.rules.messageWeekly', { amount }) : t('knowledge.rules.messageMonthly', { amount });
+}
+
+/**
+ * The automatic replies' line: "Mesajlara otomatik yanıt: WhatsApp · ₺2.750–₺10.000", what keeps
+ * them waiting, or `null` while they are off (the line is not shown).
+ */
+export function autoReplyLine(t: TFunction, auto: AutoReplyView, language: string): string | null {
+  if (auto.capability_ids.length === 0) return null;
+  if (auto.off_reason === 'no_key') return t('knowledge.rules.autoReplyNoKey');
+  if (auto.off_reason === 'standard_missing' || !auto.price) return t('knowledge.rules.autoReplyWaiting');
+  const { min_minor, max_minor, currency } = auto.price;
+  return t('knowledge.rules.autoReplyOn', {
+    channels: 'WhatsApp',
+    min: capMoney(min_minor, currency, language),
+    max: capMoney(max_minor, currency, language),
+  });
 }
 
 /**

@@ -1937,12 +1937,19 @@ pub struct ScriptedRegistry {
     public: BTreeMap<Provider, Arc<ScriptedPublic>>,
     pollers: BTreeMap<Provider, Arc<ScriptedPoller>>,
     waker: Option<Arc<ScriptedWaker>>,
+    model: Option<Arc<ScriptedModel>>,
 }
 
 impl ScriptedRegistry {
     /// Registers `waker` as the agents' waker ([`ConnectorRegistry::agent_waker`]).
     pub fn with_waker(mut self, waker: Arc<ScriptedWaker>) -> Self {
         self.waker = Some(waker);
+        self
+    }
+
+    /// Registers `model` as the automatic replies' model ([`ConnectorRegistry::reply_model`]).
+    pub fn with_model(mut self, model: Arc<ScriptedModel>) -> Self {
+        self.model = Some(model);
         self
     }
 
@@ -2079,6 +2086,75 @@ impl ConnectorRegistry for ScriptedRegistry {
         self.waker
             .clone()
             .map(|w| w as Arc<dyn jt_app::ports::wake::AgentWaker>)
+    }
+
+    fn reply_model(&self) -> Option<Arc<dyn jt_app::ports::reply_model::ReplyModel>> {
+        self.model
+            .clone()
+            .map(|m| m as Arc<dyn jt_app::ports::reply_model::ReplyModel>)
+    }
+}
+
+/// What a [`ScriptedModel`] answers one call with.
+pub type ModelResult =
+    Result<jt_app::ports::reply_model::ModelAnswer, jt_app::ports::reply_model::ModelError>;
+
+type ModelHook =
+    Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
+
+/// A reply model answering from a script (one answer per call, in order; a call past the end
+/// answers `no_tool`), recording every request, and running a hook queued for a call before it
+/// answers (what happens while the model thinks). Never reaches the network.
+#[derive(Default)]
+pub struct ScriptedModel {
+    answers: Mutex<VecDeque<ModelResult>>,
+    requests: Mutex<Vec<jt_app::ports::reply_model::ModelRequest>>,
+    hooks: Mutex<VecDeque<ModelHook>>,
+}
+
+impl ScriptedModel {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Queues `answer` for the next call.
+    pub fn answer(&self, answer: ModelResult) {
+        lock(&self.answers).push_back(answer);
+    }
+
+    /// Queues `hook` to run during the next call, before it answers.
+    pub fn during_next<F, Fut>(&self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        lock(&self.hooks).push_back(Box::new(move || Box::pin(hook())));
+    }
+
+    /// The requests so far, oldest first.
+    pub fn requests(&self) -> Vec<jt_app::ports::reply_model::ModelRequest> {
+        lock(&self.requests).clone()
+    }
+}
+
+#[async_trait]
+impl jt_app::ports::reply_model::ReplyModel for ScriptedModel {
+    fn model(&self) -> &str {
+        "scripted-model"
+    }
+
+    async fn answer(&self, request: &jt_app::ports::reply_model::ModelRequest) -> ModelResult {
+        lock(&self.requests).push(request.clone());
+        let hook = lock(&self.hooks).pop_front();
+        if let Some(hook) = hook {
+            hook().await;
+        }
+        let next = lock(&self.answers).pop_front();
+        next.unwrap_or(Ok(jt_app::ports::reply_model::ModelAnswer {
+            tool: None,
+            stop: jt_app::ports::reply_model::ModelStop::NoTool,
+            usage: Default::default(),
+        }))
     }
 }
 

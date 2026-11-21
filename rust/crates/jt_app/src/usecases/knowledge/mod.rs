@@ -286,6 +286,12 @@ impl Locked {
                 )?
             }
         };
+        if change.subject == Subject::Rules
+            && let Some(auto) = &self.settings.auto_reply
+        {
+            // How many numbers the automatic replies answer on; absent while never set up.
+            entry.payload["auto_reply"] = json!(auto.capability_ids.len());
+        }
         entry.strategy_version_id = self.frame.map(|v| v.as_uuid());
         r.ledger().append(entry).await?;
         Ok(kb)

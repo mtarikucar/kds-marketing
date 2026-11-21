@@ -83,6 +83,7 @@ pub struct Intervals {
     pub comments_poll: Duration,
     pub purge_request_keys: Duration,
     pub agent_wake: Duration,
+    pub inbox_auto_reply: Duration,
     pub knowledge_settle: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
@@ -98,7 +99,8 @@ impl Default for Intervals {
     /// purge hourly, the call timers every second, the bridges' health checks and the phones'
     /// command expiry every minute, the device-file purge hourly, the comments backfill hourly,
     /// the expired request keys' purge daily, the agents' wakes every ten seconds, the knowledge
-    /// base's housekeeping every ten minutes; first runs within 30 seconds of the start.
+    /// base's housekeeping every ten minutes, the automatic replies every three seconds; first runs
+    /// within 30 seconds of the start.
     fn default() -> Self {
         Intervals {
             refresh_tokens: HOUR,
@@ -138,6 +140,7 @@ impl Default for Intervals {
             purge_request_keys: DAY,
             agent_wake: Duration::from_secs(10),
             knowledge_settle: 10 * MINUTE,
+            inbox_auto_reply: Duration::from_secs(3),
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -184,6 +187,7 @@ impl Intervals {
             Job::PurgeRequestKeys => self.purge_request_keys,
             Job::AgentWake => self.agent_wake,
             Job::KnowledgeSettle => self.knowledge_settle,
+            Job::InboxAutoReply => self.inbox_auto_reply,
         }
     }
 }
@@ -509,6 +513,7 @@ mod tests {
             purge_request_keys: every,
             agent_wake: every,
             knowledge_settle: every,
+            inbox_auto_reply: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -645,6 +650,11 @@ mod tests {
         assert_eq!(i.of(Job::AgentWake), Duration::from_secs(10));
         assert_eq!(Job::AgentWake.lock_name(), "jeeta.jobs.agent_wake");
         assert_eq!(i.of(Job::KnowledgeSettle), 10 * MINUTE);
+        assert_eq!(i.of(Job::InboxAutoReply), Duration::from_secs(3));
+        assert_eq!(
+            Job::InboxAutoReply.lock_name(),
+            "jeeta.jobs.inbox_auto_reply"
+        );
         assert_eq!(
             Job::KnowledgeSettle.lock_name(),
             "jeeta.jobs.knowledge_settle"

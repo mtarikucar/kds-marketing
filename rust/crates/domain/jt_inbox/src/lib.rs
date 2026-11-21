@@ -13,6 +13,7 @@
 //! a mailbox.
 
 mod appointment;
+pub mod autoreply;
 mod consent;
 mod conversation;
 mod distribution;

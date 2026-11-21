@@ -183,6 +183,9 @@ pub struct KnowledgeSettings {
     #[serde(with = "time::serde::rfc3339")]
     pub seeded_at: OffsetDateTime,
     pub seed_source: SeedSource,
+    /// The inbox's automatic replies (`0047_inbox_auto_reply`); none: never set up, off.
+    #[serde(default)]
+    pub auto_reply: Option<AutoReply>,
 }
 
 impl KnowledgeSettings {
@@ -211,18 +214,24 @@ impl KnowledgeSettings {
             frame_applied_at: None,
             seeded_at: now,
             seed_source: source,
+            auto_reply: None,
         }
     }
 
     /// What a `rules` revision row keeps: the whole rules box.
     pub fn rules_content(&self) -> Value {
-        json!({
+        let mut out = json!({
             "prohibitions": self.prohibitions,
             "ad_cap": self.ad_cap,
             "message_cap": self.message_cap,
             "post_approval": self.post_approval,
             "post_approval_accounts": self.post_approval_accounts,
-        })
+        });
+        // The automatic replies, once set up (a box that never had them reads as before).
+        if let Some(auto) = &self.auto_reply {
+            out["auto_reply"] = json!(auto);
+        }
+        out
     }
 
     /// What a `goals` revision row keeps: the goals.
@@ -239,5 +248,185 @@ impl KnowledgeSettings {
     /// Whether a card change made after the prospecting part was last derived waits for one.
     pub fn prospecting_due(&self) -> bool {
         self.prospecting_revision > self.prospecting_derived
+    }
+}
+
+/// The capability kinds whose conversations the automatic replies may answer.
+pub const AUTO_REPLY_KINDS: &[&str] = &["whatsapp_cloud"];
+/// The most capabilities the automatic replies may be on for.
+pub const MAX_AUTO_REPLY_CAPABILITIES: usize = 10;
+/// How many days an automatic quote stays valid.
+pub const AUTO_QUOTE_VALID_DAYS: u32 = 7;
+/// The key and the title of the card the owner writes the standard work and its pricing in; the
+/// rules create it the first time the automatic replies are turned on.
+pub const REPLY_STANDARD: (&str, &str) = ("reply_standard", "Standart iş ve fiyat");
+
+/// The owner's price range for automatic quotes, in minor units of `currency` (both ends
+/// included). The currency is the workspace's, never the model's.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriceRange {
+    pub min_minor: i64,
+    pub max_minor: i64,
+    #[serde(default = "default_currency")]
+    pub currency: String,
+}
+
+/// The inbox's automatic replies as stored (`knowledge_settings.auto_reply`): the capabilities
+/// they answer on (empty: off), the price range of their quotes and how long a quote is valid.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoReply {
+    #[serde(default)]
+    pub capability_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub price: Option<PriceRange>,
+    #[serde(default = "default_valid_days")]
+    pub quote_valid_days: u32,
+}
+
+fn default_valid_days() -> u32 {
+    AUTO_QUOTE_VALID_DAYS
+}
+
+impl AutoReply {
+    /// Whether the replies are on for capability `id`.
+    pub fn serves(&self, id: Uuid) -> bool {
+        self.capability_ids.contains(&id)
+    }
+}
+
+/// The automatic replies as a person writes them: the capabilities, and the range (required while
+/// any capability is listed and none is stored; none keeps the one stored).
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutoReplyInput {
+    pub capability_ids: Vec<Uuid>,
+    #[serde(default)]
+    pub min_minor: Option<i64>,
+    #[serde(default)]
+    pub max_minor: Option<i64>,
+}
+
+/// `Ok` with the range `input` gives (none when it gives none): `0 < min <= max <=`
+/// [`MAX_CAP_MINOR`], both ends or neither, and one whenever a capability is listed and `stored`
+/// has none; at most [`MAX_AUTO_REPLY_CAPABILITIES`] capabilities, none twice. The capabilities'
+/// kinds are the caller's to check.
+pub fn validate_auto_reply(
+    input: &AutoReplyInput,
+    stored: Option<&PriceRange>,
+) -> Result<Option<(i64, i64)>, Invalid> {
+    if input.capability_ids.len() > MAX_AUTO_REPLY_CAPABILITIES {
+        return Err(Invalid::new(
+            "auto_reply.capability_ids",
+            "too_many",
+            format!("at most {MAX_AUTO_REPLY_CAPABILITIES} capabilities"),
+        ));
+    }
+    for (i, id) in input.capability_ids.iter().enumerate() {
+        if input.capability_ids[..i].contains(id) {
+            return Err(Invalid::new(
+                format!("auto_reply.capability_ids[{i}]"),
+                "duplicate",
+                "a capability is listed once",
+            ));
+        }
+    }
+    let range = match (input.min_minor, input.max_minor) {
+        (None, None) => None,
+        (Some(min), Some(max)) => {
+            if !(min > 0 && min <= max && max <= MAX_CAP_MINOR) {
+                return Err(Invalid::new(
+                    "auto_reply.min_minor",
+                    "out_of_range",
+                    format!("0 < min <= max <= {MAX_CAP_MINOR} minor units"),
+                ));
+            }
+            Some((min, max))
+        }
+        _ => {
+            return Err(Invalid::new(
+                "auto_reply.max_minor",
+                "required",
+                "the range has both ends",
+            ));
+        }
+    };
+    if !input.capability_ids.is_empty() && range.is_none() && stored.is_none() {
+        return Err(Invalid::new(
+            "auto_reply.min_minor",
+            "required",
+            "the automatic replies need a price range",
+        ));
+    }
+    Ok(range)
+}
+
+#[cfg(test)]
+mod auto_reply_tests {
+    use super::*;
+
+    fn input(ids: usize, min: Option<i64>, max: Option<i64>) -> AutoReplyInput {
+        AutoReplyInput {
+            capability_ids: (0..ids).map(|_| Uuid::now_v7()).collect(),
+            min_minor: min,
+            max_minor: max,
+        }
+    }
+
+    fn reason(input: &AutoReplyInput) -> &'static str {
+        validate_auto_reply(input, None).unwrap_err().reason
+    }
+
+    #[test]
+    fn the_range_is_positive_ordered_and_needed_while_on() {
+        assert_eq!(
+            validate_auto_reply(&input(1, Some(100), Some(200)), None),
+            Ok(Some((100, 200)))
+        );
+        assert_eq!(validate_auto_reply(&input(0, None, None), None), Ok(None));
+        for (min, max) in [(0, 10), (20, 10), (1, MAX_CAP_MINOR + 1)] {
+            assert_eq!(reason(&input(1, Some(min), Some(max))), "out_of_range");
+        }
+        assert_eq!(reason(&input(1, None, None)), "required");
+        assert_eq!(reason(&input(1, Some(5), None)), "required");
+        let stored = PriceRange {
+            min_minor: 1,
+            max_minor: 2,
+            currency: "TRY".into(),
+        };
+        assert_eq!(
+            validate_auto_reply(&input(1, None, None), Some(&stored)),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn a_capability_is_listed_once_and_the_list_is_bounded() {
+        let id = Uuid::now_v7();
+        let twice = AutoReplyInput {
+            capability_ids: vec![id, id],
+            min_minor: Some(1),
+            max_minor: Some(2),
+        };
+        assert_eq!(reason(&twice), "duplicate");
+        assert_eq!(
+            reason(&input(MAX_AUTO_REPLY_CAPABILITIES + 1, Some(1), Some(2))),
+            "too_many"
+        );
+    }
+
+    #[test]
+    fn settings_stored_before_the_column_read_as_off() {
+        let s = KnowledgeSettings::new(
+            WorkspaceId::new_v7(),
+            SeedSource::Empty,
+            OffsetDateTime::UNIX_EPOCH,
+        );
+        let mut v = serde_json::to_value(&s).unwrap();
+        v.as_object_mut().unwrap().remove("auto_reply");
+        let back: KnowledgeSettings = serde_json::from_value(v).unwrap();
+        assert_eq!(back.auto_reply, None);
+        let stored: AutoReply =
+            serde_json::from_value(json!({"capability_ids": [], "price": null})).unwrap();
+        assert_eq!(stored.quote_valid_days, AUTO_QUOTE_VALID_DAYS);
     }
 }

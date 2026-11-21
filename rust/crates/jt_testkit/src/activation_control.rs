@@ -255,6 +255,9 @@ impl TenantRepos for Tenant {
     fn knowledge(&mut self) -> &mut dyn jt_app::ports::knowledge::KnowledgeRepo {
         self.inner.knowledge()
     }
+    fn auto_reply(&mut self) -> &mut dyn jt_app::ports::reply_model::AutoReplyRepo {
+        self.inner.auto_reply()
+    }
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.inner.commit().await
     }
@@ -489,6 +492,12 @@ impl PlatformRepos for Platform {
         now: time::OffsetDateTime,
     ) -> Result<Vec<WorkspaceId>, AppError> {
         self.inner.workspaces_with_due_wakes(now).await
+    }
+    async fn workspaces_with_due_auto_replies(
+        &mut self,
+        now: time::OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        self.inner.workspaces_with_due_auto_replies(now).await
     }
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError> {
         self.inner.ledger_append(entry).await

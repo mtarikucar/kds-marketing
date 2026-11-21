@@ -44,8 +44,10 @@ use jt_capability::{
 use jt_knowledge::frame::{FrameCause, FrameParts};
 use jt_knowledge::seed::AD_BUDGET_NAME;
 use jt_knowledge::{
-    Cap, CapInput, Cause, KnowledgeSettings, MAX_POST_APPROVAL_ACCOUNTS, Subject, validate_cap,
-    validate_goals, validate_prohibitions,
+    AUTO_QUOTE_VALID_DAYS, AUTO_REPLY_KINDS, AutoReply, AutoReplyInput, Cap, CapInput, Card, Cause,
+    KnowledgeCardId, KnowledgeSettings, MAX_LIVE_CARDS, MAX_POST_APPROVAL_ACCOUNTS, PriceRange,
+    REPLY_STANDARD, Subject, validate_auto_reply, validate_cap, validate_goals,
+    validate_prohibitions,
 };
 use jt_strategy::Period;
 use jt_tenancy::Permission;
@@ -80,6 +82,11 @@ pub struct RulesInput {
     /// The accounts whose posts wait while the switch is off; none: unchanged.
     #[serde(default)]
     pub post_approval_accounts: Option<Vec<CapabilityId>>,
+    /// The inbox's automatic replies: the numbers they answer on and their price range; none:
+    /// unchanged. The first time any number is listed, the "Standart iş ve fiyat" card is created
+    /// for the owner to fill.
+    #[serde(default)]
+    pub auto_reply: Option<AutoReplyInput>,
 }
 
 /// `strategy.post_approval_set`'s input: one account into (`required: true`) or out of the list.
@@ -111,6 +118,8 @@ pub struct RulesOut {
     pub message_cap: Option<Cap>,
     pub post_approval: bool,
     pub post_approval_accounts: Vec<CapabilityId>,
+    /// The inbox's automatic replies as stored.
+    pub auto_reply: Option<AutoReply>,
     /// `rules_save` only: how many running ad campaigns a lowered ad budget stopped at once.
     pub stopped_campaigns: u32,
 }
@@ -129,6 +138,7 @@ impl RulesOut {
                 .copied()
                 .map(CapabilityId)
                 .collect(),
+            auto_reply: s.auto_reply.clone(),
             stopped_campaigns: 0,
         }
     }
@@ -201,11 +211,16 @@ pub async fn rules_save(deps: &Deps, ctx: &Ctx, input: RulesInput) -> Result<Rul
     if lowered {
         owner_or_manager(ctx)?;
     }
+    let auto_reply = match &input.auto_reply {
+        Some(a) => auto_reply_of(r.as_mut(), a, now.auto_reply.as_ref()).await?,
+        None => now.auto_reply.clone(),
+    };
     let unchanged = prohibitions == now.prohibitions
         && ad_cap == now.ad_cap
         && message_cap == now.message_cap
         && input.post_approval == now.post_approval
-        && accounts == now.post_approval_accounts;
+        && accounts == now.post_approval_accounts
+        && auto_reply == now.auto_reply;
     if unchanged {
         return Ok(RulesOut::of(&kb.settings));
     }
@@ -217,9 +232,16 @@ pub async fn rules_save(deps: &Deps, ctx: &Ctx, input: RulesInput) -> Result<Rul
     s.message_cap = message_cap;
     s.post_approval = input.post_approval;
     s.post_approval_accounts = accounts;
+    let turned_on = auto_reply
+        .as_ref()
+        .is_some_and(|a| !a.capability_ids.is_empty());
+    s.auto_reply = auto_reply;
     s.rules_revision += 1;
     kb.record(r.as_mut(), deps, ctx, change(Subject::Rules, person))
         .await?;
+    if turned_on {
+        standard_card(deps, ctx, r.as_mut(), &mut kb, person).await?;
+    }
     if caps_moved {
         // The mirror (design §4.6.2): the lanes from the caps, as a person's action. Nothing to
         // mirror into before the first frame (the bootstrap takes the caps from the settings).
@@ -255,6 +277,103 @@ pub async fn rules_save(deps: &Deps, ctx: &Ctx, input: RulesInput) -> Result<Rul
         }
     }
     Ok(out)
+}
+
+/// The automatic replies `input` sets over `stored`: each listed capability a live one of
+/// [`AUTO_REPLY_KINDS`] (`NOT_FOUND` otherwise), the range validated ([`validate_auto_reply`]),
+/// the stored range and validity kept where the input gives none. Its currency is the stored
+/// range's, else TRY.
+async fn auto_reply_of(
+    r: &mut dyn TenantRepos,
+    input: &AutoReplyInput,
+    stored: Option<&AutoReply>,
+) -> Result<Option<AutoReply>, AppError> {
+    let stored_price = stored.and_then(|a| a.price.as_ref());
+    let range = validate_auto_reply(input, stored_price).map_err(invalid)?;
+    for (i, id) in input.capability_ids.iter().enumerate() {
+        let ok = r
+            .capabilities()
+            .find(CapabilityId(*id))
+            .await?
+            .is_some_and(|c| {
+                c.status != StoredStatus::Retired && AUTO_REPLY_KINDS.contains(&c.kind_key.as_str())
+            });
+        if !ok {
+            return Err(refused(
+                ErrorCode::NotFound,
+                "no_such_number",
+                "a listed number is not a live WhatsApp number of the workspace",
+                json!({ "field": format!("auto_reply.capability_ids[{i}]") }),
+            ));
+        }
+    }
+    let price = match range {
+        Some((min_minor, max_minor)) => Some(PriceRange {
+            min_minor,
+            max_minor,
+            currency: stored_price.map_or_else(|| "TRY".to_owned(), |p| p.currency.clone()),
+        }),
+        None => stored_price.cloned(),
+    };
+    if input.capability_ids.is_empty() && price.is_none() && stored.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(AutoReply {
+        capability_ids: input.capability_ids.clone(),
+        price,
+        quote_valid_days: stored.map_or(AUTO_QUOTE_VALID_DAYS, |a| a.quote_valid_days),
+    }))
+}
+
+/// Creates the "Standart iş ve fiyat" card (empty, after every live card) when the workspace has
+/// no card of its key yet, live or removed, and room for one: where the owner writes the standard
+/// work and how its price is placed in the range.
+async fn standard_card(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    kb: &mut super::Locked,
+    person: jt_tenancy::UserId,
+) -> Result<(), AppError> {
+    let cards = r.knowledge().cards().await?;
+    if cards
+        .iter()
+        .any(|c| c.key.as_deref() == Some(REPLY_STANDARD.0))
+        || super::cards::live(&cards) >= MAX_LIVE_CARDS
+    {
+        return Ok(());
+    }
+    let card = Card {
+        id: KnowledgeCardId(deps.ids.uuid()),
+        key: Some(REPLY_STANDARD.0.to_owned()),
+        title: REPLY_STANDARD.1.to_owned(),
+        body: String::new(),
+        attachments: Vec::new(),
+        position: super::cards::next_position(&cards),
+        revision: 1,
+        created_at: ctx.now,
+        created_by: ctx.actor.clone(),
+        updated_at: ctx.now,
+        updated_by: ctx.actor.clone(),
+        archived_at: None,
+    };
+    r.knowledge().insert_card(&card).await?;
+    kb.record(
+        r,
+        deps,
+        ctx,
+        Change {
+            subject: Subject::Card,
+            card: Some(&card),
+            cause: Cause::Owner,
+            source_id: None,
+            person: Some(person),
+            posting: false,
+            prospecting: false,
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Whether the ad budget went down: removed, or a lower rate (per day) than before.

@@ -40,6 +40,7 @@ pub mod posts;
 pub mod production_projects;
 pub mod prospects;
 pub mod public;
+pub mod reply_model;
 pub mod studio;
 pub mod wake;
 use inbox::*;
@@ -1793,6 +1794,8 @@ pub trait TenantRepos: Send + Sync {
     fn outbound_jobs(&mut self) -> &mut dyn OutboundJobRepo;
     /// The knowledge base (`0046_knowledge_base`).
     fn knowledge(&mut self) -> &mut dyn knowledge::KnowledgeRepo;
+    /// The inbox's automatic replies: their work list and runs (`0047_inbox_auto_reply`).
+    fn auto_reply(&mut self) -> &mut dyn reply_model::AutoReplyRepo;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 
@@ -2003,6 +2006,13 @@ pub trait PlatformRepos: Send + Sync {
     /// those the `agent_wake` job has anything to send for. Lets the job skip every other
     /// workspace without opening a transaction in it.
     async fn workspaces_with_due_wakes(
+        &mut self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError>;
+    /// The workspaces, in id order, with a conversation an automatic reply may be worked on at
+    /// `now` (`reply_model::QueueRow::takeable`): those the `inbox_auto_reply` job has anything to
+    /// do for. Lets the job skip every other workspace without opening a transaction in it.
+    async fn workspaces_with_due_auto_replies(
         &mut self,
         now: OffsetDateTime,
     ) -> Result<Vec<WorkspaceId>, AppError>;

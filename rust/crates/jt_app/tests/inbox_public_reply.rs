@@ -743,6 +743,7 @@ async fn the_post_approval_switch_and_list_never_hold_a_comment_reply() {
             message_budget: cap(&s.message_cap),
             post_approval: true,
             post_approval_accounts: Some(vec![r.ig.id]),
+            auto_reply: None,
         },
     )
     .await

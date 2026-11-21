@@ -16,6 +16,7 @@ import {
   PROPOSAL_EDIT,
   PROPOSAL_NEW,
   PROPOSAL_RULE,
+  WHATSAPP_ID,
   emptyKnowledge,
   knowledge,
 } from '@/test/knowledge';
@@ -872,5 +873,64 @@ describe('KnowledgePage', () => {
     await user.click(cardButton('Biz kimiz'));
     const sheet = await screen.findByRole('dialog', { name: 'Biz kimiz' });
     expect(within(sheet).getByRole('form', { name: i18n.t('knowledge.cards.editLabel', { title: 'Biz kimiz' }) })).toBeInTheDocument();
+  });
+});
+
+describe('KnowledgePage automatic replies', () => {
+  const onRules = {
+    ...knowledge.rules,
+    auto_reply: { ...knowledge.rules.auto_reply, capability_ids: [WHATSAPP_ID], price: { min_minor: 100000, max_minor: 500000, currency: 'TRY' } },
+  };
+
+  it('shows one line in Kurallar while they are on, and what they wait for', async () => {
+    mockFetch(routes({}, { ...knowledge, rules: onRules }));
+    renderAt('/knowledge');
+    await page();
+    const rules = screen.getByRole('region', { name: k.rules.title });
+    expect(within(rules).getByText('Mesajlara otomatik yanıt: WhatsApp · ₺1.000–₺5.000.')).toBeInTheDocument();
+  });
+
+  it('says what keeps them waiting, and shows no line while they are off', async () => {
+    const waiting = { ...onRules, auto_reply: { ...onRules.auto_reply, off_reason: 'standard_missing' as const } };
+    mockFetch(routes({}, { ...knowledge, rules: waiting }));
+    renderAt('/knowledge');
+    await page();
+    expect(within(screen.getByRole('region', { name: k.rules.title })).getByText(k.rules.autoReplyWaiting)).toBeInTheDocument();
+  });
+
+  it('turns them on for a WhatsApp number with the range, in the Kurallar dialog', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': knowledge.rules }));
+    renderAt('/knowledge');
+    await page();
+    expect(within(screen.getByRole('region', { name: k.rules.title })).queryByText(/otomatik yanıt/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    const section = within(dialog).getByRole('region', { name: k.rules.dialog.autoReply });
+    await user.click(within(section).getByRole('switch', { name: 'Alfa WhatsApp' }));
+    // Both amounts are needed.
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    expect(await within(dialog).findByText(k.rules.dialog.autoReplyInvalid)).toBeInTheDocument();
+    expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(0);
+    await user.type(within(section).getByLabelText(k.rules.dialog.autoReplyMin), '1000');
+    await user.type(within(section).getByLabelText(k.rules.dialog.autoReplyMax), '5000');
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+    expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toMatchObject({
+      auto_reply: { capability_ids: [WHATSAPP_ID], min_minor: 100000, max_minor: 500000 },
+    });
+  });
+
+  it('keeps the switches off and says why when the server has no key', async () => {
+    const user = userEvent.setup();
+    const noKey = { ...knowledge.rules, auto_reply: { ...knowledge.rules.auto_reply, available: false, off_reason: 'no_key' as const } };
+    mockFetch(routes({}, { ...knowledge, rules: noKey }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    const section = within(dialog).getByRole('region', { name: k.rules.dialog.autoReply });
+    expect(within(section).getByText(k.rules.dialog.autoReplyNoKey)).toBeInTheDocument();
+    expect(within(section).getByRole('switch', { name: 'Alfa WhatsApp' })).toBeDisabled();
   });
 });

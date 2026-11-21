@@ -135,3 +135,9 @@ async fn request_keys_purge_expired() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::request_keys_purge_expired(uow).await;
 }
+
+#[tokio::test]
+async fn auto_reply_rows() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::auto_reply_rows(uow).await;
+}

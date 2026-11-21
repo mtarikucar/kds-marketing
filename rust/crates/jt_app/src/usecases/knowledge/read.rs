@@ -131,6 +131,23 @@ pub struct RulesView {
     /// The workspace has a metered capability (an SMS line, or a capability with a budget item
     /// or a spend cap): the paid-message limit applies to it.
     pub metered: bool,
+    /// The inbox's automatic replies.
+    pub auto_reply: AutoReplyView,
+}
+
+/// The inbox's automatic replies as the rules show them (`inbox::autoreply`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AutoReplyView {
+    /// The platform has a model configured: the switches can be turned on.
+    pub available: bool,
+    /// Why they are off for every conversation: `no_key` (no model on the server) or
+    /// `standard_missing` (on, but the range or the "Standart iş ve fiyat" card is missing).
+    pub off_reason: Option<&'static str>,
+    /// The capabilities they answer on.
+    pub capability_ids: Vec<CapabilityId>,
+    pub price: Option<jt_knowledge::PriceRange>,
+    /// The live capabilities they can be turned on for (WhatsApp numbers), named.
+    pub accounts: Vec<AccountRef>,
 }
 
 /// A social account the rules name.
@@ -247,7 +264,7 @@ async fn read_in(
         });
     }
     let capabilities = r.capabilities().list(CapabilityFilter::default()).await?;
-    let rules = rules_view(deps, ctx, &settings, &capabilities);
+    let rules = rules_view(deps, ctx, &settings, &capabilities, &all_cards);
     let mut shown: Vec<&Note> = notes.iter().filter(|n| n.is_open()).collect();
     shown.extend(notes.iter().filter(|n| !n.is_open()).take(CLOSED_NOTES));
     shown.sort_by_key(|n| std::cmp::Reverse((n.created_at, n.id)));
@@ -372,7 +389,31 @@ fn rules_view(
     ctx: &Ctx,
     s: &KnowledgeSettings,
     capabilities: &[Capability],
+    cards: &[Card],
 ) -> RulesView {
+    let model_on = deps.connectors.reply_model().is_some();
+    let auto_reply = AutoReplyView {
+        available: model_on,
+        off_reason: crate::usecases::inbox::autoreply::off_reason(model_on, s, cards),
+        capability_ids: s
+            .auto_reply
+            .iter()
+            .flat_map(|a| a.capability_ids.iter().copied().map(CapabilityId))
+            .collect(),
+        price: s.auto_reply.as_ref().and_then(|a| a.price.clone()),
+        accounts: capabilities
+            .iter()
+            .filter(|c| {
+                c.status != jt_capability::StoredStatus::Retired
+                    && jt_knowledge::AUTO_REPLY_KINDS.contains(&c.kind_key.as_str())
+            })
+            .map(|c| AccountRef {
+                capability_id: c.id,
+                name: c.name.clone(),
+                kind: c.kind_key.clone(),
+            })
+            .collect(),
+    };
     let post_approval_accounts = s
         .post_approval_accounts
         .iter()
@@ -398,6 +439,7 @@ fn rules_view(
         metered: capabilities
             .iter()
             .any(|c| c.status != jt_capability::StoredStatus::Retired && is_metered(c)),
+        auto_reply,
     }
 }
 
@@ -534,6 +576,56 @@ impl Live {
             .take(BRIEF_NOTES)
             .map(|n| cut(&n.text, BRIEF_TEXT_CHARS))
             .collect()
+    }
+
+    /// The workspace's name.
+    pub(crate) fn workspace_name(&self) -> &str {
+        &self.workspace_name
+    }
+
+    /// The live cards with text as the automatic replies read them (`inbox::autoreply`), by
+    /// position, `(title, text)`: the standard card and "Ürünler ve fiyat" whole, every other cut
+    /// at [`BRIEF_TEXT_CHARS`].
+    pub(crate) fn reply_cards(&self) -> Vec<(String, String)> {
+        let mut live: Vec<&Card> = self
+            .cards
+            .iter()
+            .filter(|c| c.is_live() && c.has_text())
+            .collect();
+        live.sort_by_key(|c| (c.position, c.created_at, c.id));
+        live.into_iter()
+            .map(|c| {
+                let whole = matches!(
+                    c.key.as_deref(),
+                    Some(k) if k == jt_knowledge::REPLY_STANDARD.0 || k == "products_prices"
+                );
+                let body = if whole {
+                    c.body.trim().to_owned()
+                } else {
+                    cut(c.body.trim(), BRIEF_TEXT_CHARS)
+                };
+                (c.title.clone(), body)
+            })
+            .collect()
+    }
+
+    /// Every live card's title, text and links, as one text: what a link in an automatic reply
+    /// must come from.
+    pub(crate) fn card_texts(&self) -> String {
+        let mut out = String::new();
+        for c in self.cards.iter().filter(|c| c.is_live()) {
+            out.push_str(&c.title);
+            out.push('\n');
+            out.push_str(&c.body);
+            out.push('\n');
+            for a in &c.attachments {
+                if let Attachment::Link { url, .. } = a {
+                    out.push_str(url);
+                    out.push('\n');
+                }
+            }
+        }
+        out
     }
 
     /// The closing topics: offered no new work (§4.10.6).
