@@ -1048,7 +1048,8 @@
       "device": "Devices",
       "agent_connection": "Agent connections",
       "computer_access": "Computer access",
-      "third_party": "Third-party tools"
+      "third_party": "Third-party tools",
+      "commerce": "Shop"
     },
     "kinds": {
       "instagram": "Instagram",
@@ -1102,7 +1103,8 @@
       "gmail": "Gmail",
       "apify": "Apify",
       "firecrawl": "Firecrawl",
-      "other": "Another tool"
+      "other": "Another tool",
+      "shop_mcp": "Shop (MCP)"
     },
     "reach": {
       "label": "Reached through",
@@ -4480,6 +4482,7 @@
       "autoReplyOn": "Automatic replies to messages: {{channels}} · {{min}}–{{max}}.",
       "autoReplyWaiting": "Automatic replies to messages start once the “Standart iş ve fiyat” card is filled in.",
       "notifyOn": "Email notices: {{from}}",
+      "orderOn": "Orders: payment link through {{host}}",
       "autoReplyNoKey": "Automatic replies to messages are off: the server has no Claude key.",
       "dialog": {
         "help": "The system enforces the budget, the message limit and approval; the agents read the prohibitions in every job and follow them.",

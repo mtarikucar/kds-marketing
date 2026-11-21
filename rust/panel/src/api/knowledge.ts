@@ -123,6 +123,17 @@ export interface AutoReplyView {
   accounts: ApprovalAccount[];
   /** The owner's email notices of a hand-over or an order. */
   notify: NotifyView;
+  /** The order and its payment link, through the workspace's own shop. */
+  order: OrderView;
+}
+
+/** `read::OrderView`: the automatic replies' orders through the workspace's shop. */
+export interface OrderView {
+  /** A verified shop with an enabled order template. */
+  available: boolean;
+  /** The shop's host, while it is available. */
+  host: string | null;
+  off_reason: 'no_shop' | 'not_verified' | 'no_template' | null;
 }
 
 /** `read::NotifyView`: the owner's email notices. */

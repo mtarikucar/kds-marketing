@@ -554,6 +554,7 @@ export const KIND_GROUPS = [
   'agent_connection',
   'computer_access',
   'third_party',
+  'commerce',
 ] as const;
 export type KindGroup = (typeof KIND_GROUPS)[number];
 
@@ -611,6 +612,7 @@ export const KINDS = [
   { group: 'third_party', key: 'apify' },
   { group: 'third_party', key: 'firecrawl' },
   { group: 'third_party', key: 'other' },
+  { group: 'commerce', key: 'shop_mcp' },
 ] as const satisfies readonly { group: KindGroup; key: string }[];
 export type CapabilityKind = (typeof KINDS)[number];
 export type KindKey = CapabilityKind['key'];
