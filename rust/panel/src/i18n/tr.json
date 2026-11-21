@@ -210,7 +210,7 @@
     "change": "Değişim",
     "trend": "{{metric}} eğilimi",
     "totals": "Dönem toplamı",
-    "finishTiktok": "TikTok paylaşımını tamamla",
+    "finishTiktok": "TikTok paylaşımını onayla",
     "approved": "Onaylandı. Saatinde yayınlanacak.",
     "approvalHelp": "Bu hesabın bağlantısında “her eylem insan onayı bekler” ayarı açık. Onaylarsan paylaşım saatinde yayınlanır; ayarı Bağlantılar’dan kapatabilirsin.",
     "noUpcoming": "Planlanmış paylaşım yok.",
@@ -2203,15 +2203,13 @@
       "declarationBranded": "Paylaşarak TikTok'un <branded>Markalı İçerik Politikası</branded>'nı ve <music>Müzik Kullanım Onayı</music>'nı kabul etmiş olursunuz.",
       "post": "TikTok'ta paylaş",
       "posting": "Paylaşılıyor…",
-      "processing": "Yayınlandıktan sonra paylaşımın işlenip TikTok profilinde görünmesi birkaç dakika sürebilir.",
-      "approved": "Bu ekrandan paylaşıldı: {{time}} saatinde, o saat geçtiyse hemen TikTok'a gönderilir.",
+      "approved": "Onaylandı: {{time}} olunca TikTok'ta kendiliğinden paylaşılır. Senden başka bir şey gerekmiyor.",
       "status": {
-        "waiting": "Paylaşım durumu: planlanan saati bekliyor",
-        "due": "Paylaşım durumu: planlanan saat geçti; TikTok'a gönderiliyor…",
-        "sending": "Paylaşım durumu: TikTok'a gönderiliyor…",
-        "processing": "Paylaşım durumu: TikTok paylaşımı işliyor…",
-        "published": "Paylaşım durumu: TikTok'ta yayınlandı",
-        "failed": "Paylaşım durumu: yayınlanamadı ({{reason}})"
+        "due": "Onaylandı. Saati geçtiği için şimdi TikTok'a gönderiliyor…",
+        "sending": "TikTok'a gönderiliyor…",
+        "processing": "TikTok paylaşımı işliyor; profilde görünmesi birkaç dakika sürebilir.",
+        "published": "TikTok'ta yayınlandı",
+        "failed": "Yayınlanamadı ({{reason}})"
       },
       "viewPost": "Paylaşımı TikTok'ta gör",
       "refused": {
@@ -2255,13 +2253,12 @@
       "draftHelp": "TikTok, TikTok gelen kutunuza bir bildirim gönderir: düzenlemeyi bitirip paylaşmak için onu açın. Paylaşımı kimlerin görebileceği, yorum, Düet, Birleştirme ve ticari içerik bildirimi orada seçilir.",
       "draftNoCaption": "Video taslağı açıklama almaz: açıklamayı paylaşımı tamamlarken TikTok'ta yazarsınız.",
       "sendDraft": "TikTok taslaklarına gönder",
-      "draftSent": "Gönderildi: TikTok işledikten sonra TikTok gelen kutunuzdaki bir bildirimle düzenlemeyi bitirip paylaşabilirsiniz.",
-      "approvedDraft": "Bu ekrandan onaylandı: {{time}} saatinde, o saat geçtiyse hemen TikTok taslaklarınıza gönderilir.",
+      "approvedDraft": "Onaylandı: {{time}} olunca TikTok'taki taslaklarına kendiliğinden gönderilir. Sonra TikTok'un bildirimini açıp orada paylaşırsın.",
       "draftStatus": {
-        "due": "Paylaşım durumu: planlanan saat geçti; TikTok taslaklarınıza gönderiliyor…",
-        "sending": "Paylaşım durumu: TikTok taslaklarınıza gönderiliyor…",
-        "processing": "Paylaşım durumu: TikTok taslağı işliyor…",
-        "sent": "Paylaşım durumu: TikTok taslaklarınıza gönderildi"
+        "due": "Onaylandı. Saati geçtiği için şimdi TikTok'taki taslaklarına gönderiliyor…",
+        "sending": "TikTok'taki taslaklarına gönderiliyor…",
+        "processing": "TikTok taslağı işliyor; bitince TikTok'un bildirimiyle paylaşırsın.",
+        "sent": "TikTok'taki taslaklarına gönderildi; paylaşmak için TikTok'un bildirimini aç."
       },
       "sentToDrafts": "TikTok taslaklarınıza gönderildi: düzenlemeyi bitirip paylaşmak için TikTok gelen kutunuzdaki bildirimi açın. Taslağın sayacı olmaz.",
       "noCover": "Önizleme yok"
@@ -4374,7 +4371,7 @@
     "media_missing_video": "{{platform}} yalnızca video alır; bu içerikte video yok.",
     "media_missing": "Bu içerikte {{platform}} için uygun dosya yok ({{format}}).",
     "only_format_video": "{{platform}} yalnızca video alır.",
-    "posting_screen": "Her {{platform}} paylaşımını yayından önce {{platform}} ekranında sen tamamlarsın.",
+    "posting_screen": "Her {{platform}} paylaşımını yayından önce {{platform}} ekranında sen onaylarsın.",
     "approval": "Her paylaşım yayından önce onayını bekler.",
     "lead": "{{format}} en erken {{hours}} saat sonrasına planlanır.",
     "act": {
@@ -4475,7 +4472,7 @@
       "approvalAll": "Her paylaşım yayından önce onayına gelir.",
       "approvalNone": "Paylaşımlar onay beklemeden zamanında çıkar.",
       "approvalExcept": "Paylaşımlar onay beklemeden çıkar; {{accounts}} hariç.",
-      "tiktok": "TikTok'u sen tamamlarsın.",
+      "tiktok": "TikTok'ta her paylaşımı sen onaylarsın.",
       "stopped": "{{n}} reklam kampanyası yeni sınıra ulaştığı için durdu.",
       "autoReplyOn": "Mesajlara otomatik yanıt: {{channels}} · {{min}}–{{max}}.",
       "autoReplyWaiting": "Mesajlara otomatik yanıt, “Standart iş ve fiyat” kartı dolunca başlar.",
@@ -4650,7 +4647,7 @@
       },
       "advice": {
         "approval": "Onayına gelir",
-        "posting_screen": "TikTok'u sen tamamlarsın",
+        "posting_screen": "TikTok'ta her paylaşımı sen onaylarsın",
         "video_only": "Hesapların yalnızca video alıyor; video eklemezsen ajan görselden video yapar"
       }
     },
@@ -4661,7 +4658,7 @@
       "connectAgent": "Ajan bağla",
       "addAddress": "Çağrı adresi ekle",
       "approve": "Onayla",
-      "tiktok": "TikTok'ta tamamla",
+      "tiktok": "TikTok ekranında onayla",
       "redo": "Düzenleme iste",
       "retry": "Tekrar hazırlat",
       "cancel": "İptal",
@@ -4772,8 +4769,9 @@
         "sentence": "Yayından önce onayını bekliyor."
       },
       "posting_screen": {
-        "status": "TikTok'ta tamamlanacak",
-        "sentence": "TikTok'un paylaşım ekranını sen tamamlarsın."
+        "status": "TikTok onayını bekliyor",
+        "sentence": "Bu paylaşımı TikTok ekranında onaylaman gerekiyor. Onaylarsan kendiliğinden paylaşılır: {{at}}.",
+        "sentenceNow": "Bu paylaşımı TikTok ekranında onaylaman gerekiyor. Saati geçti; onaylarsan hemen paylaşılır."
       },
       "capture": {
         "status": "Fotoğraf bekliyor",
@@ -4942,7 +4940,7 @@
       "switch": "Paylaşım açık",
       "approval": "Bu hesaptaki paylaşımlar onayıma gelsin",
       "rulesAll": "Her paylaşım onayına gelir (Kurallar)",
-      "tiktok": "Her paylaşım TikTok ekranını bekler",
+      "tiktok": "Her paylaşımı TikTok ekranında sen onaylarsın",
       "replies": "Yorum yanıtları onayına gelir",
       "change": "Değiştir",
       "numbers": "Sayılar",

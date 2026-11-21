@@ -309,7 +309,7 @@ function useRowActs({ row, onAccounts, onTiktok, onGone }: ActionContext) {
       break;
   }
 
-  // Then Onayla or TikTok'ta tamamla when not the primary, Düzenleme iste, İptal (§2.7 item 3).
+  // Then Onayla or TikTok ekranında onayla when not the primary, Düzenleme iste, İptal (§2.7 item 3).
   const row2: Act[] = [];
   if (primary) row2.push(primary);
   if (a.approve && primary?.key !== 'approve') row2.push(btn('approve', t('postsPage.actions.approve'), () => approve.mutate(undefined), { loading: approve.isPending }));

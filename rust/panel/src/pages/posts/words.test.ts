@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import i18n from '@/i18n/config';
 import { legacyTarget, placeSearch, readPlace, selectedRowId, withRow } from './location';
-import { foundWords, formatWords, statusLine, subLine, whenWords } from './words';
+import { foundWords, formatWords, statusLine, subLine, waitSentence, whenWords } from './words';
 import { postRow, wait } from '@/test/postsPage';
 import { unconnectedPlatforms } from './Composer';
 
@@ -27,9 +27,20 @@ describe('the page’s words', () => {
 
   it('names what was found, and leads the panel with the first wait', () => {
     expect(foundWords(t, ['face', 'company', 'unknown'])).toBe('yüz, kurum adı');
-    expect(statusLine(t, postRow('slot:a', { status: 'waiting_you', waits: [wait('posting_screen')] }), 'tr')).toBe("TikTok'ta tamamlanacak");
+    expect(statusLine(t, postRow('slot:a', { status: 'waiting_you', waits: [wait('posting_screen')] }), 'tr')).toBe('TikTok onayını bekliyor');
     expect(statusLine(t, postRow('content:a', { status: 'preparing', sub_state: { kind: 'claimed', stage: 'gorsel' } }), 'tr')).toBe('Ajan üzerinde çalışıyor · Görsel');
     expect(statusLine(t, postRow('slot:a', { status: 'scheduled' }), 'tr')).toBe('Planlandı');
+  });
+
+  it('asks for the TikTok approval and says when the post then goes out by itself', () => {
+    const now = new Date(2026, 10, 20, 10, 0);
+    const screen = wait('posting_screen');
+    expect(waitSentence(t, screen, null, new Date(2026, 10, 24, 19, 0).toISOString(), 'tr', now))
+      .toBe('Bu paylaşımı TikTok ekranında onaylaman gerekiyor. Onaylarsan kendiliğinden paylaşılır: Sal 24 Kas 19:00.');
+    // Its time passed (inside its grace): approving sends it right away.
+    expect(waitSentence(t, screen, null, new Date(2026, 10, 20, 9, 0).toISOString(), 'tr', now))
+      .toBe('Bu paylaşımı TikTok ekranında onaylaman gerekiyor. Saati geçti; onaylarsan hemen paylaşılır.');
+    expect(t('postsPage.actions.tiktok')).toBe('TikTok ekranında onayla');
   });
 
   it('finds a platform named in the text that no account takes', () => {

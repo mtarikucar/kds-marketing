@@ -147,11 +147,18 @@ export const failNeedsRedo = (wait: Wait) => wait.facts.reason === 'validation' 
 /** The status line of a wait in the panel (§2.6 "Status line"). */
 export const waitStatus = (t: TFunction, code: WaitCode) => t(`postsPage.waits.${code}.status`);
 
-/** The wait's sentence (§2.6), filled from its facts. */
-export function waitSentence(t: TFunction, wait: Wait, channel: ChannelRef | null): string {
+/**
+ * The wait's sentence (§2.6), filled from its facts; `at` is the post's planned time, which the
+ * TikTok approval names: once approved it goes out by itself then, or right away when it passed.
+ */
+export function waitSentence(t: TFunction, wait: Wait, channel: ChannelRef | null, at?: string | null, language = 'tr', now = new Date()): string {
   const f = wait.facts ?? {};
   const platform = platformName(f.kind ?? channel?.kind);
   switch (wait.code) {
+    case 'posting_screen':
+      return at && new Date(at).getTime() > now.getTime()
+        ? t('postsPage.waits.posting_screen.sentence', { at: whenWords(t, at, language, now) })
+        : t('postsPage.waits.posting_screen.sentenceNow');
     case 'capture':
     case 'need_photo':
       return t(`postsPage.waits.${wait.code}.sentence`, { request: f.request ?? '' });

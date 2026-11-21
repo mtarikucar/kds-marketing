@@ -77,7 +77,7 @@ describe('KnowledgePage', () => {
     expect(within(rules).queryByText('Başka atölyelerin adı anılmaz.')).not.toBeInTheDocument();
     expect(within(rules).getByText('Reklama ayda en çok ₺5.000.')).toBeInTheDocument();
     expect(within(rules).getByText('Ücretli mesajlara ayda en çok ₺0.')).toBeInTheDocument();
-    expect(within(rules).getByText("Paylaşımlar onay beklemeden çıkar; Alfa Instagram hariç. TikTok'u sen tamamlarsın.")).toBeInTheDocument();
+    expect(within(rules).getByText("Paylaşımlar onay beklemeden çıkar; Alfa Instagram hariç. TikTok'ta her paylaşımı sen onaylarsın.")).toBeInTheDocument();
     await user.click(within(rules).getByRole('button', { name: i18n.t('knowledge.rules.more', { n: 1 }) }));
     expect(within(rules).getByText('Başka atölyelerin adı anılmaz.')).toBeInTheDocument();
 
