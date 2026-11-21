@@ -39,10 +39,16 @@
 //! model's line to the customer, when it passes the same rules, goes out as the system's. The
 //! conversation then shows as owed in the owner's home list and the inbox queue.
 //!
+//! **The order.** With a shop to order from and a quote on the journey, the model may also create
+//! the order for the quoted price; the server checks it, asks the workspace's shop and sends the
+//! payment link (`orders`, migration `0050_auto_reply_orders`). Without a shop nothing of it is
+//! offered and the request is as it was.
+//!
 //! **What is kept.** One run row per model call (codes and numbers, the model's cost in
-//! millionths of a dollar) and ledger entries `inbox.autoreply.{replied, quoted, refused,
-//! handed_over, skipped, failed}` with codes and numbers only. No log line or ledger payload holds
-//! a customer's text, the model's answer, a quote's basis or a hand-over's summary.
+//! millionths of a dollar) and ledger entries `inbox.autoreply.{replied, quoted, ordered,
+//! refused, handed_over, skipped, failed}` with codes and numbers only. No log line or ledger
+//! payload holds a customer's text, the model's answer, a quote's basis, a hand-over's summary or
+//! an order's details.
 
 use std::sync::Arc;
 
@@ -70,6 +76,9 @@ use crate::usecases::Deps;
 use crate::usecases::connector::{adapter_public, open_credential};
 use crate::usecases::jobs::JobReport;
 use crate::usecases::knowledge::read::Live;
+
+mod orders;
+pub(crate) use orders::shop_in;
 
 /// The component the automatic replies act as.
 pub const COMPONENT: &str = "inbox_autoreply";
@@ -485,7 +494,7 @@ fn rotated(mut workspaces: Vec<WorkspaceId>, last: Option<WorkspaceId>) -> Vec<W
 }
 
 /// The `inbox_auto_reply` job's body: first, at most every [`RECONCILE_EVERY`], the sweep for
-/// customer messages left without a schedule ([`reconcile`]); then the takeable queue rows of
+/// customer messages left without a schedule and for interrupted orders ([`reconcile`]); then the takeable queue rows of
 /// every workspace holding one, starting after the workspace served last, at most
 /// [`AUTOREPLY_BATCH`] rows and [`AUTOREPLY_WORKSPACE_SHARE`] per workspace and
 /// [`AUTOREPLY_TICK_BUDGET`] in all. `touched` counts the rows worked, `changed` those answered or
@@ -631,6 +640,10 @@ pub async fn reconcile(deps: &Deps, now: OffsetDateTime, deadline: std::time::In
                 }
             }
             Err(e) => warn(Some(ws), e.code.as_str()),
+        }
+        // An order left asking the shop (a crash in between) goes to a person.
+        if deps.connectors.shop().is_some() {
+            orders::interrupted(deps, ws, now).await;
         }
     }
 }
@@ -849,6 +862,12 @@ async fn judge(
             }),
         ) if rules::check_reply(line, &s.cards, year).is_ok() => {
             (line.as_str(), no_price.to_owned())
+        }
+        (ModelStop::ToolUse, Some(ModelTool::CreateOrder { text, .. }))
+            if !text.trim().is_empty()
+                && rules::check_reply(text.trim(), &s.cards, year).is_ok() =>
+        {
+            (text.trim(), orders::ORDER_FACTS.to_owned())
         }
         _ => return Ok(Verdict::None),
     };
@@ -1216,12 +1235,24 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         conversation: c,
         human_priced,
     };
+    // The order tool, only with a shop to order from and a quote on the journey: otherwise the
+    // request is exactly what it was before orders existed.
+    let order = orders::offer(deps, r.as_mut(), &snapshot.conversation, now).await?;
+    let mut system_fixed = SYSTEM_FIXED.to_owned();
+    let mut system_workspace = workspace_part(&live, frame.as_ref(), &price, human_priced);
+    if let Some(offer) = &order {
+        system_fixed.push_str(orders::ORDER_FIXED);
+        if let Some(reference) = &offer.done {
+            system_workspace.push_str(&orders::done_part(reference));
+        }
+    }
     let request = ModelRequest {
-        system_fixed: SYSTEM_FIXED.to_owned(),
-        system_workspace: workspace_part(&live, frame.as_ref(), &price, human_priced),
+        system_fixed,
+        system_workspace,
         system_note: None,
         history,
         max_tokens: MAX_OUTPUT_TOKENS,
+        order,
     };
     r.commit().await?;
     Ok(Prepared::Ready(
@@ -1607,6 +1638,10 @@ async fn settle(
         _ => {}
     }
     r.commit().await?;
+    if let Some(pending) = decided.order {
+        // The order row and the run commit first; the shop is asked with no lock held.
+        return orders::call(deps, ctx, s, run, *pending).await;
+    }
     if let Some(outbox) = decided.outbox_id {
         // The row's own fences and receipt settle it; a failure here is the outbox's to recover.
         if let Err(e) = replies::send_step(deps, ctx, outbox).await {
@@ -1614,7 +1649,7 @@ async fn settle(
         }
     }
     Ok(match decided.outcome {
-        RunOutcome::Replied | RunOutcome::Quoted => Worked::Answered,
+        RunOutcome::Replied | RunOutcome::Quoted | RunOutcome::Ordered => Worked::Answered,
         RunOutcome::HandedOver => Worked::HandedOver,
         _ => Worked::Skipped,
     })
@@ -1646,6 +1681,8 @@ struct Decided {
     outbox_id: Option<Uuid>,
     quote_id: Option<Uuid>,
     amount_minor: Option<i64>,
+    /// An order to ask the shop for once the transaction commits.
+    order: Option<Box<orders::Pending>>,
 }
 
 impl Decided {
@@ -1656,6 +1693,7 @@ impl Decided {
             outbox_id: line,
             quote_id: None,
             amount_minor: None,
+            order: None,
         }
     }
 }
@@ -1805,6 +1843,9 @@ async fn decide(
             }
             Ok(Decided::handed_over(reason, line))
         }
+        ModelTool::CreateOrder { fields, text } => {
+            orders::decide(deps, ctx, r, s, c, run_id, fields, text, verdict).await
+        }
     }
 }
 
@@ -1903,6 +1944,7 @@ async fn queue(
             outbox_id: Some(outbox),
             quote_id: None,
             amount_minor: None,
+            order: None,
         }),
         Err(reason) => {
             let line = hand_over(

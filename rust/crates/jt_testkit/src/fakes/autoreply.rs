@@ -1,14 +1,18 @@
 //! The in-memory automatic replies (`0047_inbox_auto_reply`): one queue row per conversation of
 //! the workspace (a conversation of another workspace, or none, spoils the bundle as the foreign
-//! key does), and the runs, with the outcomes the table's check allows.
+//! key does), and the runs, with the outcomes the table's check allows; and the orders
+//! (`0050_auto_reply_orders`), unique per quote and per journey.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
-use jt_app::ports::reply_model::{AutoReplyRepo, QueueRow, RunOutcome, RunRow};
+use jt_app::ports::reply_model::{
+    AutoReplyRepo, OrderRow, OrderState, QueueRow, RunOutcome, RunRow,
+};
 use jt_capability::CapabilityId;
-use jt_inbox::ConversationId;
+use jt_inbox::{ConversationId, JourneyId};
 use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
+use uuid::Uuid;
 
 use super::state::MemBundle;
 use super::tenant::MemTenant;
@@ -18,11 +22,21 @@ use super::tenant::MemTenant;
 pub struct MemAutoReply {
     pub queue: Vec<(WorkspaceId, QueueRow)>,
     pub runs: Vec<(WorkspaceId, RunRow)>,
+    pub orders: Vec<(WorkspaceId, OrderRow)>,
 }
 
-/// Whether a run queued an automatic message (a reply or a quote).
+/// Whether a run queued an automatic message (a reply, a quote or an order's link).
 fn sent(run: &RunRow) -> bool {
-    matches!(run.outcome, RunOutcome::Replied | RunOutcome::Quoted)
+    matches!(
+        run.outcome,
+        RunOutcome::Replied | RunOutcome::Quoted | RunOutcome::Ordered
+    )
+}
+
+fn order_of(rows: &[(WorkspaceId, OrderRow)], ws: WorkspaceId, id: Uuid) -> Option<OrderRow> {
+    rows.iter()
+        .find(|(w, o)| *w == ws && o.id == id)
+        .map(|(_, o)| o.clone())
 }
 
 #[async_trait]
@@ -246,5 +260,156 @@ impl AutoReplyRepo for MemTenant {
             .filter(|(w, r)| *w == ws && r.at >= since)
             .map(|(_, r)| r.usage.cost_micro_usd)
             .sum())
+    }
+
+    async fn runs_with_reason(
+        &mut self,
+        conversation: ConversationId,
+        reason: &str,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .auto_reply
+            .runs
+            .iter()
+            .filter(|(w, r)| {
+                *w == ws
+                    && r.conversation_id == conversation
+                    && r.at >= since
+                    && r.reason.as_deref() == Some(reason)
+            })
+            .count() as u32)
+    }
+
+    async fn order_insert(&mut self, row: &OrderRow) -> Result<bool, AppError> {
+        let row = row.clone();
+        let ws = self.ws;
+        self.call(|this| {
+            if this.state().auto_reply.orders.iter().any(|(w, o)| {
+                *w == ws
+                    && (o.id == row.id
+                        || o.quote_id == row.quote_id
+                        || o.journey_id == row.journey_id)
+            }) {
+                return Ok(false);
+            }
+            this.tx
+                .write(move |s| s.auto_reply.orders.push((ws, row.clone())));
+            Ok(true)
+        })
+    }
+
+    async fn order_by_journey(&mut self, journey: JourneyId) -> Result<Option<OrderRow>, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .auto_reply
+            .orders
+            .iter()
+            .find(|(w, o)| *w == ws && o.journey_id == journey)
+            .map(|(_, o)| o.clone()))
+    }
+
+    async fn order_get(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError> {
+        Ok(order_of(&self.state().auto_reply.orders, self.ws, id))
+    }
+
+    async fn order_lock(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError> {
+        self.tx.journal_lock("auto_reply_orders");
+        self.tx.lock_studio().await;
+        Ok(order_of(&self.state().auto_reply.orders, self.ws, id))
+    }
+
+    async fn order_save(&mut self, row: &OrderRow) -> Result<(), AppError> {
+        let row = row.clone();
+        self.call(|this| {
+            let ws = this.ws;
+            if order_of(&this.state().auto_reply.orders, ws, row.id).is_none() {
+                return Err(AppError::not_found("no such automatic reply order"));
+            }
+            this.tx.write(move |s| {
+                for (w, o) in &mut s.auto_reply.orders {
+                    if *w == ws && o.id == row.id {
+                        o.state = row.state;
+                        o.reason = row.reason.clone();
+                        o.reference = row.reference.clone();
+                        o.pay_url = row.pay_url.clone();
+                        o.finished_at = row.finished_at;
+                        o.run_id = row.run_id;
+                        o.confirm_hash = row.confirm_hash.clone();
+                        o.summary_outbox_id = row.summary_outbox_id;
+                        o.summaries = row.summaries;
+                        o.called_at = row.called_at;
+                        o.generation = row.generation;
+                    }
+                }
+            });
+            Ok(())
+        })
+    }
+
+    async fn orders_since(
+        &mut self,
+        shop: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .state()
+            .auto_reply
+            .orders
+            .iter()
+            .filter(|(w, o)| {
+                *w == ws
+                    && o.shop_capability_id == shop
+                    && o.state != OrderState::Confirming
+                    && o.called_at.unwrap_or(o.created_at) >= since
+            })
+            .count() as u32)
+    }
+
+    async fn orders_calling_before(
+        &mut self,
+        before: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<Uuid>, AppError> {
+        let ws = self.ws;
+        let mut rows: Vec<&OrderRow> = self
+            .state()
+            .auto_reply
+            .orders
+            .iter()
+            .filter(|(w, o)| {
+                *w == ws
+                    && o.state == OrderState::Calling
+                    && o.called_at.unwrap_or(o.created_at) < before
+            })
+            .map(|(_, o)| o)
+            .collect();
+        rows.sort_by_key(|o| (o.called_at.unwrap_or(o.created_at), o.id));
+        Ok(rows
+            .into_iter()
+            .take(limit as usize)
+            .map(|o| o.id)
+            .collect())
+    }
+
+    async fn orders_forget_links(
+        &mut self,
+        conversations: &[ConversationId],
+    ) -> Result<(), AppError> {
+        let ws = self.ws;
+        let conversations = conversations.to_vec();
+        self.tx.write(move |s| {
+            for (w, o) in &mut s.auto_reply.orders {
+                if *w == ws && conversations.contains(&o.conversation_id) {
+                    o.pay_url = None;
+                    o.confirm_hash = None;
+                }
+            }
+        });
+        Ok(())
     }
 }

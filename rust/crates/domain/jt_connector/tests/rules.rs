@@ -58,6 +58,7 @@ const EXPECTED_PROVIDERS: &[(&str, Provider)] = &[
     ("linkedin_page", Provider::Linkedin),
     ("linkedin_ads", Provider::Linkedin),
     ("google_ads", Provider::Google),
+    ("shop_mcp", Provider::Mcp),
 ];
 
 #[test]
@@ -104,7 +105,7 @@ fn provider_for_every_connector_kind() {
     assert_eq!(
         keys,
         [
-            "meta", "netgsm", "x", "mail", "tiktok", "linkedin", "google"
+            "meta", "netgsm", "x", "mail", "tiktok", "linkedin", "google", "mcp"
         ]
     );
     for p in Provider::all() {
@@ -830,6 +831,13 @@ fn every_credential() -> Vec<(Credential, Vec<&'static str>, Vec<&'static str>)>
             vec!["iys-pass-SECRET"],
             vec!["8503001144", "654321"],
         ),
+        (
+            Credential::Bearer {
+                token: "shop-bearer-SECRET".to_owned(),
+            },
+            vec!["shop-bearer-SECRET"],
+            vec![],
+        ),
     ]
 }
 
@@ -845,7 +853,8 @@ fn credential_debug_is_masked() {
             "whatsapp_cloud",
             "netgsm_sms",
             "netgsm_pbx",
-            "netgsm_iys"
+            "netgsm_iys",
+            "bearer"
         ]),
         "one credential of each variant"
     );

@@ -12,7 +12,13 @@
 //! **What is stored.** The debounced work list ([`QueueRow`], one per conversation waiting for a
 //! reply) and one [`RunRow`] per model call: codes and numbers only, never a customer's text, the
 //! model's answer, a quote's basis or a hand-over's summary. The day's limits are counted from the
-//! runs.
+//! runs. An order the replies create in the workspace's shop (`0050_auto_reply_orders`) is one
+//! [`OrderRow`]: its state, the amount, the shop's reference and the payment link; never the
+//! customer's name, email, phone or address.
+//!
+//! **The order tool.** Only when [`ModelRequest::order`] is given (a verified shop with its order
+//! template, a quote on the journey) is the model offered a fourth tool, `create_order`
+//! ([`ModelTool::CreateOrder`]); otherwise the request is exactly the three tools'.
 
 use async_trait::async_trait;
 use jt_capability::CapabilityId;
@@ -23,6 +29,8 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// The order's details and payment methods, as the model's tool names them.
+pub use jt_inbox::order::{OrderFields, PAYMENT_METHODS};
 /// How long after a customer's last message the business may still answer it (WhatsApp's
 /// customer service window).
 pub const REPLY_WINDOW: Duration = Duration::hours(24);
@@ -177,10 +185,22 @@ pub struct ModelRequest {
     pub system_note: Option<String>,
     pub history: Vec<Turn>,
     pub max_tokens: u32,
+    /// The order tool, offered only when given (see the module docs).
+    pub order: Option<OrderOffer>,
+}
+
+/// What the order tool is offered with: the quote it orders, and the order already created for
+/// it, if any (its shop reference).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrderOffer {
+    pub amount_minor: i64,
+    pub currency: String,
+    pub valid_until: OffsetDateTime,
+    pub done: Option<String>,
 }
 
 /// The model's one tool call.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ModelTool {
     /// A message to the customer.
     Reply { text: String },
@@ -198,6 +218,44 @@ pub enum ModelTool {
         summary: String,
         text: Option<String>,
     },
+    /// The customer accepted the quote and gave what the order needs: the details and a short
+    /// line to send with the payment link (empty for none). The first call shows the customer a
+    /// summary to confirm; the same details again after an explicit yes create the order. Never
+    /// stored or logged: `Debug` masks the details.
+    CreateOrder {
+        fields: Box<OrderFields>,
+        text: String,
+    },
+}
+
+impl std::fmt::Debug for ModelTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModelTool::Reply { text } => f.debug_struct("Reply").field("text", text).finish(),
+            ModelTool::Quote {
+                amount,
+                basis,
+                text,
+            } => f
+                .debug_struct("Quote")
+                .field("amount", amount)
+                .field("basis", basis)
+                .field("text", text)
+                .finish(),
+            ModelTool::HandOver {
+                reason,
+                summary,
+                text,
+            } => f
+                .debug_struct("HandOver")
+                .field("reason", reason)
+                .field("summary", summary)
+                .field("text", text)
+                .finish(),
+            // A customer's details: never printed.
+            ModelTool::CreateOrder { .. } => f.write_str("CreateOrder(***)"),
+        }
+    }
 }
 
 /// The model's hand-over reasons, as its tool lists them.
@@ -356,6 +414,8 @@ pub enum RunOutcome {
     HandedOver,
     Skipped,
     Failed,
+    /// An order was asked of the shop (or its link sent again): `0050_auto_reply_orders`.
+    Ordered,
 }
 
 impl RunOutcome {
@@ -366,6 +426,7 @@ impl RunOutcome {
             RunOutcome::HandedOver => "handed_over",
             RunOutcome::Skipped => "skipped",
             RunOutcome::Failed => "failed",
+            RunOutcome::Ordered => "ordered",
         }
     }
 
@@ -376,6 +437,7 @@ impl RunOutcome {
             "handed_over" => RunOutcome::HandedOver,
             "skipped" => RunOutcome::Skipped,
             "failed" => RunOutcome::Failed,
+            "ordered" => RunOutcome::Ordered,
             _ => return None,
         })
     }
@@ -395,6 +457,82 @@ pub struct RunRow {
     /// The automatic message it queued, if any (a hand-over's line included).
     pub outbox_id: Option<Uuid>,
     pub quote_id: Option<Uuid>,
+}
+
+/// Where an order of the automatic replies is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OrderState {
+    /// The customer was shown the summary and is to confirm it (no shop call yet).
+    Confirming,
+    /// The shop is being asked (from just before the call until its answer is stored). Found so
+    /// later than [`ORDER_CALL_STALE`] (a crash in between), it becomes `Unknown`.
+    Calling,
+    /// The shop created it: its link was sent (or handed to a person).
+    Created,
+    /// The shop refused it, or its answer did not pass the server's checks.
+    Failed,
+    /// The shop was asked but its answer is not known: it may exist there.
+    Unknown,
+}
+
+impl OrderState {
+    pub fn key(self) -> &'static str {
+        match self {
+            OrderState::Confirming => "confirming",
+            OrderState::Calling => "calling",
+            OrderState::Created => "created",
+            OrderState::Failed => "failed",
+            OrderState::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(key: &str) -> Option<OrderState> {
+        Some(match key {
+            "confirming" => OrderState::Confirming,
+            "calling" => OrderState::Calling,
+            "created" => OrderState::Created,
+            "failed" => OrderState::Failed,
+            "unknown" => OrderState::Unknown,
+            _ => return None,
+        })
+    }
+}
+
+/// An order left `Calling` this long is taken as interrupted.
+pub const ORDER_CALL_STALE: Duration = Duration::minutes(2);
+
+/// One order the automatic replies asked of the workspace's shop: one per quote and one per
+/// journey. Codes, amounts, the shop's reference and the payment link only: never the customer's
+/// name, email, phone or address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OrderRow {
+    /// Also the order's reference at the shop (`jeeta_ref`).
+    pub id: Uuid,
+    pub journey_id: jt_inbox::JourneyId,
+    pub conversation_id: ConversationId,
+    pub quote_id: Uuid,
+    pub shop_capability_id: CapabilityId,
+    pub run_id: Uuid,
+    pub state: OrderState,
+    /// Why it failed or is unknown (an `order_*` code).
+    pub reason: Option<String>,
+    pub amount_minor: i64,
+    pub currency: String,
+    pub reference: Option<String>,
+    /// Cleared when the person is erased.
+    pub pay_url: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub finished_at: Option<OffsetDateTime>,
+    /// A keyed hash of the details and the amount the customer was shown (never the details).
+    pub confirm_hash: Option<String>,
+    /// The outbox row of the summary the customer is to confirm.
+    pub summary_outbox_id: Option<Uuid>,
+    /// How many summaries the journey was shown.
+    pub summaries: u32,
+    /// When the shop was asked (from `Calling` on).
+    pub called_at: Option<OffsetDateTime>,
+    /// The executor generation the order was asked under.
+    pub generation: Option<u32>,
 }
 
 /// The automatic replies' rows of the bundle's workspace.
@@ -453,6 +591,47 @@ pub trait AutoReplyRepo: Send + Sync {
         older_than: OffsetDateTime,
         limit: u32,
     ) -> Result<Vec<ConversationId>, AppError>;
+    /// How many runs of conversation `conversation` at `since` or later came to reason `reason`.
+    async fn runs_with_reason(
+        &mut self,
+        conversation: ConversationId,
+        reason: &str,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError>;
+    /// Stores order `row` and answers `true`, unless the workspace holds an order of its quote or
+    /// of its journey: then nothing is written and the answer is `false`.
+    async fn order_insert(&mut self, row: &OrderRow) -> Result<bool, AppError>;
+    /// The order of journey `journey`, if any.
+    async fn order_by_journey(
+        &mut self,
+        journey: jt_inbox::JourneyId,
+    ) -> Result<Option<OrderRow>, AppError>;
+    async fn order_get(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError>;
+    /// [`AutoReplyRepo::order_get`], locked until the bundle ends.
+    async fn order_lock(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError>;
+    /// Updates the order's state, reason, reference, link, finish time, run, confirmation fields,
+    /// call time and generation; `NOT_FOUND` for an unknown id.
+    async fn order_save(&mut self, row: &OrderRow) -> Result<(), AppError>;
+    /// How many orders shop `shop` was asked for at `since` or later: every row but those still
+    /// `Confirming` (the shop never asked), counted from when the shop was asked.
+    async fn orders_since(
+        &mut self,
+        shop: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError>;
+    /// The orders left `Calling` since before `before` (by their call time), oldest first, at
+    /// most `limit`.
+    async fn orders_calling_before(
+        &mut self,
+        before: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<Uuid>, AppError>;
+    /// Clears the payment link and the confirmation hash of every order of conversations
+    /// `conversations` (erasure: the reference and the amount stay, as a financial record's do).
+    async fn orders_forget_links(
+        &mut self,
+        conversations: &[ConversationId],
+    ) -> Result<(), AppError>;
 }
 
 #[cfg(test)]

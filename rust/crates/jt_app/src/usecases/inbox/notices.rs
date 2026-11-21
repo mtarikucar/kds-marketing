@@ -15,9 +15,9 @@
 //!   error before the send) waits [`BACKOFF_MINUTES`] before the next of at most [`MAX_ATTEMPTS`]
 //!   attempts; an answer that may have reached the mail server (`Unknown`, a timeout) counts as
 //!   sent, never again, and so does a row found still `sending` later (a crash in between).
-//! - **What it says**: what happened, the reason in plain words (a fixed table of codes) and the
-//!   conversation's link in the panel. Never a customer's name, text or summary; the row holds
-//!   codes and ids only.
+//! - **What it says**: what happened, the reason in plain words (a fixed table of codes), for an
+//!   order its amount and the shop's reference, and the conversation's link in the panel. Never a
+//!   customer's name, text or summary; the row holds codes and ids only.
 //! - **Never back in the inbox** (`own_notice`): a polled mail (the notice's inbox copy, its Sent
 //!   copy, an answer to it, or a bounce of it) is dropped when its `Message-ID` or `In-Reply-To` is
 //!   `<jeeta-notice.{id}.…>`, or it comes from the workspace's own mailbox address with
@@ -37,6 +37,7 @@ use crate::ctx::Ctx;
 use crate::error::AppError;
 use crate::ports::connectors::MailMessage;
 use crate::ports::notices::{NoticeKind, NoticeRow, NoticeState};
+use crate::ports::reply_model::OrderRow;
 use crate::ports::{CapabilityFilter, TenantRepos};
 use crate::usecases::Deps;
 use crate::usecases::connector::open_credential;
@@ -398,7 +399,7 @@ async fn send_one(
 ) -> Result<bool, AppError> {
     // Claim: the attempt counted, `sending` from here; the credential opened first, so an error
     // before the send leaves the row queued for `attempt_failed`.
-    let (row, credential, to, domain) = {
+    let (row, credential, to, domain, order) = {
         let mut r = deps.uow.tenant(ws).await?;
         let Some(mut row) = r.notices().lock(id).await? else {
             return Ok(false);
@@ -419,6 +420,17 @@ async fn send_one(
             None => None,
         };
         let to = recipients(r.as_mut()).await?;
+        // An order's notice shows its amount and the shop's reference.
+        let order = match row
+            .dedupe_key
+            .strip_prefix("order:")
+            .map(str::parse::<Uuid>)
+        {
+            Some(Ok(id)) if row.kind == NoticeKind::OrderCreated => {
+                r.auto_reply().order_get(id).await?
+            }
+            _ => None,
+        };
         row.attempts += 1;
         let (Some(mailbox), Some(sealed)) = (mailbox, sealed) else {
             row.state = NoticeState::Failed;
@@ -450,9 +462,9 @@ async fn send_one(
         row.mailbox_capability_id = Some(mailbox.id);
         r.notices().save(&row).await?;
         r.commit().await?;
-        (row, credential, to, domain)
+        (row, credential, to, domain, order)
     };
-    let (subject, text) = words(deps, &row);
+    let (subject, text) = words(deps, &row, order.as_ref());
     // Sent: any mail that went out, or that may have.
     let mut reached = false;
     let mut transient = false;
@@ -531,8 +543,9 @@ async fn recipients(r: &mut dyn TenantRepos) -> Result<Vec<String>, AppError> {
     Ok(out)
 }
 
-/// A notice's subject and its three lines: what happened, why (in plain words) and where.
-fn words(deps: &Deps, row: &NoticeRow) -> (&'static str, String) {
+/// A notice's subject and its three lines: what happened, why (in plain words; for an order its
+/// amount and the shop's reference, `order`) and where.
+fn words(deps: &Deps, row: &NoticeRow, order: Option<&OrderRow>) -> (&'static str, String) {
     let (subject, what) = match row.kind {
         NoticeKind::HandedOver => (
             "Jeeta: bir konuşma sizi bekliyor",
@@ -545,7 +558,15 @@ fn words(deps: &Deps, row: &NoticeRow) -> (&'static str, String) {
     };
     let why = match row.kind {
         NoticeKind::HandedOver => format!("Neden: {}", reason_words(row.reason.as_deref())),
-        NoticeKind::OrderCreated => "Ayrıntılar konuşmada.".to_owned(),
+        NoticeKind::OrderCreated => match order {
+            Some(o) => format!(
+                "Tutar: {} {} · Mağaza referansı: {}",
+                whole(o.amount_minor),
+                o.currency,
+                o.reference.as_deref().unwrap_or("-")
+            ),
+            None => "Ayrıntılar konuşmada.".to_owned(),
+        },
     };
     let link = match deps.apps.public_base_url() {
         Some(base) => format!(
@@ -561,6 +582,15 @@ fn words(deps: &Deps, row: &NoticeRow) -> (&'static str, String) {
             "{what}\n{why}\n{link}\n\nBu e-postaları Bilgi bankası → Kurallar'dan kapatabilirsiniz."
         ),
     )
+}
+
+/// Minor units as whole units, with the kuruş only when there are some.
+fn whole(minor: i64) -> String {
+    if minor % 100 == 0 {
+        (minor / 100).to_string()
+    } else {
+        format!("{}.{:02}", minor / 100, (minor % 100).abs())
+    }
 }
 
 /// A hand-over's reason code in plain Turkish: a fixed table, "Diğer" for anything else.
@@ -581,6 +611,10 @@ pub(crate) fn reason_words(code: Option<&str>) -> &'static str {
         "human_quoted" => "Fiyatı ekipten biri konuşmuştu",
         c if c.starts_with("limit_") => "Günlük otomatik yanıt sınırı doldu",
         c if c.starts_with("judge_") => "Hazırlanan yanıt denetimden geçmedi",
+        "order_link_unsent" => "Sipariş oluştu, ödeme bağlantısını siz gönderin",
+        "no_auto_quote" | "quote_expired" | "quote_ambiguous" | "acceptance_unverified" => {
+            "Sipariş için teklif ya da onay doğrulanamadı"
+        }
         c if c.starts_with("order_") => "Sipariş oluşturulamadı",
         _ => "Diğer",
     }

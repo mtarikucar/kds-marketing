@@ -1048,7 +1048,8 @@
       "device": "Cihazlar",
       "agent_connection": "Ajan bağlantıları",
       "computer_access": "Bilgisayar erişimi",
-      "third_party": "Üçüncü taraf araçlar"
+      "third_party": "Üçüncü taraf araçlar",
+      "commerce": "Mağaza"
     },
     "kinds": {
       "instagram": "Instagram",
@@ -1102,7 +1103,8 @@
       "gmail": "Gmail",
       "apify": "Apify",
       "firecrawl": "Firecrawl",
-      "other": "Başka bir araç"
+      "other": "Başka bir araç",
+      "shop_mcp": "Mağaza (MCP)"
     },
     "reach": {
       "label": "Ulaşım",
@@ -4476,6 +4478,7 @@
       "autoReplyOn": "Mesajlara otomatik yanıt: {{channels}} · {{min}}–{{max}}.",
       "autoReplyWaiting": "Mesajlara otomatik yanıt, “Standart iş ve fiyat” kartı dolunca başlar.",
       "notifyOn": "E-posta bildirimi: {{from}}",
+      "orderOn": "Sipariş: {{host}} üzerinden ödeme bağlantısı",
       "autoReplyNoKey": "Mesajlara otomatik yanıt kapalı: sunucuda Claude anahtarı yok.",
       "dialog": {
         "help": "Bütçeyi, mesaj sınırını ve onayı sistem uygular; yasakları ajanlar her işte okur ve uyar.",

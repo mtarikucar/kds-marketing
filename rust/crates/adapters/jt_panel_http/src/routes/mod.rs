@@ -321,6 +321,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/connectors/{capability_id}/reconnect"),
     ("GET", "/api/connectors/hooks"),
     ("PUT", "/api/connectors/{capability_id}/pbx-policy"),
+    ("PUT", "/api/connectors/{capability_id}/shop-order"),
     ("GET", "/api/calls/policy"),
     ("PUT", "/api/calls/policy"),
     ("POST", "/api/calls"),
@@ -1744,6 +1745,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/connectors/{capability_id}/pbx-policy",
             "connector.set_pbx_policy",
             connector::set_pbx_policy,
+        ),
+        api_route(
+            "PUT",
+            "/connectors/{capability_id}/shop-order",
+            "connector.set_shop_order",
+            connector::set_shop_order,
         ),
         api_route(
             "GET",

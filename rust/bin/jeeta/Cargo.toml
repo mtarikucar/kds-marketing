@@ -34,6 +34,7 @@ jt_google.workspace = true
 jt_wake.workspace = true
 # The inbox's automatic replies' model (the Claude API), only with JEETA_ANTHROPIC_API_KEY.
 jt_claude.workspace = true
+jt_mcp_client.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 axum.workspace = true

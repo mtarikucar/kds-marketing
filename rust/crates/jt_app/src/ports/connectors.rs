@@ -322,7 +322,7 @@ impl OAuthCallback {
             Provider::Tiktok => Some(OAuthCallback::Tiktok),
             Provider::Linkedin => Some(OAuthCallback::Linkedin),
             Provider::Google => Some(OAuthCallback::Google),
-            Provider::Netgsm | Provider::Mail => None,
+            Provider::Netgsm | Provider::Mail | Provider::Mcp => None,
         }
     }
 }
@@ -2058,6 +2058,12 @@ pub trait ConnectorRegistry: Send + Sync {
     /// default, when the platform has none configured: the automatic replies are then off in
     /// every workspace, nothing is scheduled and the panel says so.
     fn reply_model(&self) -> Option<Arc<dyn super::reply_model::ReplyModel>> {
+        None
+    }
+    /// The client of the workspaces' own shops over MCP (`Provider::Mcp`), through which the
+    /// automatic replies create an order draft; `None`, the default, where there is none: the
+    /// order tool is then never offered.
+    fn shop(&self) -> Option<Arc<dyn super::shop::ShopClient>> {
         None
     }
     /// The model the first-message drafts ask (`usecases::prospects::draft`); `None`, the

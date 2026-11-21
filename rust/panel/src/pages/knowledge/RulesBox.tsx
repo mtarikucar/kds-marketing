@@ -28,7 +28,7 @@ import {
 } from '@/components/ui';
 import { can, isOwnerOrManager } from '@/lib/roles';
 import { isStale, useKnowledgeMutation } from './queries';
-import { adLine, approvalLine, autoReplyLine, knowledgeError, listedNames, messageLine, notifyLine } from './words';
+import { adLine, approvalLine, autoReplyLine, knowledgeError, listedNames, messageLine, notifyLine, orderLine } from './words';
 
 /** How many prohibitions the box shows before "{n} kural daha". */
 const SHOWN = 2;
@@ -488,6 +488,7 @@ export function RulesBox({ rules, editable }: { rules: RulesOut; editable: boole
   const message = messageLine(t, rules.message_cap, i18n.language);
   const auto = autoReplyLine(t, rules.auto_reply, i18n.language);
   const notify = notifyLine(t, rules.auto_reply);
+  const order = orderLine(t, rules.auto_reply);
   const first = rules.prohibitions.slice(0, SHOWN);
   const rest = rules.prohibitions.slice(SHOWN);
   return (
@@ -509,6 +510,7 @@ export function RulesBox({ rules, editable }: { rules: RulesOut; editable: boole
         {message && <li>{message}</li>}
         <li>{approvalLine(t, rules)}</li>
         {auto && <li>{auto}</li>}
+        {order && <li>{order}</li>}
         {notify && <li>{notify}</li>}
       </ul>
       {rest.length > 0 && (

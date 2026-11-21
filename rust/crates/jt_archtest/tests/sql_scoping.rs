@@ -155,6 +155,7 @@ fn tenant_tables_are_read_from_the_migrations() {
         "auto_reply_queue",
         "auto_reply_runs",
         "owner_notices",
+        "auto_reply_orders",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

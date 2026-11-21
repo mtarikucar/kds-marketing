@@ -91,6 +91,21 @@ pub async fn set_pbx_policy(
     ))
 }
 
+/// `200` with the shop's order template as stored (`{capability_id, enabled, tool, currency}`).
+/// The body is the template (`jt_inbox::order::OrderTemplate`: `{enabled, tool, currency,
+/// arguments, result}`), checked whole (`422` naming the rule it breaks); another kind of
+/// capability is `409`.
+pub async fn set_shop_order(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<CapabilityId>,
+    ApiJson(body): ApiJson<serde_json::Value>,
+) -> Result<Json<connector::ShopOrderOut>, ApiError> {
+    Ok(Json(
+        connector::set_shop_order(&state.deps, &ctx, id, body).await?,
+    ))
+}
+
 /// `200` with the probe's outcome and the capability's stored status after it.
 pub async fn probe(
     State(state): State<AppState>,

@@ -1,0 +1,35 @@
+{
+  "id": "msg_01TESTCREATEORDER",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-haiku-5-5",
+  "content": [
+    { "type": "thinking", "thinking": "", "signature": "TESTSIGNATURE" },
+    {
+      "type": "tool_use",
+      "id": "toolu_01TESTORDER",
+      "name": "create_order",
+      "input": {
+        "name": "Deneme Kişi",
+        "email": "deneme@example.com",
+        "phone": "",
+        "street": "Örnek Mah. Deneme Sk. No 1",
+        "neighbourhood": "",
+        "district": "Merkez",
+        "province": "Örnekil",
+        "postcode": "",
+        "payment_method": "card",
+        "item": "Kişiye özel figür",
+        "text": "Teşekkürler, siparişinizi hazırlıyorum."
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 140,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 900,
+    "output_tokens": 120
+  }
+}
