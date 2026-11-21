@@ -1,9 +1,10 @@
 -- The orders the inbox's automatic replies ask of the workspace's own shop
 -- (`usecases::inbox::autoreply`): when a customer accepts the automatic quote and gives what the
--- order needs, the server creates an order draft in the shop and sends the payment link. One row
--- per order: its state, the amount, the shop's reference and the payment link. Never the
+-- order needs, the server shows them a summary to confirm; after an explicit yes it creates an
+-- order draft in the shop and sends the payment link. One row per order: its state, the amount,
+-- a keyed hash of the confirmed details, the shop's reference and the payment link. Never the
 -- customer's name, email, phone or address: those exist in memory only, between the model's
--- answer and the shop's call.
+-- answer and the shop's call (and in the conversation's own messages).
 --
 -- Additive: a new table, and the runs' outcome check widened by one value (`ordered`); no
 -- existing row is read or changed, and every existing outcome stays allowed. Repeatable: every
@@ -23,9 +24,10 @@ create table if not exists auto_reply_orders (
     quote_id uuid not null,
     shop_capability_id uuid not null,
     run_id uuid not null,
-    -- `calling` from just before the shop is asked until its answer is stored; a row left
-    -- `calling` (a crash in between) becomes `unknown` and goes to a person.
-    state text not null check (state in ('calling', 'created', 'failed', 'unknown')),
+    -- `confirming` while the customer is to confirm the summary; `calling` from just before the
+    -- shop is asked until its answer is stored (a row left `calling`, a crash in between, becomes
+    -- `unknown` and goes to a person).
+    state text not null check (state in ('confirming', 'calling', 'created', 'failed', 'unknown')),
     -- Why it failed or is unknown (an `order_*` code).
     reason text,
     amount_minor bigint not null check (amount_minor >= 0),
@@ -35,6 +37,16 @@ create table if not exists auto_reply_orders (
     pay_url text,
     created_at timestamptz not null,
     finished_at timestamptz,
+    -- A keyed hash (HMAC-SHA256, a per-workspace key) of the details and the amount the customer
+    -- was shown; never the details themselves.
+    confirm_hash text,
+    -- The outbox row of the summary the customer is to confirm, and how many the journey was
+    -- shown.
+    summary_outbox_id uuid,
+    summaries integer not null default 0 check (summaries >= 0),
+    -- When the shop was asked, and the conversation's executor generation then.
+    called_at timestamptz,
+    generation integer check (generation >= 0),
     primary key (workspace_id, id),
     -- One order per quote and one per journey.
     unique (workspace_id, quote_id),

@@ -128,7 +128,8 @@ impl RunRecord {
 }
 
 const ORDER_COLUMNS: &str = "id, journey_id, conversation_id, quote_id, shop_capability_id, \
-     run_id, state, reason, amount_minor, currency, reference, pay_url, created_at, finished_at";
+     run_id, state, reason, amount_minor, currency, reference, pay_url, created_at, finished_at, \
+     confirm_hash, summary_outbox_id, summaries, called_at, generation";
 
 #[derive(sqlx::FromRow)]
 struct OrderRecord {
@@ -146,6 +147,11 @@ struct OrderRecord {
     pay_url: Option<String>,
     created_at: OffsetDateTime,
     finished_at: Option<OffsetDateTime>,
+    confirm_hash: Option<String>,
+    summary_outbox_id: Option<Uuid>,
+    summaries: i32,
+    called_at: Option<OffsetDateTime>,
+    generation: Option<i32>,
 }
 
 impl OrderRecord {
@@ -165,8 +171,30 @@ impl OrderRecord {
             pay_url: self.pay_url,
             created_at: self.created_at,
             finished_at: self.finished_at,
+            confirm_hash: self.confirm_hash,
+            summary_outbox_id: self.summary_outbox_id,
+            summaries: u32::try_from(self.summaries)
+                .map_err(|_| AppError::internal("stored summaries are negative"))?,
+            called_at: self.called_at,
+            generation: self
+                .generation
+                .map(u32::try_from)
+                .transpose()
+                .map_err(|_| AppError::internal("a stored generation is negative"))?,
         })
     }
+}
+
+/// An order's summaries and generation as stored.
+fn order_counts(row: &OrderRow) -> Result<(i32, Option<i32>), AppError> {
+    let summaries =
+        i32::try_from(row.summaries).map_err(|_| AppError::internal("summaries out of range"))?;
+    let generation = row
+        .generation
+        .map(i32::try_from)
+        .transpose()
+        .map_err(|_| AppError::internal("generation out of range"))?;
+    Ok((summaries, generation))
 }
 
 /// A token count as stored.
@@ -460,11 +488,13 @@ impl AutoReplyRepo for PgTenantRepos {
 
     async fn order_insert(&mut self, row: &OrderRow) -> Result<bool, AppError> {
         let ws = self.workspace_id();
+        let (summaries, generation) = order_counts(row)?;
         let done = sqlx::query(
             "insert into auto_reply_orders (workspace_id, id, journey_id, conversation_id, \
              quote_id, shop_capability_id, run_id, state, reason, amount_minor, currency, \
-             reference, pay_url, created_at, finished_at) values ($1, $2, $3, $4, $5, $6, $7, $8, \
-             $9, $10, $11, $12, $13, $14, $15) on conflict do nothing",
+             reference, pay_url, created_at, finished_at, confirm_hash, summary_outbox_id, \
+             summaries, called_at, generation) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, \
+             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) on conflict do nothing",
         )
         .bind(ws.as_uuid())
         .bind(row.id)
@@ -481,6 +511,11 @@ impl AutoReplyRepo for PgTenantRepos {
         .bind(row.pay_url.as_deref())
         .bind(row.created_at)
         .bind(row.finished_at)
+        .bind(row.confirm_hash.as_deref())
+        .bind(row.summary_outbox_id)
+        .bind(summaries)
+        .bind(row.called_at)
+        .bind(generation)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "store an automatic reply's order"))?;
@@ -532,9 +567,11 @@ impl AutoReplyRepo for PgTenantRepos {
 
     async fn order_save(&mut self, row: &OrderRow) -> Result<(), AppError> {
         let ws = self.workspace_id();
+        let (summaries, generation) = order_counts(row)?;
         let done = sqlx::query(
             "update auto_reply_orders set state = $3, reason = $4, reference = $5, pay_url = $6, \
-             finished_at = $7 where workspace_id = $1 and id = $2",
+             finished_at = $7, run_id = $8, confirm_hash = $9, summary_outbox_id = $10, \
+             summaries = $11, called_at = $12, generation = $13 where workspace_id = $1 and id = $2",
         )
         .bind(ws.as_uuid())
         .bind(row.id)
@@ -543,6 +580,12 @@ impl AutoReplyRepo for PgTenantRepos {
         .bind(row.reference.as_deref())
         .bind(row.pay_url.as_deref())
         .bind(row.finished_at)
+        .bind(row.run_id)
+        .bind(row.confirm_hash.as_deref())
+        .bind(row.summary_outbox_id)
+        .bind(summaries)
+        .bind(row.called_at)
+        .bind(generation)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "update an automatic reply's order"))?;
@@ -579,7 +622,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let ids: Vec<Uuid> = sqlx::query_scalar(
             "select id from auto_reply_orders where workspace_id = $1 and state = 'calling' \
-             and created_at < $2 order by created_at, id limit $3",
+             and coalesce(called_at, created_at) < $2 order by coalesce(called_at, created_at), id \
+             limit $3",
         )
         .bind(ws.as_uuid())
         .bind(before)

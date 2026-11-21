@@ -337,6 +337,12 @@ impl AutoReplyRepo for MemTenant {
                         o.reference = row.reference.clone();
                         o.pay_url = row.pay_url.clone();
                         o.finished_at = row.finished_at;
+                        o.run_id = row.run_id;
+                        o.confirm_hash = row.confirm_hash.clone();
+                        o.summary_outbox_id = row.summary_outbox_id;
+                        o.summaries = row.summaries;
+                        o.called_at = row.called_at;
+                        o.generation = row.generation;
                     }
                 }
             });
@@ -370,10 +376,14 @@ impl AutoReplyRepo for MemTenant {
             .auto_reply
             .orders
             .iter()
-            .filter(|(w, o)| *w == ws && o.state == OrderState::Calling && o.created_at < before)
+            .filter(|(w, o)| {
+                *w == ws
+                    && o.state == OrderState::Calling
+                    && o.called_at.unwrap_or(o.created_at) < before
+            })
             .map(|(_, o)| o)
             .collect();
-        rows.sort_by_key(|o| (o.created_at, o.id));
+        rows.sort_by_key(|o| (o.called_at.unwrap_or(o.created_at), o.id));
         Ok(rows
             .into_iter()
             .take(limit as usize)

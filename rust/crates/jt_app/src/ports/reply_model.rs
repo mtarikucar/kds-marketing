@@ -217,12 +217,12 @@ pub enum ModelTool {
         summary: String,
         text: Option<String>,
     },
-    /// The customer accepted the quote and gave what the order needs: the details, the
-    /// customer's own words of acceptance, and a short line to send with the payment link (empty
-    /// for none). Never stored or logged: `Debug` masks the details and the words.
+    /// The customer accepted the quote and gave what the order needs: the details and a short
+    /// line to send with the payment link (empty for none). The first call shows the customer a
+    /// summary to confirm; the same details again after an explicit yes create the order. Never
+    /// stored or logged: `Debug` masks the details.
     CreateOrder {
         fields: Box<OrderFields>,
-        acceptance: String,
         text: String,
     },
 }
@@ -461,6 +461,8 @@ pub struct RunRow {
 /// Where an order of the automatic replies is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OrderState {
+    /// The customer was shown the summary and is to confirm it (no shop call yet).
+    Confirming,
     /// The shop is being asked (from just before the call until its answer is stored). Found so
     /// later than [`ORDER_CALL_STALE`] (a crash in between), it becomes `Unknown`.
     Calling,
@@ -475,6 +477,7 @@ pub enum OrderState {
 impl OrderState {
     pub fn key(self) -> &'static str {
         match self {
+            OrderState::Confirming => "confirming",
             OrderState::Calling => "calling",
             OrderState::Created => "created",
             OrderState::Failed => "failed",
@@ -484,6 +487,7 @@ impl OrderState {
 
     pub fn parse(key: &str) -> Option<OrderState> {
         Some(match key {
+            "confirming" => OrderState::Confirming,
             "calling" => OrderState::Calling,
             "created" => OrderState::Created,
             "failed" => OrderState::Failed,
@@ -518,6 +522,16 @@ pub struct OrderRow {
     pub pay_url: Option<String>,
     pub created_at: OffsetDateTime,
     pub finished_at: Option<OffsetDateTime>,
+    /// A keyed hash of the details and the amount the customer was shown (never the details).
+    pub confirm_hash: Option<String>,
+    /// The outbox row of the summary the customer is to confirm.
+    pub summary_outbox_id: Option<Uuid>,
+    /// How many summaries the journey was shown.
+    pub summaries: u32,
+    /// When the shop was asked (from `Calling` on).
+    pub called_at: Option<OffsetDateTime>,
+    /// The executor generation the order was asked under.
+    pub generation: Option<u32>,
 }
 
 /// The automatic replies' rows of the bundle's workspace.
@@ -594,8 +608,8 @@ pub trait AutoReplyRepo: Send + Sync {
     async fn order_get(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError>;
     /// [`AutoReplyRepo::order_get`], locked until the bundle ends.
     async fn order_lock(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError>;
-    /// Updates the order's state, reason, reference, link and finish time; `NOT_FOUND` for an
-    /// unknown id.
+    /// Updates the order's state, reason, reference, link, finish time, run, confirmation fields,
+    /// call time and generation; `NOT_FOUND` for an unknown id.
     async fn order_save(&mut self, row: &OrderRow) -> Result<(), AppError>;
     /// How many orders of shop `shop` were created (asked of it) at `since` or later.
     async fn orders_since(
@@ -603,7 +617,8 @@ pub trait AutoReplyRepo: Send + Sync {
         shop: CapabilityId,
         since: OffsetDateTime,
     ) -> Result<u32, AppError>;
-    /// The orders left `Calling` since before `before`, oldest first, at most `limit`.
+    /// The orders left `Calling` since before `before` (by their call time), oldest first, at
+    /// most `limit`.
     async fn orders_calling_before(
         &mut self,
         before: OffsetDateTime,
