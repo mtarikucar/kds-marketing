@@ -340,11 +340,9 @@ pub(crate) async fn pending_in(
             .is_some_and(|j| j.status == JourneyStatus::Lost)
         {
             out.reopen_questions.push(c);
-        } else if !(served.contains(&c.capability_id.as_uuid())
-            && super::autoreply::answers(r, &c, ctx.now).await?)
-        {
-            // Kept from an agent only while the replies will answer it themselves: one they stay
-            // out of (a person's hold, a hand-back that could not be marked) is the agent's work.
+        } else if !(served.contains(&c.capability_id.as_uuid()) && super::autoreply::answers(&c)) {
+            // Kept from an agent while the replies answer it themselves (ours, the agent's):
+            // the assistant talks first; a person takes over when they choose to.
             out.ours.push(c);
         }
     }

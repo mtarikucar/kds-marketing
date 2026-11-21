@@ -82,19 +82,19 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   anything but a clear "allowed" (a refusal, an error, no answer) is not sent and the conversation
   goes to a person (`judge_refused`, `judge_unavailable`). The check is a model call like any
   other: recorded, counted and paid for.
-- It stops when a person takes the conversation over (until it is handed back), or when a newer
-  message arrives (that one is answered instead). A message a person writes in the conversation
-  (in the panel, or from the phone's Business App) keeps it out for 15 minutes from that message.
-  A customer message arriving inside those 15 minutes is answered when they end, if it is then
-  still the last message, unanswered, inside the 24-hour reply window and the conversation is
-  still the agent's; a person writing again moves the end. A hand-back after the person's message
-  lets it in at once.
+- **The assistant answers first; a person is the second factor.** It answers every customer
+  message that is the latest one of a conversation it serves, whatever a person wrote before (in
+  the panel or from the phone's Business App), unless a person has taken the conversation over:
+  then it stays out until the conversation is handed back, and a customer message still waiting
+  inside the 24-hour reply window is answered at once on the hand-back. A run whose message a
+  person answers meanwhile (the conversation turns `theirs`, or a newer message moves its
+  activity) drops its answer, at the run's end, at the send and at the approval of a held reply
+  (`stale`), so the customer never gets two answers to one message; a take-over during a run
+  refuses the send too. While it answers a conversation, agents are not offered it.
 - When a person on the team stated money in the current journey (an amount, a currency, a
-  discount or payment word), it never quotes in that journey: a quote becomes a hand-over
-  (`human_quoted`), and the model is told so. Replies that are not about price still go out. While the
-  replies stay out of a conversation, agents are offered it as usual. The hand-back's mark commits
-  with the hand-back itself, so no agent is offered the conversation in between. A held or queued
-  automatic reply whose conversation moved on is refused (`stale`).
+  discount or payment word, or a bare number such as "3500 olur"), it never quotes in that
+  journey: a quote becomes a hand-over (`human_quoted`), and the model is told so. Replies that
+  are not about price still go out, continuing from what the team said, never contradicting it.
 - The capability's policy applies: approval (the reply waits in the approvals list and in the
   conversation, where it can be approved or discarded; automatic messages carry an "otomatik"
   mark there), working hours
