@@ -133,6 +133,13 @@ pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
 /// business-recipient basis. Turned on only after the public unsubscribe links are deployed and
 /// the owner's lawyer answered.
 pub const OUTREACH_ENABLED: &str = "JEETA_OUTREACH_ENABLED";
+/// The platform's Claude API key, for the inbox's automatic replies (`usecases::inbox::autoreply`,
+/// `jt_claude`). Optional: unset, the automatic replies are off in every workspace and the panel
+/// says so. A secret: never logged, wiped from memory when dropped.
+pub const ANTHROPIC_API_KEY: &str = "JEETA_ANTHROPIC_API_KEY";
+/// The model the automatic replies ask; [`jt_claude::DEFAULT_MODEL`] when unset. Only a model
+/// `jt_claude` has prices for is taken (the cost is recorded and capped per workspace).
+pub const AUTOREPLY_MODEL: &str = "JEETA_AUTOREPLY_MODEL";
 
 /// Every variable the binary reads.
 const VARS: &[&str] = &[
@@ -184,6 +191,8 @@ const VARS: &[&str] = &[
     GOOGLE_CLIENT_SECRET,
     PUBLIC_BASE_URL,
     OUTREACH_ENABLED,
+    ANTHROPIC_API_KEY,
+    AUTOREPLY_MODEL,
 ];
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -397,6 +406,16 @@ pub struct Config {
     pub jobs_enabled: bool,
     /// The platform's provider apps and public address.
     pub apps: EnvPlatformApps,
+    /// The inbox's automatic replies' model; none without [`ANTHROPIC_API_KEY`].
+    pub auto_reply: Option<AutoReplyModel>,
+}
+
+/// The model of the inbox's automatic replies: the platform's key and the model's id. `Debug`
+/// masks the key.
+#[derive(Clone, Debug)]
+pub struct AutoReplyModel {
+    pub key: jt_claude::ApiKey,
+    pub model: String,
 }
 
 impl fmt::Debug for Config {
@@ -416,6 +435,10 @@ impl fmt::Debug for Config {
             .field("allow_test_loopback", &self.allow_test_loopback)
             .field("jobs_enabled", &self.jobs_enabled)
             .field("apps", &self.apps)
+            .field(
+                "auto_reply",
+                &self.auto_reply.as_ref().map(|a| a.model.as_str()),
+            )
             .finish()
     }
 }
@@ -495,6 +518,20 @@ impl Config {
         let allow_superuser = parse_bool(ALLOW_SUPERUSER, get(ALLOW_SUPERUSER), false)?;
         let allow_test_loopback = parse_flag(ALLOW_TEST_LOOPBACK, get(ALLOW_TEST_LOOPBACK))?;
         let jobs_enabled = parse_bool(JOBS_ENABLED, get(JOBS_ENABLED), true)?;
+        let model = get(AUTOREPLY_MODEL).map_or(jt_claude::DEFAULT_MODEL, str::trim);
+        if jt_claude::Prices::of(model).is_none() {
+            return Err(ConfigError::new(
+                AUTOREPLY_MODEL,
+                format!(
+                    "names a model without known prices (use {})",
+                    jt_claude::DEFAULT_MODEL
+                ),
+            ));
+        }
+        let auto_reply = get(ANTHROPIC_API_KEY).map(|key| AutoReplyModel {
+            key: jt_claude::ApiKey::new(key.trim().to_owned()),
+            model: model.to_owned(),
+        });
 
         let allowed_hosts = parse_allowed_hosts(get(ALLOWED_HOSTS))?;
         if !bind.ip().is_loopback() && allowed_hosts.is_empty() {
@@ -623,6 +660,7 @@ impl Config {
             allow_test_loopback,
             jobs_enabled,
             apps,
+            auto_reply,
         })
     }
 }
@@ -1093,6 +1131,22 @@ mod tests {
             let err = error(&with(&[(ALLOW_TEST_LOOPBACK, bad)]));
             assert_eq!(err.var, ALLOW_TEST_LOOPBACK, "{bad}");
         }
+    }
+
+    #[test]
+    fn the_automatic_replies_need_the_key_and_a_priced_model() {
+        let off = Config::from_map(&with(&[])).unwrap();
+        assert!(off.auto_reply.is_none(), "off without a key");
+        let on = Config::from_map(&with(&[(ANTHROPIC_API_KEY, "sk-ant-api03-SYNTHETIC")])).unwrap();
+        let model = on.auto_reply.as_ref().unwrap();
+        assert_eq!(model.model, "claude-haiku-5-5");
+        let shown = format!("{on:?}");
+        assert!(!shown.contains("SYNTHETIC"), "the key is never shown");
+        let err = error(&with(&[
+            (ANTHROPIC_API_KEY, "sk-ant-api03-SYNTHETIC"),
+            (AUTOREPLY_MODEL, "claude-unknown-1"),
+        ]));
+        assert_eq!(err.var, AUTOREPLY_MODEL);
     }
 
     #[test]

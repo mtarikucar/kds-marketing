@@ -308,7 +308,11 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
         transition_hook: Arc::new(jt_app::usecases::studio::lifecycle::StudioTransition),
         archived_hook: Arc::new(NoopArchivedHook),
         hosts: Arc::new(EgressTenantHosts::new(Arc::clone(&egress))),
-        connectors: connectors::registry(Arc::clone(&egress), Arc::clone(&apps)),
+        connectors: connectors::registry(
+            Arc::clone(&egress),
+            Arc::clone(&apps),
+            config.auto_reply.as_ref(),
+        ),
         job_lock,
         apps,
     };

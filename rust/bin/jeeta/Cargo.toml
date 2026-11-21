@@ -32,6 +32,8 @@ jt_linkedin.workspace = true
 jt_google.workspace = true
 # Wakes agents at their wake addresses (a routine's API trigger, a webhook).
 jt_wake.workspace = true
+# The inbox's automatic replies' model (the Claude API), only with JEETA_ANTHROPIC_API_KEY.
+jt_claude.workspace = true
 sqlx.workspace = true
 tokio = { workspace = true, features = ["net", "time"] }
 axum.workspace = true

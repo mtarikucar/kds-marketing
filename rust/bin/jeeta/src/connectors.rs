@@ -15,6 +15,8 @@
 //! | Google | ✓ | ✓ | — | — | — | ✓ |
 //!
 //! Mail additionally offers `MailSender` and `MailboxPoller`, each scoped by the call's workspace.
+//! The inbox's automatic replies' model (`jt_claude`, the Claude API) is offered only when the
+//! platform's key is configured (`JEETA_ANTHROPIC_API_KEY`); without it `reply_model` is `None`.
 //!
 //! (the same matrix `jt_testkit::fakes::ScriptedRegistry` offers, so the use cases' tests never
 //! count on more than production has). The OAuth flows need the platform's provider apps
@@ -28,7 +30,9 @@ use jt_app::ports::connectors::{
     InsightsReader, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider,
     PlatformAppConfig, PublicPoller, PublicSurface, Publisher, SmsSender, Telephony,
 };
+use jt_app::ports::reply_model::ReplyModel;
 use jt_app::ports::wake::AgentWaker;
+use jt_claude::{ClaudeBases, ClaudeModel};
 use jt_connector::Provider;
 use jt_google::{GoogleBases, GoogleConnector};
 use jt_linkedin::{LinkedinBases, LinkedinConnector};
@@ -46,8 +50,20 @@ use jt_x::{XBases, XConnector};
 pub fn registry(
     egress: Arc<Egress>,
     apps: Arc<dyn PlatformAppConfig>,
+    auto_reply: Option<&crate::config::AutoReplyModel>,
 ) -> Arc<dyn ConnectorRegistry> {
+    // The inbox's automatic replies' model, only with the platform's key (`JEETA_ANTHROPIC_API_KEY`).
+    let reply_model = auto_reply.and_then(|a| {
+        ClaudeModel::new(
+            Arc::clone(&egress),
+            ClaudeBases::production(),
+            a.key.clone(),
+            &a.model,
+        )
+        .map(Arc::new)
+    });
     Arc::new(ProviderRegistry {
+        reply_model,
         meta: Arc::new(MetaConnector::new(
             Arc::clone(&egress),
             MetaBases::production(),
@@ -92,6 +108,7 @@ struct ProviderRegistry {
     linkedin: Arc<LinkedinConnector>,
     google: Arc<GoogleConnector>,
     waker: Arc<EgressWaker>,
+    reply_model: Option<Arc<ClaudeModel>>,
 }
 
 impl ConnectorRegistry for ProviderRegistry {
@@ -203,6 +220,10 @@ impl ConnectorRegistry for ProviderRegistry {
     fn agent_waker(&self) -> Option<Arc<dyn AgentWaker>> {
         Some(self.waker.clone())
     }
+
+    fn reply_model(&self) -> Option<Arc<dyn ReplyModel>> {
+        self.reply_model.clone().map(|m| m as Arc<dyn ReplyModel>)
+    }
 }
 
 #[cfg(test)]
@@ -252,7 +273,23 @@ mod tests {
 
     fn production() -> Arc<dyn ConnectorRegistry> {
         let egress = Arc::new(Egress::new(FIXED_HOSTS));
-        registry(egress, Arc::new(NoPlatformApps))
+        registry(egress, Arc::new(NoPlatformApps), None)
+    }
+
+    #[test]
+    fn the_reply_model_is_offered_only_with_the_platforms_key() {
+        assert!(production().reply_model().is_none());
+        let egress = Arc::new(Egress::new(FIXED_HOSTS));
+        let config = crate::config::AutoReplyModel {
+            key: jt_claude::ApiKey::new("sk-ant-api03-SYNTHETIC".into()),
+            model: jt_claude::DEFAULT_MODEL.into(),
+        };
+        let with_key = registry(egress, Arc::new(NoPlatformApps), Some(&config));
+        assert_eq!(
+            with_key.reply_model().map(|m| m.model().to_owned()),
+            Some("claude-haiku-5-5".to_owned())
+        );
+        assert!(ScriptedRegistry::new().reply_model().is_none());
     }
 
     #[test]

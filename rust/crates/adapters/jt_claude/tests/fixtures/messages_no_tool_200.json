@@ -1,0 +1,9 @@
+{
+  "id": "msg_01TESTNOTOOL",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-haiku-5-5",
+  "content": [ { "type": "text", "text": "Merhaba!" } ],
+  "stop_reason": "end_turn",
+  "usage": { "input_tokens": 50, "output_tokens": 4 }
+}

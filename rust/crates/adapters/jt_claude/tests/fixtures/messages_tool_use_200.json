@@ -1,0 +1,25 @@
+{
+  "id": "msg_01TESTTOOLUSE",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-haiku-5-5",
+  "content": [
+    { "type": "thinking", "thinking": "", "signature": "TESTSIGNATURE" },
+    {
+      "type": "tool_use",
+      "id": "toolu_01TEST",
+      "name": "quote",
+      "input": { "amount": 1250, "basis": "one small piece, unpainted", "text": "Teklifimiz 1.250 TL." }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 120,
+    "cache_creation_input_tokens": 900,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 80,
+    "server_tool_use": { "web_search_requests": 0 },
+    "service_tier": "standard"
+  }
+}
