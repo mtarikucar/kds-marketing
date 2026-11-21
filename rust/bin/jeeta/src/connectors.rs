@@ -15,6 +15,9 @@
 //! | Google | ✓ | ✓ | — | — | — | ✓ |
 //!
 //! Mail additionally offers `MailSender` and `MailboxPoller`, each scoped by the call's workspace.
+//! A workspace's own shop over MCP (`jt_mcp_client`, `Provider::Mcp`) is a connector (its probe)
+//! and the automatic replies' shop client (`shop`); it needs no platform configuration, and
+//! reaches only the tenant host its capability names.
 //! The inbox's automatic replies' model (`jt_claude`, the Claude API) is offered only when the
 //! platform's key is configured (`JEETA_ANTHROPIC_API_KEY`); without it `reply_model` is `None`.
 //!
@@ -31,12 +34,14 @@ use jt_app::ports::connectors::{
     PlatformAppConfig, PublicPoller, PublicSurface, Publisher, SmsSender, Telephony,
 };
 use jt_app::ports::reply_model::ReplyModel;
+use jt_app::ports::shop::ShopClient;
 use jt_app::ports::wake::AgentWaker;
 use jt_claude::{ClaudeBases, ClaudeModel};
 use jt_connector::Provider;
 use jt_google::{GoogleBases, GoogleConnector};
 use jt_linkedin::{LinkedinBases, LinkedinConnector};
 use jt_mail::MailConnector;
+use jt_mcp_client::McpClient;
 use jt_meta::{MetaBases, MetaConnector};
 use jt_netgsm::{NetgsmBases, NetgsmConnector};
 use jt_outbound::Egress;
@@ -74,6 +79,7 @@ pub fn registry(
             NetgsmBases::production(),
         )),
         mail: Arc::new(MailConnector::new(Arc::clone(&egress))),
+        mcp: Arc::new(McpClient::new(Arc::clone(&egress))),
         x: Arc::new(XConnector::new(
             Arc::clone(&egress),
             XBases::production(),
@@ -102,6 +108,7 @@ pub fn registry(
 struct ProviderRegistry {
     meta: Arc<MetaConnector>,
     mail: Arc<MailConnector>,
+    mcp: Arc<McpClient>,
     netgsm: Arc<NetgsmConnector>,
     x: Arc<XConnector>,
     tiktok: Arc<TiktokConnector>,
@@ -121,6 +128,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Tiktok => self.tiktok.clone(),
             Provider::Linkedin => self.linkedin.clone(),
             Provider::Google => self.google.clone(),
+            Provider::Mcp => self.mcp.clone(),
         })
     }
 
@@ -131,7 +139,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
             Provider::Google => Some(self.google.clone()),
-            Provider::Netgsm | Provider::Mail => None,
+            Provider::Netgsm | Provider::Mail | Provider::Mcp => None,
         }
     }
 
@@ -153,7 +161,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
-            Provider::Netgsm | Provider::Mail | Provider::Google => None,
+            Provider::Netgsm | Provider::Mail | Provider::Google | Provider::Mcp => None,
         }
     }
 
@@ -163,7 +171,7 @@ impl ConnectorRegistry for ProviderRegistry {
             Provider::X => Some(self.x.clone()),
             Provider::Tiktok => Some(self.tiktok.clone()),
             Provider::Linkedin => Some(self.linkedin.clone()),
-            Provider::Netgsm | Provider::Mail | Provider::Google => None,
+            Provider::Netgsm | Provider::Mail | Provider::Google | Provider::Mcp => None,
         }
     }
 
@@ -223,6 +231,10 @@ impl ConnectorRegistry for ProviderRegistry {
 
     fn reply_model(&self) -> Option<Arc<dyn ReplyModel>> {
         self.reply_model.clone().map(|m| m as Arc<dyn ReplyModel>)
+    }
+
+    fn shop(&self) -> Option<Arc<dyn ShopClient>> {
+        Some(self.mcp.clone())
     }
 }
 
@@ -290,6 +302,12 @@ mod tests {
             Some("claude-haiku-5-5".to_owned())
         );
         assert!(ScriptedRegistry::new().reply_model().is_none());
+    }
+
+    #[test]
+    fn the_shop_client_is_always_offered_and_the_scripted_one_only_when_given_one() {
+        assert!(production().shop().is_some());
+        assert!(ScriptedRegistry::new().shop().is_none());
     }
 
     #[test]
@@ -368,6 +386,7 @@ mod tests {
                 Provider::Google,
                 vec!["connector", "oauth", "ads", "ad_campaigns"],
             ),
+            (Provider::Mcp, vec!["connector"]),
         ];
         assert_eq!(expected.len(), Provider::all().len());
         assert_eq!(
@@ -427,12 +446,12 @@ mod tests {
     fn each_adapter_names_its_provider_and_only_its_fixed_hosts() {
         let registry = production();
         for provider in Provider::all() {
-            if *provider == Provider::Mail {
-                let connector = registry.connector(*provider).expect("mail adapter");
-                assert_eq!(connector.provider(), Provider::Mail);
+            if matches!(provider, Provider::Mail | Provider::Mcp) {
+                let connector = registry.connector(*provider).expect("tenant-host adapter");
+                assert_eq!(connector.provider(), *provider);
                 assert!(
                     connector.hosts().is_empty(),
-                    "mail uses registered tenant hosts"
+                    "mail and a shop use registered tenant hosts"
                 );
                 assert!(FIXED_HOSTS.iter().all(|h| h.connector != provider.key()));
                 continue;

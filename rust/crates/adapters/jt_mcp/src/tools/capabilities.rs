@@ -60,7 +60,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           telephony, community, ads and calendar (accounts reached \
                           through a connector); device (phone, computer, printer, printer_3d, audio_io, \
                           camera, screen, scanner, usb_storage); agent_connection, \
-                          computer_access and third_party (reached through you, the agent). \
+                          computer_access and third_party (reached through you, the agent); \
+                          commerce (shop_mcp, the workspace's shop, reached through a connector). \
                           key_detail only for third_party.other (kind_key \"other\"): the \
                           tool's name, 2 to 40 of a-z, 0-9, _ and -. connector_public holds \
                           public settings only, never a secret; a connector may name its hosts \

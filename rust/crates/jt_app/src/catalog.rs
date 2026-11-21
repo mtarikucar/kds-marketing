@@ -522,6 +522,9 @@ pub static CATALOG: &[UseCase] = &[
     // A PBX's call policy (call mode, whether calls are recorded): reserved public keys only this
     // writes, with a ledger entry.
     twin("connector.set_pbx_policy", Exempt, "jeeta.connector.set_pbx_policy", ("PUT", "/api/connectors/{capability_id}/pbx-policy"), Write),
+    // A shop's order template (the automatic replies' orders): a reserved public key only this
+    // writes, with a ledger entry.
+    twin("connector.set_shop_order", Exempt, "jeeta.connector.set_shop_order", ("PUT", "/api/connectors/{capability_id}/shop-order"), Write),
     // Phone calls (voice V0, V1): gated by the strategy, except reading the policy. Placing a
     // call spends the line's tariff; an agent's call is then driven turn by turn (listen, say,
     // transfer).

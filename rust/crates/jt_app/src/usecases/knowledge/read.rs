@@ -150,6 +150,19 @@ pub struct AutoReplyView {
     pub accounts: Vec<AccountRef>,
     /// The owner's email notices of a hand-over or an order (`inbox::notices`).
     pub notify: NotifyView,
+    /// The order and its payment link, through the workspace's own shop.
+    pub order: OrderView,
+}
+
+/// The automatic replies' orders as the rules show them (`inbox::autoreply`, its orders).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OrderView {
+    /// A shop to order from: a verified `shop_mcp` capability with an enabled order template.
+    pub available: bool,
+    /// The shop's host, when it is available.
+    pub host: Option<String>,
+    /// Why there is none: `no_shop`, `not_verified` or `no_template`.
+    pub off_reason: Option<&'static str>,
 }
 
 /// The owner's email notices as the rules show them.
@@ -433,6 +446,21 @@ fn rules_view(
                 on: s.auto_reply.as_ref().is_none_or(|a| a.notifies()),
                 from: mailbox.and_then(|m| m.external_id.clone()),
             }
+        },
+        order: match crate::usecases::inbox::autoreply::shop_in(
+            deps.connectors.shop().is_some(),
+            capabilities,
+        ) {
+            Ok(shop) => OrderView {
+                available: true,
+                host: shop.endpoint.host_str().map(str::to_owned),
+                off_reason: None,
+            },
+            Err(reason) => OrderView {
+                available: false,
+                host: None,
+                off_reason: Some(reason),
+            },
         },
     };
     let post_approval_accounts = s

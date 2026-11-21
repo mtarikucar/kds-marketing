@@ -197,7 +197,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 250);
+    assert_eq!(jt_mcp::registry().len(), 251);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -225,8 +225,9 @@ async fn studio_exact_catalog_and_gate_set() {
     // the workspace module registry of 0032, the account snapshots of 0037_social_accounts and
     // the ad campaigns of 0040_ads_campaigns, the agents' wake rows of 0045_agent_wake, and the
     // five knowledge base tables of 0046_knowledge_base, and the automatic replies' queue and runs
-    // of 0047_inbox_auto_reply, and the owner's notices of 0049_owner_notices.
-    assert_eq!(all_tables.len(), 115);
+    // of 0047_inbox_auto_reply, and the owner's notices of 0049_owner_notices, and the automatic
+    // replies' orders of 0050_auto_reply_orders.
+    assert_eq!(all_tables.len(), 116);
 
     // All 26 Studio tables are tenant-scoped, including intelligence and productions.
     assert_eq!(
@@ -1213,13 +1214,15 @@ fn spend_sites(source: &str) -> BTreeSet<(String, String)> {
     for f in functions(&ast) {
         for name in calls(f) {
             // `schedule` leaves a post with its platform's own scheduler (design 2026-11-10
-            // §7.3): a write that publishes, as `publish` is.
+            // §7.3): a write that publishes, as `publish` is. `call_tool` creates an order in a
+            // workspace's own shop (the automatic replies' orders).
             if [
                 "publish",
                 "schedule",
                 "set_daily_budget",
                 "send",
                 "send_text",
+                "call_tool",
             ]
             .contains(&name.as_str())
             {
@@ -1297,6 +1300,14 @@ fn all_connector_write_sites_have_reservation_paths() {
             "send_one".into(),
             "send".into(),
         ),
+        // The automatic replies' orders: an order draft in the workspace's own shop, capped per
+        // shop and local day where the order is decided (`decide` counts them, below), and by
+        // the one order per journey.
+        (
+            "crates/jt_app/src/usecases/inbox/autoreply/orders.rs".into(),
+            "ask_shop".into(),
+            "call_tool".into(),
+        ),
     ]);
     assert_eq!(
         found, expected,
@@ -1315,6 +1326,8 @@ fn all_connector_write_sites_have_reservation_paths() {
         // The inbox names the module that spends (a campaign's step, else the inbox).
         ("inbox/replies.rs", "claim", "reserve_metered_for"),
         ("inbox/notices.rs", "queue_in", "count_since"),
+        ("inbox/autoreply/orders.rs", "decide", "orders_since"),
+        ("inbox/autoreply/orders.rs", "decide", "order_insert"),
     ] {
         let ast = syntax(&format!("crates/jt_app/src/usecases/{file}"));
         let funcs = functions(&ast);

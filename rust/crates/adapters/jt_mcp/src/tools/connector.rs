@@ -1,8 +1,8 @@
 //! `jeeta.connector.start_oauth`, `jeeta.connector.confirm_assets`,
 //! `jeeta.connector.set_credentials`, `jeeta.connector.probe`, `jeeta.connector.health`,
-//! `jeeta.connector.reconnect`, `jeeta.connector.hooks` and `jeeta.connector.set_pbx_policy`:
-//! connecting the workspace's accounts through their providers, the webhook addresses to register
-//! at them, and the PBX's call policy.
+//! `jeeta.connector.reconnect`, `jeeta.connector.hooks`, `jeeta.connector.set_pbx_policy` and
+//! `jeeta.connector.set_shop_order`: connecting the workspace's accounts through their providers,
+//! the webhook addresses to register at them, the PBX's call policy and a shop's order template.
 //!
 //! **An agent cannot complete an OAuth flow.** It starts one (or a reconnection) and gets the
 //! provider's authorize URL, which it hands to the owner: the owner signs in at the provider in
@@ -98,7 +98,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           password, msgheader}), the NetGSM PBX (netgsm_pbx, {kind: netgsm_pbx, \
                           username, password, trunk?, pbxnum?}) or a pasted Meta token ({kind: \
                           meta_token, access_token}; a Page or WhatsApp token needs external_id). \
-                          IYS attaches to an existing SMS line only (capability_id required), using credential {kind: netgsm_iys, usercode, password, brand_code}; its usercode must match the SMS line and it never replaces SMS credentials. A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). X, TikTok and LinkedIn connect through OAuth only. The credentials are sealed and probed \
+                          IYS attaches to an existing SMS line only (capability_id required), using credential {kind: netgsm_iys, usercode, password, brand_code}; its usercode must match the SMS line and it never replaces SMS credentials. A mailbox takes kind mailbox, smtp_host, smtp_port, imap_host, imap_port, username, password, from_address, tls (implicit or start_tls). The workspace's shop (kind_key shop_mcp) takes {kind: mcp_bearer, endpoint (its https MCP URL), token}; its external id is the endpoint. X, TikTok and LinkedIn connect through OAuth only. The credentials are sealed and probed \
                           at once; they are never shown again, and the ledger notes that you \
                           entered them. A verified capability keeps its credentials until a \
                           probe fails (CONFLICT). Returns the capability. [risk: WRITE]",
@@ -173,7 +173,49 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             schema: schema_for::<PbxPolicyArgs>,
             run: set_pbx_policy,
         },
+        ToolDef {
+            use_case: "connector.set_shop_order",
+            description: "Set the order template of the workspace's shop (kind shop_mcp,                           connected with credential {kind: mcp_bearer, endpoint, token}): how the                           inbox's automatic replies create an order draft for a quote the                           customer accepted. order is {enabled, tool, currency, arguments,                           result}: tool is the shop's MCP tool to call; arguments its arguments,                           where a string that is exactly \"{{var}}\" is filled (\"{{var?}}\"                           is dropped when empty) from ref, amount, amount_minor, currency, name,                           email, phone, street, neighbourhood, district, province, postcode,                           payment_method, item, and must hold {{ref}} and an amount; result names                           JSON pointers into the tool's result (text_json: read content[0].text                           as JSON; ok, url (required), reference, amount_minor). enabled false                           turns the orders off. Another kind is CONFLICT. Returns {capability_id,                           enabled, tool, currency}. [risk: WRITE]",
+            permissions: &[Permission::CapabilitiesManage],
+            schema: schema_for::<ShopOrderArgs>,
+            run: set_shop_order,
+        },
     ]
+}
+
+/// The arguments of `jeeta.connector.set_shop_order`: the capability and its order template.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ShopOrderArgs {
+    /// The shop_mcp capability.
+    capability_id: Uuid,
+    /// {enabled, tool, currency, arguments, result}: see the description.
+    #[schemars(schema_with = "shop_order_schema")]
+    order: Value,
+}
+
+fn shop_order_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({
+        "type": "object",
+        "properties": {
+            "enabled": { "type": "boolean" },
+            "tool": { "type": "string" },
+            "currency": { "type": "string" },
+            "arguments": {},
+            "result": {
+                "type": "object",
+                "properties": {
+                    "text_json": { "type": "boolean" },
+                    "ok": { "type": "string" },
+                    "url": { "type": "string" },
+                    "reference": { "type": "string" },
+                    "amount_minor": { "type": "string" }
+                },
+                "required": ["url"]
+            }
+        },
+        "required": ["enabled", "tool", "currency", "arguments", "result"]
+    })
 }
 
 /// The arguments of `jeeta.connector.set_pbx_policy`: the capability and a [`PbxPolicyInput`].
@@ -347,6 +389,16 @@ fn credential_schema(_: &mut SchemaGenerator) -> Schema {
                 "required": ["kind", "access_token"],
                 "additionalProperties": false,
             },
+            {
+                "type": "object",
+                "properties": {
+                    "kind": { "const": "mcp_bearer" },
+                    "endpoint": field("The shop's MCP endpoint, an https URL."),
+                    "token": field("The shop's bearer token."),
+                },
+                "required": ["kind", "endpoint", "token"],
+                "additionalProperties": false,
+            },
         ],
     })
 }
@@ -408,6 +460,16 @@ fn hooks<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         let NoArgs {} = args(raw)?;
         to_json(&connector::hooks(deps, ctx).await?)
+    })
+}
+
+fn set_shop_order<'a>(deps: &'a Deps, ctx: &'a Ctx, raw: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let ShopOrderArgs {
+            capability_id,
+            order,
+        } = args(raw)?;
+        to_json(&connector::set_shop_order(deps, ctx, CapabilityId(capability_id), order).await?)
     })
 }
 

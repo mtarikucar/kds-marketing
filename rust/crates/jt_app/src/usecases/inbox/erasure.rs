@@ -43,6 +43,10 @@ pub async fn erase(
     for c in &conversations {
         r.auto_reply().queue_delete(c.id).await?;
     }
+    // An order's payment link goes; its reference and amount stay, as a financial record's do.
+    // The shop's own copy of the order is the owner's to erase there.
+    let ids: Vec<jt_inbox::ConversationId> = conversations.iter().map(|c| c.id).collect();
+    r.auto_reply().orders_forget_links(&ids).await?;
     // The pool forgets the business too (spec 2026-10-30-leads-pool-outreach-design.md §3.6):
     // read the person's phone and email before the scrub removes them.
     let contact = contact_keys(r.as_mut(), person).await?;

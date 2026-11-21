@@ -4811,3 +4811,138 @@ async fn the_business_app_flow_needs_its_kind_and_the_whatsapp_configuration() {
     assert!(number.connector_public.get("business_app").is_none());
     assert_eq!(connector::flow_of(&number), None);
 }
+
+// ---------------------------------------------------------------------------------------------
+// A shop over MCP and its order template (the automatic replies' orders)
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_shop_is_connected_by_its_endpoint_and_takes_an_order_template() {
+    let mut w = world().await;
+    jt_testkit::flows::activate_workspace(&w.deps, w.ws).await;
+    let mcp = Arc::new(ScriptedConnector::new(Provider::Mcp));
+    w.deps.connectors = Arc::new(ScriptedRegistry::new().with_connector(mcp.clone()));
+    let o = &w.owner_ctx;
+    let shop = |endpoint: &str| -> connector::SetCredentials {
+        serde_json::from_value(json!({
+            "kind_key": "shop_mcp",
+            "name": "Örnek mağaza",
+            "credential": {"kind": "mcp_bearer", "endpoint": endpoint, "token": "invented-shop-token"},
+        }))
+        .unwrap()
+    };
+    // An endpoint that is not plain https is refused before anything is asked.
+    for bad in [
+        "http://shop.example.test/mcp",
+        "https://user:pass@shop.example.test/mcp",
+        "https://shop.example.test/mcp?key=1",
+        "https://shop.example.test/mcp#x",
+    ] {
+        let e = connector::set_credentials(&w.deps, o, shop(bad))
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Validation, "{bad}");
+        assert_eq!(e.details["field"], "credential.endpoint", "{bad}");
+        assert!(!e.message.contains("user:pass"), "{bad}");
+    }
+    assert!(mcp.calls().is_empty());
+    // The token never prints.
+    let printed = format!("{:?}", shop("https://shop.example.test/mcp"));
+    assert!(!printed.contains("invented-shop-token"), "{printed}");
+
+    mcp.push_probe(ok_probe("https://shop.example.test/mcp"));
+    let out = connector::set_credentials(&w.deps, o, shop("https://Shop.Example.TEST/mcp"))
+        .await
+        .unwrap()
+        .capability;
+    assert_eq!(out.status, StoredStatus::Verified);
+    assert_eq!(
+        out.external_id.as_deref(),
+        Some("https://shop.example.test/mcp")
+    );
+    let public = &out.connector_public;
+    assert_eq!(public["endpoint"], "https://shop.example.test/mcp");
+    assert_eq!(public["hosts"], json!(["shop.example.test"]));
+    assert_eq!(public["access"], json!({ "kind": "bearer" }));
+    assert!(!public.to_string().contains("invented-shop-token"));
+    assert!(
+        w.hosts.calls().iter().any(
+            |c| matches!(c, HostCall::Rebuild(_, hosts) if hosts.iter().any(|h| h == "shop.example.test"))
+        ),
+        "the endpoint's host is a tenant host"
+    );
+
+    // The template: checked whole, stored as the reserved key, logged by its tool alone.
+    let template = json!({
+        "enabled": true, "tool": "create_order", "currency": "TRY",
+        "arguments": {"ref": "{{ref}}", "total": "{{amount_minor}}", "email": "{{email}}"},
+        "result": {"url": "/payUrl"}
+    });
+    let set = connector::set_shop_order(&w.deps, o, out.id, template.clone())
+        .await
+        .unwrap();
+    assert_eq!(set.tool, "create_order");
+    assert!(set.enabled);
+    let stored = w
+        .uow
+        .snapshot()
+        .capabilities
+        .into_iter()
+        .find(|c| c.capability.id == out.id)
+        .unwrap()
+        .capability;
+    assert_eq!(stored.connector_public["order"]["tool"], "create_order");
+    assert_eq!(
+        stored.connector_public["endpoint"],
+        "https://shop.example.test/mcp"
+    );
+    assert_eq!(
+        w.entries("connector.shop_order_set")[0].payload,
+        json!({ "tool": "create_order", "enabled": true })
+    );
+    for (bad, reason) in [
+        (json!({"enabled": true}), "shape"),
+        (
+            json!({"enabled": true, "tool": "t", "currency": "TRY",
+                   "arguments": {"ref": "{{ref}}", "x": "{{secret}}", "a": "{{amount}}"},
+                   "result": {"url": "/u"}}),
+            "placeholder",
+        ),
+        (
+            json!({"enabled": true, "tool": "t", "currency": "TRY",
+                   "arguments": {"a": "{{amount}}"}, "result": {"url": "/u"}}),
+            "no_ref",
+        ),
+    ] {
+        let e = connector::set_shop_order(&w.deps, o, out.id, bad)
+            .await
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::Validation);
+        assert_eq!(e.details["reason"], reason);
+    }
+    // Another kind has no order template; the key cannot be declared.
+    let page = capabilities::declare(
+        &w.deps,
+        o,
+        serde_json::from_value(json!({"kind_key": "notion", "name": "Araç"})).unwrap(),
+    )
+    .await
+    .unwrap()
+    .capability;
+    assert_eq!(
+        connector::set_shop_order(&w.deps, o, page.id, template)
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    let declared = capabilities::declare(
+        &w.deps,
+        o,
+        serde_json::from_value(json!({"kind_key": "notion", "name": "B",
+            "connector_public": {"order": {"enabled": true}}}))
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(declared.unwrap_err().code, ErrorCode::Validation);
+}

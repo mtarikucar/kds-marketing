@@ -2558,3 +2558,644 @@ X-Jeeta-Notice: {id}
         "own_notice"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The order and its payment link (0050_auto_reply_orders)
+// ---------------------------------------------------------------------------------------------
+
+use jt_app::ports::reply_model::{OrderFields, OrderRow, OrderState};
+use jt_app::ports::shop::ShopError;
+use jt_testkit::fakes::ScriptedShop;
+
+/// The invented shop's endpoint.
+const SHOP_ENDPOINT: &str = "https://shop.example.test/mcp";
+/// The invented customer's details, as they write them.
+const DETAILS: &str = "Tamam olur, alalım. Adım Deneme Kişi, e-postam deneme@example.com. Adres: \
+                       Örnek Mah. Deneme Sk. No 1, Merkez, Örnekil. Kartla ödeyeceğim.";
+/// The fixed line to the customer when the order could not be created.
+const LATER: &str = "Siparişinizi ekibimiz tamamlayacak, kısa süre içinde dönüş yapacağız.";
+
+/// An invented shop's order template.
+fn shop_template() -> serde_json::Value {
+    json!({
+        "enabled": true,
+        "tool": "call_api_operation",
+        "currency": "TRY",
+        "arguments": {
+            "id": "orders.create",
+            "confirm": true,
+            "body": {
+                "customerName": "{{name}}",
+                "email": "{{email}}",
+                "address": {
+                    "line": "{{street}}",
+                    "area": "{{neighbourhood?}}",
+                    "district": "{{district}}",
+                    "city": "{{province}}",
+                    "zip": "{{postcode?}}",
+                    "phone": "{{phone}}"
+                },
+                "lineItems": [{"description": "{{item}}", "unitPrice": "{{amount}}", "quantity": 1}],
+                "paymentMethod": "{{payment_method}}",
+                "attributes": [{"name": "jeeta_ref", "value": "{{ref}}"}]
+            }
+        },
+        "result": {"text_json": true, "ok": "/ok", "url": "/data/payUrl",
+                   "reference": "/data/reference", "amount_minor": "/data/amountMinor"}
+    })
+}
+
+/// Adds a shop of `status` with `template` (and, when given, the mailbox connector `mail`) and
+/// the scripted shop client to `t`.
+async fn with_shop_as(
+    t: &mut T,
+    template: serde_json::Value,
+    status: StoredStatus,
+    mail: Option<Arc<ScriptedConnector>>,
+) -> Arc<ScriptedShop> {
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        t.w.ws,
+        NewCapability {
+            kind_key: "shop_mcp".into(),
+            name: "Örnek mağaza".into(),
+            connector_public: json!({
+                "provider": "mcp",
+                "endpoint": SHOP_ENDPOINT,
+                "hosts": ["shop.example.test"],
+                "order": template,
+            }),
+            ..Default::default()
+        },
+        FIXED_NOW_T - Duration::days(2),
+    )
+    .unwrap();
+    cap.external_id = Some(SHOP_ENDPOINT.into());
+    cap.status = status;
+    cap.last_verified_at = Some(FIXED_NOW_T - Duration::days(1));
+    let cred = Credential::Bearer {
+        token: "invented-shop-token".into(),
+    };
+    let sealed =
+        t.w.deps
+            .seal
+            .seal(t.w.ws, &serde_json::to_vec(&cred).unwrap())
+            .unwrap();
+    let mut r = t.w.uow.tenant(t.w.ws).await.unwrap();
+    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+    r.commit().await.unwrap();
+    let shop = ScriptedShop::new();
+    let mut registry = ScriptedRegistry::new()
+        .with_connector(t.meta.clone())
+        .with_model(t.model.clone())
+        .with_shop(shop.clone());
+    if let Some(mail) = mail {
+        registry = registry.with_connector(mail);
+    }
+    t.w.deps.connectors = Arc::new(registry);
+    shop
+}
+
+async fn with_shop(t: &mut T) -> Arc<ScriptedShop> {
+    with_shop_as(t, shop_template(), StoredStatus::Verified, None).await
+}
+
+/// A customer's WhatsApp message `body`, as message `wamid` of the fixture's first customer,
+/// received `tick` seconds after the fixed time.
+async fn inbound_text(t: &T, wamid: &str, body: &str, tick: i64) {
+    let mut draft = meta_drafts("whatsapp_messages").remove(0);
+    let received = FIXED_NOW_T + Duration::seconds(tick);
+    draft.payload["message"]["id"] = json!(wamid);
+    draft.payload["message"]["text"]["body"] = json!(body);
+    draft.external_id = wamid.to_owned();
+    draft.payload["occurred_at"] = json!(received.format(&Rfc3339).unwrap());
+    put(t, draft, received).await;
+    let report = jobs::run_inbox_consume(&t.w.deps, consumed_at(tick)).await;
+    assert_eq!(report.failed, 0, "{report:?}");
+}
+
+/// The details the model collected from [`DETAILS`].
+fn fields() -> OrderFields {
+    OrderFields {
+        name: "Deneme Kişi".into(),
+        email: "deneme@example.com".into(),
+        phone: String::new(),
+        street: "Örnek Mah. Deneme Sk. No 1".into(),
+        neighbourhood: String::new(),
+        district: "Merkez".into(),
+        province: "Örnekil".into(),
+        postcode: String::new(),
+        payment_method: "card".into(),
+        item: "Kişiye özel figür".into(),
+    }
+}
+
+fn create_order(fields: OrderFields, acceptance: &str, text: &str) -> ModelResult {
+    tool(ModelTool::CreateOrder {
+        fields,
+        acceptance: acceptance.into(),
+        text: text.into(),
+    })
+}
+
+/// The quote of 1.500 TL goes out at tick 0; the customer's details come at tick 60.
+async fn quoted_then_accepted(t: &T) {
+    inbound(t, 0, 0).await;
+    t.model
+        .answer(quote(1_500, "Teklifimiz 1.500 TL, 7 gün geçerli."));
+    t.meta.push_send_text(accepted());
+    job(t, due(0)).await;
+    inbound_text(t, "wamid.TEST-DETAILS-1", DETAILS, 60).await;
+}
+
+fn orders(t: &T) -> Vec<OrderRow> {
+    t.w.uow
+        .snapshot()
+        .auto_reply
+        .orders
+        .into_iter()
+        .map(|(_, o)| o)
+        .collect()
+}
+
+fn pay_url(reference: &str) -> String {
+    format!("https://shop.example.test/pay/{reference}")
+}
+
+fn created(shop: &ScriptedShop, reference: &str, amount_minor: i64) {
+    shop.created(json!({
+        "reference": reference,
+        "amountMinor": amount_minor,
+        "payUrl": pay_url(reference),
+    }));
+}
+
+#[tokio::test]
+async fn an_accepted_quote_becomes_an_order_and_its_link_goes_out() {
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    let shop = with_shop_as(&mut t, shop_template(), StoredStatus::Verified, Some(mail)).await;
+    quoted_then_accepted(&t).await;
+    t.model.answer(create_order(
+        fields(),
+        "Tamam olur",
+        "Teşekkürler, hemen hazırlıyorum.",
+    ));
+    created(&shop, "SHOP-0001", 150_000);
+    t.meta.push_send_text(accepted());
+    let report = job(&t, due(60)).await;
+    assert_eq!(report.changed, 1, "{report:?}");
+
+    // The model was offered the order tool, with its instructions, after the quote only.
+    let requests = t.model.requests();
+    assert!(requests[0].order.is_none(), "no quote yet: as before");
+    assert_eq!(
+        requests[0].system_fixed,
+        jt_app::usecases::inbox::autoreply::SYSTEM_FIXED
+    );
+    let offered = requests[1].order.as_ref().expect("offered after the quote");
+    assert_eq!(offered.amount_minor, 150_000);
+    assert!(requests[1].system_fixed.contains("`create_order`"));
+
+    // One call, with the quote's amount and the order's id as its reference.
+    let calls = shop.calls();
+    assert_eq!(calls.len(), 1);
+    let order = &orders(&t)[0];
+    let body = &calls[0].arguments["body"];
+    assert_eq!(calls[0].tool, "call_api_operation");
+    assert_eq!(calls[0].endpoint, SHOP_ENDPOINT);
+    assert_eq!(calls[0].token.as_deref(), Some("invented-shop-token"));
+    assert_eq!(body["lineItems"][0]["unitPrice"], json!(1500));
+    assert_eq!(body["attributes"][0]["value"], json!(order.id.to_string()));
+    assert_eq!(body["email"], "deneme@example.com");
+    assert_eq!(
+        body["address"]["phone"], "+905551111111",
+        "this WhatsApp number"
+    );
+    assert!(body["address"].get("zip").is_none());
+
+    // The order row: created, the shop's reference and link, no customer details.
+    assert_eq!(order.state, OrderState::Created);
+    assert_eq!(order.amount_minor, 150_000);
+    assert_eq!(order.reference.as_deref(), Some("SHOP-0001"));
+    assert_eq!(
+        order.pay_url.as_deref(),
+        Some(pay_url("SHOP-0001").as_str())
+    );
+
+    // The customer gets the model's line and the link, in one message.
+    let sent = texts_sent(&t);
+    assert_eq!(sent.len(), 2);
+    assert_eq!(
+        sent[1],
+        format!(
+            "Teşekkürler, hemen hazırlıyorum.\n\nSiparişiniz oluşturuldu. Ödemeyi kartla ya da \
+             havaleyle bu bağlantıdan yapabilirsiniz: {}",
+            pay_url("SHOP-0001")
+        )
+    );
+    // The quote is accepted, the journey pending, the run ordered.
+    let s = t.w.uow.snapshot();
+    assert_eq!(s.inbox.quotes[0].quote.state, QuoteState::Accepted);
+    assert_eq!(s.inbox.journeys[0].status, JourneyStatus::Pending);
+    let run = runs(&t)
+        .into_iter()
+        .find(|r| r.outcome == RunOutcome::Ordered)
+        .expect("an ordered run");
+    assert!(run.outbox_id.is_some());
+    let entry = &t.w.ledger("inbox.autoreply.ordered")[0];
+    assert_eq!(entry.payload["amount_minor"], 150_000);
+    assert_eq!(entry.payload["order_id"], json!(order.id));
+    // The conversation stays with the assistant.
+    assert_eq!(conversation(&t).executor, Executor::Agent);
+    // The owner's notice, codes only.
+    let notice = notices(&t)
+        .into_iter()
+        .find(|n| n.kind == jt_app::ports::notices::NoticeKind::OrderCreated)
+        .expect("an order notice");
+    assert_eq!(notice.dedupe_key, format!("order:{}", order.id));
+    // No ledger entry holds the customer's details.
+    for action in [
+        "inbox.autoreply.ordered",
+        "inbox.autoreply.replied",
+        "inbox.quote.accepted",
+        "inbox.autoreply.quoted",
+    ] {
+        for e in t.w.ledger(action) {
+            let text = e.payload.to_string();
+            for detail in ["deneme@example.com", "Deneme Kişi", "Deneme Sk", "Örnekil"] {
+                assert!(!text.contains(detail), "{action} holds {detail}");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn without_a_shop_nothing_of_the_order_is_offered() {
+    for case in ["no_client", "unverified", "disabled", "no_shop"] {
+        let mut t = setup().await;
+        let template = shop_template();
+        match case {
+            "no_client" => {
+                with_shop(&mut t).await;
+                // The same shop, but no shop client in this process.
+                t.w.deps.connectors = Arc::new(
+                    ScriptedRegistry::new()
+                        .with_connector(t.meta.clone())
+                        .with_model(t.model.clone()),
+                );
+            }
+            "unverified" => {
+                with_shop_as(&mut t, template, StoredStatus::Declared, None).await;
+            }
+            "disabled" => {
+                let mut off = template;
+                off["enabled"] = json!(false);
+                with_shop_as(&mut t, off, StoredStatus::Verified, None).await;
+            }
+            _ => {}
+        }
+        quoted_then_accepted(&t).await;
+        t.model.answer(reply("Bilgileriniz için teşekkürler."));
+        t.meta.push_send_text(accepted());
+        job(&t, due(60)).await;
+        assert_eq!(t.model.requests().len(), 2, "{case}");
+        for request in t.model.requests() {
+            assert!(request.order.is_none(), "{case}");
+            assert_eq!(
+                request.system_fixed,
+                jt_app::usecases::inbox::autoreply::SYSTEM_FIXED,
+                "{case}"
+            );
+            assert!(!request.system_workspace.contains("# The order"), "{case}");
+        }
+        assert!(orders(&t).is_empty(), "{case}");
+    }
+}
+
+#[tokio::test]
+async fn a_stray_order_call_without_a_shop_goes_to_a_person() {
+    let t = setup().await;
+    quoted_then_accepted(&t).await;
+    t.model.answer(create_order(fields(), "Tamam olur", ""));
+    job(&t, due(60)).await;
+    handed_to_a_person(&t);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.refused"),
+        ["order_unavailable"]
+    );
+    assert!(orders(&t).is_empty());
+}
+
+#[tokio::test]
+async fn without_the_journeys_one_automatic_valid_quote_nothing_is_ordered() {
+    // No quote at all.
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    inbound_text(&t, "wamid.TEST-DETAILS-1", DETAILS, 0).await;
+    t.model.answer(create_order(fields(), "Tamam olur", ""));
+    job(&t, due(0)).await;
+    assert!(shop.calls().is_empty());
+    handed_to_a_person(&t);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.handed_over"),
+        ["no_auto_quote"]
+    );
+
+    // An expired quote.
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(quote(1_500, "Teklifimiz 1.500 TL."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    let late = 40 * 24 * 3600;
+    inbound_text(&t, "wamid.TEST-DETAILS-1", DETAILS, late).await;
+    t.model.answer(create_order(fields(), "Tamam olur", ""));
+    job(&t, due(late)).await;
+    assert!(shop.calls().is_empty());
+    assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["quote_expired"]);
+
+    // A second quote beside the automatic one.
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    t.w.uow.edit(|st| {
+        let mut extra = st.inbox.quotes[0].clone();
+        extra.id = Uuid::now_v7();
+        st.inbox.quotes.push(extra);
+    });
+    t.model.answer(create_order(fields(), "Tamam olur", ""));
+    job(&t, due(60)).await;
+    assert!(shop.calls().is_empty());
+    assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["quote_ambiguous"]);
+}
+
+#[tokio::test]
+async fn words_of_acceptance_the_customer_never_wrote_are_refused() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    t.model
+        .answer(create_order(fields(), "Evet, onaylıyorum", ""));
+    job(&t, due(60)).await;
+    assert!(shop.calls().is_empty());
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.refused"),
+        ["acceptance_unverified"]
+    );
+    handed_to_a_person(&t);
+}
+
+#[tokio::test]
+async fn missing_details_are_asked_for_once_and_then_go_to_a_person() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    // No district, and an email the customer never wrote.
+    let mut f = fields();
+    f.district = String::new();
+    f.email = "baska@example.com".into();
+    t.model.answer(create_order(f.clone(), "Tamam olur", ""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    assert!(shop.calls().is_empty());
+    assert_eq!(
+        texts_sent(&t)[1],
+        "Siparişi oluşturmak için şunlar eksik: e-posta adresiniz, ilçe. Yazar mısınız?"
+    );
+    assert_eq!(conversation(&t).executor, Executor::Agent);
+    assert!(
+        runs(&t)
+            .iter()
+            .any(|r| r.reason.as_deref() == Some("order_incomplete"))
+    );
+    // The second time, a person takes it.
+    inbound_text(&t, "wamid.TEST-DETAILS-2", "Merkez ilçesi", 120).await;
+    t.model.answer(create_order(f, "Tamam olur", ""));
+    job(&t, due(120)).await;
+    assert!(shop.calls().is_empty());
+    handed_to_a_person(&t);
+    assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["order_details"]);
+}
+
+#[tokio::test]
+async fn a_second_call_sends_the_same_link_again_without_asking_the_shop() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    t.model.answer(create_order(fields(), "Tamam olur", ""));
+    created(&shop, "SHOP-0002", 150_000);
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    inbound_text(&t, "wamid.TEST-AGAIN-1", "Linki tekrar atar mısınız?", 120).await;
+    t.model.answer(create_order(fields(), "Tamam olur", ""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(120)).await;
+    // Once the order exists, the instructions say so.
+    let last = t.model.requests().pop().unwrap();
+    assert!(last.system_workspace.contains("SHOP-0002"));
+    assert_eq!(last.order.unwrap().done.as_deref(), Some("SHOP-0002"));
+    assert_eq!(shop.calls().len(), 1, "no second call");
+    let sent = texts_sent(&t);
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[1], sent[2]);
+    assert!(sent[2].ends_with(&pay_url("SHOP-0002")));
+}
+
+#[tokio::test]
+async fn a_shop_that_refuses_fails_or_may_have_acted_hands_over_with_the_fixed_line() {
+    for (answer, state, reason) in [
+        (
+            Err(ShopError::Rejected { code: None }),
+            OrderState::Failed,
+            "order_rejected",
+        ),
+        (
+            Err(ShopError::Unavailable),
+            OrderState::Failed,
+            "order_unavailable",
+        ),
+        (
+            Err(ShopError::Unknown),
+            OrderState::Unknown,
+            "order_unknown",
+        ),
+        (
+            Ok(json!({"isError": true, "content": [{"type": "text", "text": "Sınır dışında."}]})),
+            OrderState::Failed,
+            "order_rejected",
+        ),
+    ] {
+        let mut t = setup().await;
+        let shop = with_shop(&mut t).await;
+        quoted_then_accepted(&t).await;
+        t.model
+            .answer(create_order(fields(), "Tamam olur", "Hazırlıyorum."));
+        shop.answer(answer);
+        t.meta.push_send_text(accepted());
+        job(&t, due(60)).await;
+        let order = &orders(&t)[0];
+        assert_eq!(order.state, state, "{reason}");
+        assert_eq!(order.reason.as_deref(), Some(reason));
+        handed_to_a_person(&t);
+        assert_eq!(texts_sent(&t)[1], LATER);
+        assert_eq!(reasons(&t, "inbox.autoreply.handed_over"), [reason]);
+        let s = t.w.uow.snapshot();
+        assert_eq!(
+            s.inbox.quotes[0].quote.state,
+            QuoteState::Sent,
+            "not accepted"
+        );
+        let note = &s.inbox.notes.last().unwrap().text;
+        assert!(note.contains(reason), "{note}");
+        assert_eq!(
+            note.contains(&format!("jeeta_ref {}", order.id)),
+            state == OrderState::Unknown
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_result_the_server_cannot_trust_is_not_sent() {
+    for (data, reason) in [
+        (
+            json!({"reference": "SHOP-3", "amountMinor": 100_000, "payUrl": pay_url("SHOP-3")}),
+            "order_amount_mismatch",
+        ),
+        (
+            json!({"reference": "SHOP-3", "amountMinor": 150_000,
+                   "payUrl": "https://pay.example.org/SHOP-3"}),
+            "order_link_host",
+        ),
+    ] {
+        let mut t = setup().await;
+        let shop = with_shop(&mut t).await;
+        quoted_then_accepted(&t).await;
+        t.model.answer(create_order(fields(), "Tamam olur", ""));
+        shop.created(data);
+        t.meta.push_send_text(accepted());
+        job(&t, due(60)).await;
+        assert!(
+            texts_sent(&t).iter().all(|s| !s.contains("https://")),
+            "{reason}"
+        );
+        let order = &orders(&t)[0];
+        assert_eq!(order.state, OrderState::Failed);
+        assert_eq!(order.reason.as_deref(), Some(reason));
+        assert_eq!(order.reference.as_deref(), Some("SHOP-3"));
+        handed_to_a_person(&t);
+    }
+}
+
+#[tokio::test]
+async fn a_take_over_during_the_shops_call_sends_nothing_and_leaves_the_link_in_a_note() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    let (deps, owner) = (t.w.deps.clone(), t.w.owner_ctx.clone());
+    let id = conversation(&t).id;
+    shop.during_next(move || async move {
+        conversations::take_over(&deps, &owner, id).await.unwrap();
+    });
+    t.model.answer(create_order(fields(), "Tamam olur", ""));
+    created(&shop, "SHOP-0004", 150_000);
+    job(&t, due(60)).await;
+    assert_eq!(texts_sent(&t).len(), 1, "only the quote");
+    let s = t.w.uow.snapshot();
+    let note = &s.inbox.notes.last().unwrap().text;
+    assert!(
+        note.contains("SHOP-0004") && note.contains(&pay_url("SHOP-0004")),
+        "{note}"
+    );
+    assert_eq!(orders(&t)[0].state, OrderState::Created);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.refused"),
+        ["order_link_unsent"]
+    );
+}
+
+#[tokio::test]
+async fn an_order_left_calling_is_handed_over_as_interrupted() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    let s = t.w.uow.snapshot();
+    let row = OrderRow {
+        id: Uuid::now_v7(),
+        journey_id: s.inbox.journeys[0].id,
+        conversation_id: conversation(&t).id,
+        quote_id: s.inbox.quotes[0].id,
+        shop_capability_id: CapabilityId::new_v7(),
+        run_id: Uuid::now_v7(),
+        state: OrderState::Calling,
+        reason: None,
+        amount_minor: 150_000,
+        currency: "TRY".into(),
+        reference: None,
+        pay_url: None,
+        created_at: due(60),
+        finished_at: None,
+    };
+    let ws = t.w.ws;
+    t.w.uow
+        .edit(move |st| st.auto_reply.orders.push((ws, row.clone())));
+    t.meta.push_send_text(accepted());
+    let sweep = |at| jt_app::usecases::inbox::autoreply::reconcile(&t.w.deps, at, far());
+    // Not yet stale.
+    sweep(due(60) + Duration::seconds(30)).await;
+    assert_eq!(orders(&t)[0].state, OrderState::Calling);
+    sweep(due(60) + Duration::minutes(3)).await;
+    let order = &orders(&t)[0];
+    assert_eq!(order.state, OrderState::Unknown);
+    assert_eq!(order.reason.as_deref(), Some("order_interrupted"));
+    handed_to_a_person(&t);
+    assert!(shop.calls().is_empty());
+    assert_eq!(texts_sent(&t).last().unwrap(), LATER);
+}
+
+#[tokio::test]
+async fn erasing_the_person_clears_the_orders_link() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    t.model.answer(create_order(fields(), "Tamam olur", ""));
+    created(&shop, "SHOP-0005", 150_000);
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    assert!(orders(&t)[0].pay_url.is_some());
+    jt_app::usecases::inbox::erasure::erase(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        conversation(&t).person_id,
+        serde_json::from_value(json!({"confirm": true})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let order = &orders(&t)[0];
+    assert_eq!(order.pay_url, None);
+    assert_eq!(
+        order.reference.as_deref(),
+        Some("SHOP-0005"),
+        "the reference stays"
+    );
+}
+
+#[tokio::test]
+async fn the_rules_read_names_the_shop_or_why_there_is_none() {
+    let mut t = setup().await;
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert!(!k.rules.auto_reply.order.available);
+    assert_eq!(k.rules.auto_reply.order.off_reason, Some("no_shop"));
+    with_shop(&mut t).await;
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert!(k.rules.auto_reply.order.available);
+    assert_eq!(
+        k.rules.auto_reply.order.host.as_deref(),
+        Some("shop.example.test")
+    );
+}

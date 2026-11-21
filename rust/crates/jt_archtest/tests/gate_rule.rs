@@ -307,6 +307,7 @@ fn connection_and_event_use_cases_are_strategy_exempt_but_status_checked() {
             "connector.reconnect",
             "connector.hooks",
             "connector.set_pbx_policy",
+            "connector.set_shop_order",
             "events.pending",
             "events.ack",
             "events.list",

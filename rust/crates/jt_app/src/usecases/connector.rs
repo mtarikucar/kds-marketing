@@ -288,6 +288,12 @@ pub enum CredentialInput {
     MetaToken {
         access_token: String,
     },
+    /// A shop's MCP endpoint (`https`, no user, query or fragment) and its bearer token, for a
+    /// `shop_mcp` capability.
+    McpBearer {
+        endpoint: String,
+        token: String,
+    },
 }
 
 impl CredentialInput {
@@ -299,6 +305,15 @@ impl CredentialInput {
             CredentialInput::NetgsmIys { .. } => "netgsm_iys",
             CredentialInput::NetgsmPbx { .. } => "netgsm_pbx",
             CredentialInput::MetaToken { .. } => "meta_token",
+            CredentialInput::McpBearer { .. } => "mcp_bearer",
+        }
+    }
+
+    /// The shop's endpoint, for an `McpBearer` credential.
+    fn endpoint(&self) -> Option<&str> {
+        match self {
+            CredentialInput::McpBearer { endpoint, .. } => Some(endpoint),
+            _ => None,
         }
     }
 }
@@ -339,6 +354,11 @@ impl fmt::Debug for CredentialInput {
             CredentialInput::MetaToken { .. } => f
                 .debug_struct("MetaToken")
                 .field("access_token", &Masked)
+                .finish(),
+            CredentialInput::McpBearer { endpoint, .. } => f
+                .debug_struct("McpBearer")
+                .field("endpoint", endpoint)
+                .field("token", &Masked)
                 .finish(),
         }
     }
@@ -1295,6 +1315,78 @@ pub async fn set_pbx_policy(
     Ok(out)
 }
 
+/// `connector.set_shop_order`: a shop's order template (`jt_inbox::order::OrderTemplate`): the
+/// tool the automatic replies call to create an order, its arguments with placeholders, and
+/// where the tool's result holds the payment link. From JSON, an unknown field is refused.
+pub type ShopOrderInput = serde_json::Value;
+
+/// A shop's order template as stored: whether it is on and the tool it calls.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ShopOrderOut {
+    pub capability_id: CapabilityId,
+    pub enabled: bool,
+    pub tool: String,
+    pub currency: String,
+}
+
+/// Sets the order template of the `shop_mcp` capability `id` (see [`ShopOrderInput`]): checked
+/// whole (`VALIDATION` naming `order` and the rule it breaks), then written as
+/// `connector_public.order` under the capability's lock, the other public fields kept. The key is
+/// reserved: no declaration and no connection step writes it, so what the automatic replies send
+/// to the shop is decided here alone, and logged (`connector.shop_order_set`, payload the tool and
+/// whether it is on: never the template's text). Another kind or a retired capability is
+/// `CONFLICT`. `{"enabled": false, ...}` turns the orders off. Needs `capabilities.manage`.
+pub async fn set_shop_order(
+    deps: &Deps,
+    ctx: &Ctx,
+    id: CapabilityId,
+    input: ShopOrderInput,
+) -> Result<ShopOrderOut, AppError> {
+    ctx.require(Permission::CapabilitiesManage)?;
+    let template = jt_inbox::order::OrderTemplate::parse(&input).map_err(|e| {
+        AppError::validation(
+            format!("invalid order template: {e}"),
+            json!({ "field": "order", "reason": e.key() }),
+        )
+    })?;
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let mut capability = locked(repos.as_mut(), id).await?;
+    not_retired(&capability)?;
+    if capability.kind_key != "shop_mcp" {
+        return Err(AppError::conflict(
+            "only a shop_mcp capability has an order template",
+        ));
+    }
+    let mut public = object(&capability.connector_public);
+    public.insert(
+        "order".to_owned(),
+        serde_json::to_value(&template)
+            .map_err(|_| AppError::internal("an order template cannot be stored"))?,
+    );
+    capability.connector_public = Value::Object(public);
+    capability.updated_at = ctx.now;
+    let out = ShopOrderOut {
+        capability_id: capability.id,
+        enabled: template.enabled,
+        tool: template.tool.clone(),
+        currency: template.currency.clone(),
+    };
+    repos.capabilities().update(capability).await?;
+    let in_force = version_in_force(repos.as_mut()).await?;
+    append(
+        repos.as_mut(),
+        ctx,
+        "connector.shop_order_set",
+        "capability",
+        id,
+        in_force,
+        json!({ "tool": out.tool, "enabled": out.enabled }),
+    )
+    .await?;
+    repos.commit().await?;
+    Ok(out)
+}
+
 /// Whether `capability` must be reconnected: `connector_public.reconnect_required` is `true`.
 pub(crate) fn reconnect_required(capability: &Capability) -> bool {
     capability.connector_public[RECONNECT_REQUIRED].as_bool() == Some(true)
@@ -1657,7 +1749,7 @@ fn reconnectable(capability: &Capability) -> Result<(), AppError> {
     }
     not_retired(capability)?;
     match provider_for_kind(&capability.kind_key) {
-        Some(Provider::Netgsm | Provider::Mail) => {
+        Some(Provider::Netgsm | Provider::Mail | Provider::Mcp) => {
             return Err(AppError::validation(
                 "this capability takes new credentials by hand (connector.set_credentials)",
                 json!({ "reason": "use_set_credentials" }),
@@ -1950,13 +2042,27 @@ async fn credentials_for_new(
 ) -> Result<CapabilityOut, AppError> {
     let kind = connector_kind(kind_key)?;
     let provider = manual_provider(kind)?;
-    let external_id = external_id
+    let endpoint = input.endpoint().map(str::to_owned);
+    let mut external_id = external_id
         .map(|e| checked_external_id_of(kind.key, &e))
         .transpose()?;
+    // A shop is held by its endpoint.
+    if let Some(endpoint) = &endpoint {
+        if external_id.as_ref().is_some_and(|e| e != endpoint) {
+            return Err(invalid(
+                "external_id",
+                "a shop's external id is its endpoint",
+            ));
+        }
+        external_id = Some(endpoint.clone());
+    }
     let credential = built_credential(kind.key, provider, input, external_id.as_deref())?;
     let connector = adapter(deps, provider)?;
-    let hosts = credential_hosts(deps, connector.as_ref(), &credential)?;
-    let public = connected_public(
+    let hosts = match &endpoint {
+        Some(endpoint) => endpoint_hosts(deps, endpoint)?,
+        None => credential_hosts(deps, connector.as_ref(), &credential)?,
+    };
+    let mut public = connected_public(
         &Value::Object(Map::new()),
         provider,
         None,
@@ -1964,6 +2070,9 @@ async fn credentials_for_new(
         entered_access(&Value::Null, provider, &credential),
         None,
     );
+    if let Some(endpoint) = &endpoint {
+        public["endpoint"] = json!(endpoint);
+    }
     let mut capability = Capability::new(
         CapabilityId(deps.ids.uuid()),
         ctx.workspace_id,
@@ -1990,7 +2099,9 @@ async fn credentials_for_new(
         }
     }
     let sealed = seal_credential(deps, ctx, &credential)?;
-    if provider == Provider::Mail {
+    // Mail and a shop reach hosts their credentials name: the tenant tier is rebuilt from the
+    // committed row before they are probed.
+    if matches!(provider, Provider::Mail | Provider::Mcp) {
         let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
         let in_force = version_in_force(repos.as_mut()).await?;
         capability.strategy_version_id = in_force.map(|v| v.as_uuid());
@@ -2052,9 +2163,20 @@ async fn credentials_for(
     }
     not_retired(&capability)?;
     let kind = connector_kind(&capability.kind_key)?;
-    let external_id = external_id
+    let endpoint = input.endpoint().map(str::to_owned);
+    let mut external_id = external_id
         .map(|e| checked_external_id_of(kind.key, &e))
         .transpose()?;
+    // A shop is held by its endpoint.
+    if let Some(endpoint) = &endpoint {
+        if external_id.as_ref().is_some_and(|e| e != endpoint) {
+            return Err(invalid(
+                "external_id",
+                "a shop's external id is its endpoint",
+            ));
+        }
+        external_id = Some(endpoint.clone());
+    }
     let provider = manual_provider(kind)?;
     if capability.status == StoredStatus::Verified {
         return Err(AppError::conflict(
@@ -2081,7 +2203,10 @@ async fn credentials_for(
     }
     let credential = built_credential(kind.key, provider, input, bound.as_deref())?;
     let connector = adapter(deps, provider)?;
-    let hosts = credential_hosts(deps, connector.as_ref(), &credential)?;
+    let hosts = match &endpoint {
+        Some(endpoint) => endpoint_hosts(deps, endpoint)?,
+        None => credential_hosts(deps, connector.as_ref(), &credential)?,
+    };
     let access = entered_access(
         &capability.connector_public["access"],
         provider,
@@ -2095,10 +2220,15 @@ async fn credentials_for(
         access,
         None,
     );
+    if let Some(endpoint) = &endpoint {
+        capability.connector_public["endpoint"] = json!(endpoint);
+    }
     capability.updated_at = ctx.now;
 
-    if provider == Provider::Mail {
-        reset_mail_cursor(repos.as_mut(), id).await?;
+    if matches!(provider, Provider::Mail | Provider::Mcp) {
+        if provider == Provider::Mail {
+            reset_mail_cursor(repos.as_mut(), id).await?;
+        }
         let sealed = seal_credential(deps, ctx, &credential)?;
         if rebinding {
             rebind_account(
@@ -2252,7 +2382,60 @@ fn normalised(input: CredentialInput) -> Result<CredentialInput, AppError> {
         CredentialInput::MetaToken { access_token } => CredentialInput::MetaToken {
             access_token: checked_field("access_token", &access_token, MAX_SECRET_CHARS, true)?,
         },
+        CredentialInput::McpBearer { endpoint, token } => CredentialInput::McpBearer {
+            endpoint: shop_endpoint(&endpoint)?,
+            token: checked_field("token", &token, MAX_SECRET_CHARS, true)?,
+        },
     })
+}
+
+/// The longest shop endpoint, in characters.
+pub const MAX_ENDPOINT_CHARS: usize = 300;
+
+/// A shop's MCP endpoint as typed, checked and in the one form it is stored and compared in:
+/// `https`, a host, no user or password, no query or fragment, at most [`MAX_ENDPOINT_CHARS`];
+/// its host in lower case (`url` does that), a bare host without its trailing `/`. Else
+/// `VALIDATION` naming `credential.endpoint`, never repeating the value.
+fn shop_endpoint(raw: &str) -> Result<String, AppError> {
+    let bad = |why: &str| invalid("credential.endpoint", why);
+    let raw = raw.trim();
+    if raw.chars().count() > MAX_ENDPOINT_CHARS || raw.chars().any(char::is_control) {
+        return Err(bad("the endpoint must be at most 300 characters"));
+    }
+    let url = Url::parse(raw).map_err(|_| bad("the endpoint must be an https URL"))?;
+    if url.scheme() != "https" || url.host_str().is_none_or(str::is_empty) {
+        return Err(bad("the endpoint must be an https URL"));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(bad("the endpoint must not hold a user or password"));
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err(bad("the endpoint must not hold a query or fragment"));
+    }
+    let text = url.as_str();
+    let text = if url.path() == "/" {
+        text.trim_end_matches('/')
+    } else {
+        text
+    };
+    if text.chars().count() > MAX_ENDPOINT_CHARS {
+        return Err(bad("the endpoint must be at most 300 characters"));
+    }
+    Ok(text.to_owned())
+}
+
+/// The host (with its port when not 443) a shop's `endpoint` reaches, checked with the tenant
+/// host registry before anything is written.
+fn endpoint_hosts(deps: &Deps, endpoint: &str) -> Result<Vec<String>, AppError> {
+    let url =
+        Url::parse(endpoint).map_err(|_| invalid("credential.endpoint", "invalid endpoint"))?;
+    let host = match (url.host_str(), url.port()) {
+        (Some(host), Some(port)) => format!("{host}:{port}"),
+        (Some(host), None) => host.to_owned(),
+        (None, _) => return Err(invalid("credential.endpoint", "invalid endpoint")),
+    };
+    deps.hosts.check(&host)?;
+    Ok(vec![host])
 }
 
 /// One credential field checked (see [`normalised`]); the refusal never repeats the value.
@@ -2368,11 +2551,15 @@ fn built_credential(
             expires_at: None,
             scopes: Vec::new(),
         }),
+        (Provider::Mcp, "shop_mcp", CredentialInput::McpBearer { token, .. }) => {
+            Ok(Credential::Bearer { token })
+        }
         _ => {
             let expected = match (provider, kind_key) {
                 (Provider::Netgsm, "sms_line") => "netgsm_sms",
                 (Provider::Netgsm, _) => "netgsm_pbx",
                 (Provider::Mail, _) => "mailbox",
+                (Provider::Mcp, _) => "mcp_bearer",
                 _ => "meta_token",
             };
             Err(AppError::validation(
@@ -2396,8 +2583,8 @@ fn credential_strict<'de, D: Deserializer<'de>>(d: D) -> Result<CredentialInput,
         {
             format!("invalid credential: {message}")
         } else if message.starts_with("unknown variant") {
-            "invalid credential: `kind` must be mailbox, netgsm_sms, netgsm_iys, netgsm_pbx or \
-             meta_token"
+            "invalid credential: `kind` must be mailbox, netgsm_sms, netgsm_iys, netgsm_pbx, \
+             meta_token or mcp_bearer"
                 .to_owned()
         } else {
             "invalid credential: it must be an object with a `kind` and string fields".to_owned()
@@ -2444,7 +2631,7 @@ pub(crate) async fn probe_locked(
         .await?
         .ok_or_else(|| AppError::conflict("no credentials"))?;
     let credential = open_credential(deps, ws, &sealed)?;
-    if capability.kind_key == "mailbox" {
+    if capability.kind_key == "mailbox" || capability.kind_key == "shop_mcp" {
         sync_hosts_in(deps, ws, repos.as_mut()).await?;
     }
     if let Some(guard) = host_guard {
@@ -2756,7 +2943,7 @@ fn connected_public(
     if let Some(name) = name {
         out.insert("name".to_owned(), json!(name));
     }
-    if provider == Provider::Mail {
+    if matches!(provider, Provider::Mail | Provider::Mcp) {
         out.remove("hosts");
     }
     let mut all: Vec<String> = out
