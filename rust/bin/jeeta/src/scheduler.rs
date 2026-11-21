@@ -116,7 +116,7 @@ impl Default for Intervals {
             purge_oauth_pending: HOUR,
             purge_probe_runs: DAY,
             outbox_recover: MINUTE,
-            inbox_consume: Duration::from_secs(10),
+            inbox_consume: Duration::from_secs(3),
             response_sla: MINUTE,
             snooze_wake: MINUTE,
             studio_control: MINUTE,
@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(i.of(Job::PurgeOAuthPending), HOUR);
         assert_eq!(i.of(Job::PurgeProbeRuns), DAY);
         assert_eq!(i.of(Job::OutboxRecover), MINUTE);
-        assert_eq!(i.of(Job::InboxConsume), Duration::from_secs(10));
+        assert_eq!(i.of(Job::InboxConsume), Duration::from_secs(3));
         assert_eq!(i.of(Job::ResponseSla), MINUTE);
         assert_eq!(i.of(Job::SnoozeWake), MINUTE);
         assert_eq!(i.of(Job::StudioControl), MINUTE);

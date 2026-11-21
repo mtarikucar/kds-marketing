@@ -280,6 +280,24 @@ const UNITS: &[&str] = &[
 const UNITS_EXACT: &[&str] = &[
     "ay", "aylık", "ayda", "cm", "mm", "m", "dk", "sn", "kg", "gr",
 ];
+/// The nouns a one-digit count, or a one-digit range (`2-3`, `2 ya da 3`), may stand before
+/// (`2-3 fotoğraf`): a stem the next word starts with.
+const COUNT_NOUNS: &[&str] = &[
+    "fotoğraf",
+    "foto",
+    "görsel",
+    "açı",
+    "kişi",
+    "figür",
+    "adet",
+    "parça",
+    "renk",
+    "seçenek",
+    "örnek",
+    "gün",
+    "hafta",
+    "saat",
+];
 /// Units that may be glued to a count (`15cm`).
 const GLUED_UNITS: &[&str] = &["cm", "mm", "m", "kg", "gr", "dk"];
 
@@ -549,6 +567,27 @@ pub fn scan(text: &str, year: i32) -> Scan {
         if range && ((glued.is_empty() && unit_next) || GLUED_UNITS.contains(&glued)) {
             continue;
         }
+        // A one-digit count or range before a count noun: `2-3 fotoğraf`, `2 ya da 3 fotoğraf`.
+        let one_digit = |t: &str| t.len() == 1 && t.as_bytes()[0].is_ascii_digit();
+        let counted =
+            |n: Option<&Word>| n.is_some_and(|n| COUNT_NOUNS.iter().any(|c| n.stem.starts_with(c)));
+        if glued.is_empty() && !w.suffixed {
+            let parts: Vec<&str> = num.split('-').collect();
+            if parts.len() <= 2 && parts.iter().all(|p| one_digit(p)) && counted(next) {
+                continue;
+            }
+            let (other, noun) = match (
+                next.map(|n| n.stem.as_str()),
+                after_next.map(|n| n.stem.as_str()),
+            ) {
+                (Some("ya"), Some("da")) => (words.get(i + 3), words.get(i + 4)),
+                (Some("veya"), _) => (words.get(i + 2), words.get(i + 3)),
+                _ => (None, None),
+            };
+            if one_digit(num) && other.is_some_and(|o| one_digit(&o.stem)) && counted(noun) {
+                continue;
+            }
+        }
         let bare_year = glued.is_empty()
             && !w.suffixed
             && digits_only
@@ -709,6 +748,13 @@ mod tests {
             "Binanıza teslim",
             "Hediye paketi isterseniz söyleyin.",
             "Yarın kargoda.",
+            // One-digit counts before a count noun.
+            "2-3 fotoğraf yeterli olur.",
+            "2 ya da 3 fotoğraf gönderebilir misiniz?",
+            "1 veya 2 açıdan",
+            "3 figür için",
+            "2 renk seçeneği",
+            "4 örnek",
         ] {
             assert_eq!(reply(text), Ok(()), "{text}");
         }
@@ -758,6 +804,11 @@ mod tests {
             "İNDİRİM VAR",
             "elliye olur",
             "beleş",
+            // Counts stay strict beyond one digit and a count noun.
+            "2-3 bin",
+            "3 figür 5000",
+            "12 fotoğraf",
+            "2-3 olur",
             "taksit yapılır",
             "peşine",
             "kapora alınır",

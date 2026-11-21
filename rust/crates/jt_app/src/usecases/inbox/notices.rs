@@ -578,6 +578,7 @@ pub(crate) fn reason_words(code: Option<&str>) -> &'static str {
         "outside_active_hours" => "Çalışma saatleri dışında",
         "failed" => "Otomatik yanıt şu an yanıt üretemedi",
         "requote" => "Müşteri ikinci bir teklif istedi",
+        "human_quoted" => "Fiyatı ekipten biri konuşmuştu",
         c if c.starts_with("limit_") => "Günlük otomatik yanıt sınırı doldu",
         c if c.starts_with("judge_") => "Hazırlanan yanıt denetimden geçmedi",
         c if c.starts_with("order_") => "Sipariş oluşturulamadı",
