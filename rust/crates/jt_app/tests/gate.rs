@@ -247,7 +247,7 @@ fn the_inbox_runs_without_a_strategy_while_the_studio_and_outreach_do_not() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(inbox.len(), 48);
+    assert_eq!(inbox.len(), 50);
     for uc in &inbox {
         let result = ready(check_gate(uc, WorkspaceStatus::Active, &NoStrategyYet, ws));
         if uc.id == "inbox.send" {
@@ -629,8 +629,14 @@ fn a_one_to_one_email_never_waits_for_the_campaigns_module() {
         "outreach.settings_set",
         "inbox.suppressions.add",
         "inbox.consent.record",
+        "inbox.email_settings_get",
+        "inbox.email_settings_set",
     ] {
         assert!(check(id, &Removed("outreach")).is_ok(), "{id}");
+    }
+    // The email facts are the inbox's, never the campaigns' module.
+    for id in ["inbox.email_settings_get", "inbox.email_settings_set"] {
+        assert_eq!(gating_module(id), Some("inbox"), "{id}");
     }
     // Their checks still hold: no sending channel, no settings.
     for id in ["outreach.settings_get", "outreach.settings_set"] {

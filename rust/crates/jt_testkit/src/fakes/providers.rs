@@ -1965,6 +1965,7 @@ pub struct ScriptedRegistry {
     waker: Option<Arc<ScriptedWaker>>,
     model: Option<Arc<ScriptedModel>>,
     shop: Option<Arc<super::ScriptedShop>>,
+    drafter: Option<Arc<super::ScriptedDrafter>>,
 }
 
 impl ScriptedRegistry {
@@ -1983,6 +1984,12 @@ impl ScriptedRegistry {
     /// Registers `shop` as the workspaces' shop client ([`ConnectorRegistry::shop`]).
     pub fn with_shop(mut self, shop: Arc<super::ScriptedShop>) -> Self {
         self.shop = Some(shop);
+        self
+    }
+
+    /// Registers `drafter` as the first-message drafts' model ([`ConnectorRegistry::draft_model`]).
+    pub fn with_drafter(mut self, drafter: Arc<super::ScriptedDrafter>) -> Self {
+        self.drafter = Some(drafter);
         self
     }
 
@@ -2131,6 +2138,12 @@ impl ConnectorRegistry for ScriptedRegistry {
         self.shop
             .clone()
             .map(|s| s as Arc<dyn jt_app::ports::shop::ShopClient>)
+    }
+
+    fn draft_model(&self) -> Option<Arc<dyn jt_app::ports::draft_model::DraftModel>> {
+        self.drafter
+            .clone()
+            .map(|m| m as Arc<dyn jt_app::ports::draft_model::DraftModel>)
     }
 }
 

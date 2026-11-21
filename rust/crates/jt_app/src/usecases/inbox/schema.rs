@@ -123,6 +123,10 @@ pub fn input(action: &str) -> Value {
             json!({"labels":{"type":"object","propertyNames":{"enum":["new","contacted","unreachable","appointment","met","quoted","pending","won","lost"]},"additionalProperties":{"type":"string","minLength":1}}}),
             &["labels"],
         ),
+        "email_settings_set" => object(
+            json!({"sender_company":{"type":"string","maxLength":200},"sender_address":{"type":"string","maxLength":300},"privacy_notice_url":{"type":"string","maxLength":2048},"b2b_basis":{"type":"array","items":{"enum":["email","sms","whats_app","instagram_dm","messenger"]}},"require_iys_lookup":{"type":"boolean"},"legal_ack":object(json!({"counsel_confirmed":{"type":"boolean"},"note":{"type":"string","minLength":1,"maxLength":500}}),&["counsel_confirmed","note"])}),
+            &[],
+        ),
         _ => object(json!({}), &[]),
     }
 }

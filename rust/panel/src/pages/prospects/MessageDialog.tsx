@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
@@ -6,8 +6,7 @@ import { Instagram, Mail, MessageCircle, MessageSquareText, type LucideIcon } fr
 import { listCapabilities } from '@/api/capabilities';
 import { isApiError } from '@/api/client';
 import { addNote, sendCommercial } from '@/api/inbox';
-import { getOutreachSettings } from '@/api/outreach';
-import { decideProspect, promoteProspects } from '@/api/prospects';
+import { decideProspect, draftFirstMessage, promoteProspects } from '@/api/prospects';
 import type { ContactChannel, ProspectGetOut } from '@/api/types';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import {
@@ -25,16 +24,22 @@ import {
   toast,
 } from '@/components/ui';
 import { useDraftKey, useInFlight } from '@/lib/leads';
-import { useLeadsKey, useLeadsRefresh } from '../LeadsShared';
+import { BasisStep, SenderForm, useEmailSettings, useMayOpenBasis } from '../email/EmailFacts';
+import { useLeadsRefresh } from '../LeadsShared';
 import { usePoolCopy, type PoolCopyKey } from './copy';
 import { HANDOFF_MARK } from './timeline';
 import { promoteOutcomeText } from './words';
 
 // "Mesaj gönder" (spec 2026-11-10-prospects-pool-redesign-design.md): the first message to a
-// prospect. Email and SMS go out through the workspace's connected account (`inbox.send`);
-// WhatsApp and Instagram, where Meta lets no program start a conversation, are handed off: the
-// text is prepared, the chat opens, the person presses send. Either way the prospect moves into
-// the inbox first (qualified if it was new, then promoted), so the reply lands on its journey.
+// prospect, or to a person with no conversation yet. Email and SMS go out through the
+// workspace's connected account (`inbox.send`); WhatsApp and Instagram, where Meta lets no
+// program start a conversation, are handed off: the text is prepared, the chat opens, the
+// person presses send. A prospect moves into the inbox first (qualified if it was new, then
+// promoted), so the reply lands on its journey.
+//
+// Whatever an email needs and lacks (the sender details under it, the first-message permission
+// for businesses) is filled in here, in place (owner report 2026-11-21): it is email's, never
+// the campaigns', and the dialog never sends anyone away to enter it.
 
 export type Way = 'email' | 'sms' | 'whatsapp' | 'instagram';
 const WAYS: readonly Way[] = ['email', 'sms', 'whatsapp', 'instagram'];
@@ -48,15 +53,52 @@ const NOTE_TEXT = 1000;
 export const handoffNote = (way: 'whatsapp' | 'instagram', text: string) =>
   `${HANDOFF_MARK}${way === 'whatsapp' ? 'WhatsApp' : 'Instagram'}: ${[...text].slice(0, NOTE_TEXT).join('')}`;
 
+/** A step filled in place: the missing sender details, or the business basis on a channel. */
+type Step = { kind: 'identity' } | { kind: 'basis'; channel: ContactChannel };
+/** What puts a closed way right: a page (connecting a channel), or a step in this dialog. */
+type Fix = { label: string; to: string } | { label: string; step: Step };
+
 interface Option {
   way: Way;
-  /** Whom it reaches: the address, number or handle; `null` when the prospect has none. */
+  /** Whom it reaches: the address, number or handle; `null` when the target has none. */
   to: string | null;
   /** The connected account a direct way sends through. */
   via: string | null;
-  /** Why it cannot be chosen, and where that is put right. */
-  blocked: { text: string; fix?: { label: string; to: string } } | null;
+  /** Why it cannot be chosen, and how that is put right. */
+  blocked: { text: string; fix?: Fix } | null;
 }
+
+/** Whom the dialog writes to, and how it is brought into contact. */
+export interface ComposeTarget {
+  title: string;
+  description: string;
+  email: string | null;
+  phone: string | null;
+  handle: string | null;
+  /** WhatsApp and Instagram are offered (a hand-off notes on the journey). */
+  handoffs: boolean;
+  /**
+   * A business reached without consent (a prospect): its ways wait for the business basis. For
+   * anyone else the server judges consent at send, and a refusal opens the same step here.
+   */
+  business: boolean;
+  /**
+   * The business first-message permission can apply to this target (a business); for anyone
+   * else a refusal means no consent, and the dialog offers no permission it cannot use.
+   */
+  basisApplies: boolean;
+  /** The person and journey written to, once the target is in contact. */
+  contact: () => Promise<{ person_id: string; journey_id: string }>;
+  /** The draft's identity for the send's request key. */
+  draftId: string;
+  afterSend: string | null;
+  noWay: string;
+  refresh: () => Promise<unknown>;
+  /** A draft written for this target and way, put in the message field; none leaves it empty. */
+  draft?: (way: Way) => Promise<{ subject: string | null; body: string } | null>;
+}
+
+const sameStep = (a: Step, b: Step) => a.kind === b.kind && (a.kind !== 'basis' || (b.kind === 'basis' && a.channel === b.channel));
 
 /** The chat address a hand-off opens. */
 export function handoffUrl(way: 'whatsapp' | 'instagram', to: string, text: string): string {
@@ -70,34 +112,68 @@ function isNoPermission(error: unknown): boolean {
   return isApiError(error) && (error.message === 'IZIN_YOK' || error.details.reason === 'IZIN_YOK');
 }
 
+/** "Mesaj gönder" on a prospect: it is qualified (if new) and promoted before the message goes. */
 export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose: () => void }) {
   const { t } = useTranslation();
   const copy = usePoolCopy();
-  const key = useLeadsKey();
   const refresh = useLeadsRefresh();
-  const guard = useInFlight();
   const promoteKey = useDraftKey();
-  const sendKey = useDraftKey();
   const p = data.prospect;
-  const capabilities = useQuery({ queryKey: [...key, 'send', 'capabilities'], queryFn: () => listCapabilities() });
-  // The basis is the owner's setting; someone who may not read it lets the server decide.
-  const settings = useQuery({ queryKey: [...key, 'send', 'outreach-settings'], queryFn: getOutreachSettings, retry: false });
+  const target: ComposeTarget = {
+    title: copy('msgTitle', { name: p.business_name }),
+    description: [p.sector, [p.district, p.city].filter(Boolean).join(', ')].filter(Boolean).join(' · ') || ' ',
+    email: p.contact.email?.deliverable ? p.contact.email.value : null,
+    phone: p.contact.phone?.deliverable ? p.contact.phone.value : null,
+    handle: p.contact.instagram?.value ?? null,
+    handoffs: true,
+    business: true,
+    basisApplies: true,
+    draftId: p.id,
+    afterSend: copy('afterSend'),
+    noWay: copy('noWay'),
+    refresh,
+    // The first message comes ready in the field (owner request 2026-11-21): a draft only, sent
+    // when the person presses send, through the same path and checks as a written one.
+    draft: async (way) => (await draftFirstMessage(p.id, way)).draft,
+    contact: async () => {
+      if (p.promoted) return { person_id: p.promoted.person_id, journey_id: p.promoted.journey_id };
+      // A person who writes to a new prospect has judged it worth contacting.
+      if (p.status === 'new') await decideProspect(p.id, { decision: 'qualify', expected_revision: p.revision });
+      const out = await promoteProspects({ prospect_ids: [p.id], request_key: promoteKey.keyFor({ id: p.id }) });
+      const outcome = out.items[0];
+      if (!outcome || outcome.outcome === 'refused') throw new Error(outcome ? promoteOutcomeText(t, outcome) : t('leads.promoteRefused.other'));
+      return { person_id: outcome.person_id, journey_id: outcome.journey_id };
+    },
+  };
+  return <ComposeDialog target={target} onClose={onClose} onSent={() => promoteKey.reset()} />;
+}
+
+/** The message dialog for any target: its ways, the steps an email lacks, the send. */
+export function ComposeDialog({ target, onClose, onSent }: { target: ComposeTarget; onClose: () => void; onSent?: () => void }) {
+  const { t } = useTranslation();
+  const copy = usePoolCopy();
+  const guard = useInFlight();
+  const sendKey = useDraftKey();
+  const capabilities = useQuery({ queryKey: ['compose', 'capabilities'], queryFn: () => listCapabilities() });
+  // The email facts (`inbox.work`); someone who may not read them lets the server decide.
+  const settings = useEmailSettings();
+  const mayOpenBasis = useMayOpenBasis();
+  const [step, setStep] = useState<Step | null>(null);
 
   const live = (kind: string) =>
     capabilities.data?.find((c) => c.capability.kind_key === kind && c.effective_status === 'verified' && c.capability.has_sealed_config)?.capability.name ?? null;
+  const basisFix = (channel: ContactChannel): Fix | undefined =>
+    mayOpenBasis ? { label: copy('openBasis'), step: { kind: 'basis', channel } } : undefined;
   const basisBlock = (channel: 'email' | 'sms'): Option['blocked'] => {
     if (!settings.data) return null;
     // A commercial email ends with the sender's identity: without it the server refuses it.
     if (channel === 'email' && !settings.data.sender_identity_complete)
-      return { text: copy('identityMissing'), fix: { label: copy('fillIdentity'), to: '/outreach/settings' } };
-    if (settings.data.b2b_channels_in_force.includes(channel)) return null;
-    return settings.data.b2b_basis.includes(channel) && !settings.data.platform_enabled
-      ? { text: copy('platformOff') }
-      : { text: copy('basisOff'), fix: { label: copy('openBasis'), to: '/outreach/settings' } };
+      return { text: copy('identityMissing'), fix: { label: copy('fillIdentity'), step: { kind: 'identity' } } };
+    if (!target.business || settings.data.b2b_channels_in_force.includes(channel)) return null;
+    if (settings.data.b2b_basis.includes(channel) && !settings.data.platform_enabled) return { text: copy('platformOff') };
+    return { text: mayOpenBasis ? copy('basisOff') : `${copy('basisOff')} · ${copy('ownerOnly')}`, fix: basisFix(channel) };
   };
-  const email = p.contact.email?.deliverable ? p.contact.email.value : null;
-  const phone = p.contact.phone?.deliverable ? p.contact.phone.value : null;
-  const handle = p.contact.instagram?.value ?? null;
+  const { email, phone, handle } = target;
   const direct = (way: 'email' | 'sms', to: string | null, kind: string, none: PoolCopyKey, unconnected: PoolCopyKey): Option => {
     const via = live(kind);
     return {
@@ -111,11 +187,14 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
           : basisBlock(way),
     };
   };
+  const handoffs: Option[] = [
+    { way: 'whatsapp', to: phone, via: null, blocked: phone ? null : { text: copy('noPhone') } },
+    { way: 'instagram', to: handle, via: null, blocked: handle ? null : { text: copy('noHandle') } },
+  ];
   const options: Option[] = [
     direct('email', email, 'mailbox', 'noEmail', 'noMailbox'),
     direct('sms', phone, 'sms_line', 'noPhone', 'noSmsLine'),
-    { way: 'whatsapp', to: phone, via: null, blocked: phone ? null : { text: copy('noPhone') } },
-    { way: 'instagram', to: handle, via: null, blocked: handle ? null : { text: copy('noHandle') } },
+    ...(target.handoffs ? handoffs : []),
   ];
   const firstOpen = options.find((o) => !o.blocked)?.way ?? null;
   const [picked, setPicked] = useState<Way | null>(null);
@@ -123,6 +202,22 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
   const chosen = options.find((o) => o.way === way) ?? null;
   const [subject, setSubject] = useState('');
   const [text, setText] = useState('');
+  // Once the person writes in a field, no draft replaces what they wrote.
+  const [touched, setTouched] = useState(false);
+  const drafted = useQuery({
+    queryKey: ['message-draft', target.draftId, way],
+    queryFn: () => target.draft!(way!),
+    enabled: !!target.draft && !!way && !touched,
+    staleTime: Infinity,
+    gcTime: 10 * 60_000,
+    retry: false,
+  });
+  useEffect(() => {
+    if (touched || !drafted.isSuccess) return;
+    setText(drafted.data?.body ?? '');
+    setSubject(way === 'email' ? drafted.data?.subject ?? '' : '');
+  }, [drafted.isSuccess, drafted.data, touched, way]);
+  const drafting = !touched && drafted.isFetching;
   // The chat a hand-off could not open itself (a blocked pop-up): offered as a link.
   const [fallback, setFallback] = useState<{ way: Way; url: string } | null>(null);
 
@@ -130,15 +225,7 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
     mutationFn: async ({ tab }: { tab: Window | null }): Promise<{ kind: 'sent'; state: string } | { kind: 'handoff'; opened: boolean; url: string }> => {
       if (!chosen?.to || !way) throw new Error('no way chosen');
       try {
-        let promoted = p.promoted ? { person_id: p.promoted.person_id, journey_id: p.promoted.journey_id } : null;
-        if (!promoted) {
-          // A person who writes to a new prospect has judged it worth contacting.
-          if (p.status === 'new') await decideProspect(p.id, { decision: 'qualify', expected_revision: p.revision });
-          const out = await promoteProspects({ prospect_ids: [p.id], request_key: promoteKey.keyFor({ id: p.id }) });
-          const outcome = out.items[0];
-          if (!outcome || outcome.outcome === 'refused') throw new Error(outcome ? promoteOutcomeText(t, outcome) : t('leads.promoteRefused.other'));
-          promoted = { person_id: outcome.person_id, journey_id: outcome.journey_id };
-        }
+        const promoted = await target.contact();
         const body = text.trim();
         const channel = DIRECT[way];
         if (channel) {
@@ -146,7 +233,7 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
             channel,
             text: body,
             intent: 'commercial',
-            request_key: sendKey.keyFor({ id: p.id, way, subject, body }),
+            request_key: sendKey.keyFor({ id: target.draftId, way, subject, body }),
             ...(way === 'email' ? { subject: subject.trim() } : {}),
           });
           return { kind: 'sent', state: out.state };
@@ -166,9 +253,9 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
       }
     },
     onSuccess: async (result) => {
-      promoteKey.reset();
+      onSent?.();
       sendKey.reset();
-      await refresh();
+      await target.refresh();
       if (result.kind === 'sent') {
         toast.success(result.state === 'sent' ? copy('sent') : result.state === 'queued' ? copy('queued') : result.state === 'held' ? copy('held') : copy('sendState', { state: result.state }));
         onClose();
@@ -180,7 +267,7 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
       }
     },
     // A refused qualification or promotion may still have changed the prospect: read it again.
-    onError: () => void refresh(),
+    onError: () => void target.refresh(),
   });
 
   const isHandoff = way === 'whatsapp' || way === 'instagram';
@@ -198,8 +285,8 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
     <Dialog open onOpenChange={(open) => !open && !send.isPending && onClose()}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{copy('msgTitle', { name: p.business_name })}</DialogTitle>
-          <DialogDescription>{[p.sector, [p.district, p.city].filter(Boolean).join(', ')].filter(Boolean).join(' · ') || ' '}</DialogDescription>
+          <DialogTitle>{target.title}</DialogTitle>
+          <DialogDescription>{target.description}</DialogDescription>
         </DialogHeader>
         {fallback ? (
           <div className="flex flex-col gap-3">
@@ -248,9 +335,7 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
                             {option.blocked.fix && (
                               <>
                                 {' · '}
-                                <Link to={option.blocked.fix.to} className="font-medium text-primary hover:underline">
-                                  {option.blocked.fix.label}
-                                </Link>
+                                <FixAction fix={option.blocked.fix} open={step} onStep={setStep} />
                               </>
                             )}
                           </>
@@ -267,27 +352,74 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
                 );
               })}
             </fieldset>
-            {!firstOpen && capabilities.data && <Callout tone="warning">{copy('noWay')}</Callout>}
+            {step && settings.data && (
+              <div className="rounded-lg border border-border bg-surface-muted/40 p-3">
+                {step.kind === 'identity' ? (
+                  <>
+                    <p className="mb-2 text-sm text-muted-foreground">{copy('identityStep')}</p>
+                    <SenderForm
+                      missingOnly
+                      settings={settings.data}
+                      onSaved={() => {
+                        setStep(null);
+                        setPicked('email');
+                      }}
+                    />
+                  </>
+                ) : (
+                  <BasisStep
+                    settings={settings.data}
+                    channel={step.channel}
+                    onSaved={() => {
+                      setStep(null);
+                      send.reset();
+                    }}
+                  />
+                )}
+              </div>
+            )}
+            {!firstOpen && capabilities.data && !step && <Callout tone="warning">{target.noWay}</Callout>}
             {way === 'email' && (
               <label className="flex flex-col gap-1 text-sm font-medium">
                 {copy('subject')}
-                <Input value={subject} maxLength={200} autoComplete="off" onChange={(e) => setSubject(e.target.value)} />
+                <Input
+                  value={subject}
+                  maxLength={200}
+                  autoComplete="off"
+                  placeholder={drafting ? copy('drafting') : undefined}
+                  onChange={(e) => {
+                    setTouched(true);
+                    setSubject(e.target.value);
+                  }}
+                />
               </label>
             )}
             <div className="flex flex-col gap-1">
               <label className="flex flex-col gap-1 text-sm font-medium">
                 {copy('message')}
-                <Textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} />
+                <Textarea
+                  rows={5}
+                  value={text}
+                  aria-busy={drafting}
+                  placeholder={drafting ? copy('drafting') : undefined}
+                  onChange={(e) => {
+                    setTouched(true);
+                    setText(e.target.value);
+                  }}
+                />
               </label>
               <span className="self-end text-xs text-muted-foreground">{copy('chars', { n: [...text].length })}</span>
             </div>
-            <p className="text-xs text-muted-foreground">{copy('afterSend')}</p>
+            {target.afterSend && <p className="text-xs text-muted-foreground">{target.afterSend}</p>}
             {isNoPermission(send.error) ? (
               <Callout tone="warning">
-                {copy('noPermission')}{' '}
-                <Link to="/outreach/settings" className="font-medium text-primary hover:underline">
-                  {copy('openBasis')}
-                </Link>
+                {target.basisApplies ? copy('noPermission') : copy('noConsent')}
+                {target.basisApplies && !step && way && DIRECT[way] && (
+                  <>
+                    {' · '}
+                    {basisFix(DIRECT[way]!) ? <FixAction fix={basisFix(DIRECT[way]!)!} open={step} onStep={setStep} /> : copy('ownerOnly')}
+                  </>
+                )}
               </Callout>
             ) : isApiError(send.error) ? (
               <ErrorCallout error={send.error} />
@@ -306,5 +438,21 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A closed way's remedy: a link to a page, or a button opening its step in the dialog. */
+function FixAction({ fix, open, onStep }: { fix: Fix; open: Step | null; onStep: (step: Step | null) => void }) {
+  if ('to' in fix)
+    return (
+      <Link to={fix.to} className="font-medium text-primary hover:underline">
+        {fix.label}
+      </Link>
+    );
+  const shown = !!open && sameStep(open, fix.step);
+  return (
+    <button type="button" className="font-medium text-primary hover:underline" aria-expanded={shown} onClick={() => onStep(shown ? null : fix.step)}>
+      {fix.label}
+    </button>
   );
 }

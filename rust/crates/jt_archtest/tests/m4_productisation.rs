@@ -25,7 +25,7 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 131] = [
+const POST_M4_ADDED: [(&str, &str); 133] = [
     ("modules.list", "jeeta.modules.list"),
     ("modules.install", "jeeta.modules.install"),
     ("modules.update", "jeeta.modules.update"),
@@ -199,6 +199,9 @@ const POST_M4_ADDED: [(&str, &str); 131] = [
     ("outreach.report", "jeeta.outreach.report"),
     ("outreach.settings_get", "jeeta.outreach.settings_get"),
     ("outreach.settings_set", "jeeta.outreach.settings_set"),
+    // The email facts from the inbox side (owner report 2026-11-21).
+    ("inbox.email_settings_get", "jeeta.inbox.email_settings_get"),
+    ("inbox.email_settings_set", "jeeta.inbox.email_settings_set"),
     // Content creation (design 2026-11-10 §6): an agent's hold on a production area and its
     // checked delivery.
     ("content.area_claim", "jeeta.content.area_claim"),
@@ -258,7 +261,9 @@ const POST_M4_REMOVED: [(&str, &str); 5] = [
     ("studio.policy_set", "jeeta.studio.policy_set"),
 ];
 
-const POST_M4_PANEL_ONLY: [&str; 57] = [
+const POST_M4_PANEL_ONLY: [&str; 58] = [
+    // The first-message draft (owner request 2026-11-21).
+    "prospects.message_draft",
     "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",

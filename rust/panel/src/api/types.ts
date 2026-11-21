@@ -1110,6 +1110,8 @@ export interface InboxPerson {
   first_touch: { source: InboxSource; capability_id: Uuid | null; at: Rfc3339 };
   merged_into: Uuid | null;
   erased_at: Rfc3339 | null;
+  /** Whom a commercial message reaches (`jt_inbox::RecipientKind`); missing reads as unknown. */
+  recipient_kind?: RecipientKind;
   created_at: Rfc3339;
   updated_at: Rfc3339;
 }
@@ -2537,6 +2539,33 @@ export type OutreachSettingsOut = OutreachPolicy & {
   platform_enabled: boolean;
   b2b_channels_in_force: ContactChannel[];
 };
+
+/**
+ * `jt_app::usecases::inbox::email_settings::EmailSettingsOut` (`GET /api/inbox/email-settings`):
+ * what every commercial email needs (the sender identity of its footer, the business-recipient
+ * basis), the same stored facts the campaigns read, without the campaigns module.
+ */
+export interface EmailSettingsOut {
+  sender_company: string;
+  sender_address: string;
+  privacy_notice_url: string;
+  b2b_basis: ContactChannel[];
+  require_iys_lookup: boolean;
+  legal_ack: LegalAck | null;
+  sender_identity_complete: boolean;
+  platform_enabled: boolean;
+  b2b_channels_in_force: ContactChannel[];
+}
+
+/** `EmailSettingsInput` (`PUT /api/inbox/email-settings`): the keys to change. */
+export interface EmailSettingsInput {
+  sender_company?: string;
+  sender_address?: string;
+  privacy_notice_url?: string;
+  b2b_basis?: ContactChannel[];
+  require_iys_lookup?: boolean;
+  legal_ack?: { counsel_confirmed: boolean; note: string };
+}
 
 /** `jt_app::usecases::outreach::SettingsInput`: the keys to change. */
 export interface OutreachSettingsInput {

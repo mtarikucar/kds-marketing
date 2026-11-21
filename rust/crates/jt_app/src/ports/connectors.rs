@@ -2066,6 +2066,12 @@ pub trait ConnectorRegistry: Send + Sync {
     fn shop(&self) -> Option<Arc<dyn super::shop::ShopClient>> {
         None
     }
+    /// The model the first-message drafts ask (`usecases::prospects::draft`); `None`, the
+    /// default, when the platform has none configured: no draft is made and the message field
+    /// stays empty.
+    fn draft_model(&self) -> Option<Arc<dyn super::draft_model::DraftModel>> {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -138,7 +138,8 @@ describe('the panel', () => {
     const p = await panel();
     expect(await within(p).findByRole('heading', { name: 'Çarkta bir kupanın doğuşu' })).toBeInTheDocument();
     expect(within(p).getByText(P.waits.posting_screen.status)).toBeInTheDocument();
-    expect(within(p).getByTestId('wait-sentence')).toHaveTextContent(P.waits.posting_screen.sentence);
+    // It says what is asked (his approval on TikTok's screen) and when it then goes out by itself.
+    expect(within(p).getByTestId('wait-sentence')).toHaveTextContent(/^Bu paylaşımı TikTok ekranında onaylaman gerekiyor\. Onaylarsan kendiliğinden paylaşılır: .+ \d\d:\d\d\.$/);
     expect(await within(p).findByText(/Atölyemizde elde şekillendirildi/)).toBeInTheDocument();
     expect(within(p).getByText('TikTok · alfaatolye')).toBeInTheDocument();
     expect(within(p).getByText('Video · 8 sn')).toBeInTheDocument();
@@ -351,6 +352,21 @@ describe('every wait, its sentence and its action', () => {
     await waitFor(() => expect(sent(calls, 'POST', '/api/studio/slots/w1/material-check/release')?.body).toEqual({ expected_revision: 4, digest: 'd'.repeat(64) }));
   });
 
+  it('a TikTok post approved on its screen is planned: no TikTok wait, no button', async () => {
+    const approved = postRow('slot:s-tiktok', {
+      title: 'Çarkta bir kupanın doğuşu',
+      channel: TIKTOK,
+      status: 'scheduled',
+      waits: [],
+      actions: { cancel: { kind: 'post', slot_id: 's-tiktok', expected_revision: 3 } },
+    });
+    open('/posts?slot=s-tiktok', postsOut({ rows: [approved] }));
+    const p = await panel();
+    expect(await within(p).findByText(P.status.scheduled)).toBeInTheDocument();
+    expect(within(p).queryByTestId('wait-sentence')).not.toBeInTheDocument();
+    expect(within(p).queryByRole('button', { name: P.actions.tiktok })).not.toBeInTheDocument();
+  });
+
   it('opens the TikTok screen over the page', async () => {
     const user = userEvent.setup();
     const { router } = open('/posts?slot=s-tiktok', postsOut(), { 'GET /api/studio/pending': { slots: [], approvals: [], budget_moves: [], blockers: [], paid_alerts: [] } });
@@ -531,7 +547,7 @@ describe('the composer', () => {
     expect(within(region).queryByText(/Onayına gelir/)).not.toBeInTheDocument();
     const input = within(region).getByLabelText(P.composer.label);
     await user.click(input);
-    expect(within(region).getByText('Onayına gelir · TikTok\'u sen tamamlarsın')).toBeInTheDocument();
+    expect(within(region).getByText('Onayına gelir · TikTok\'ta her paylaşımı sen onaylarsın')).toBeInTheDocument();
     await user.type(input, 'Yeni kupalar, sadece LinkedIn ve instada');
     expect(within(region).getByText('LinkedIn hesabın bağlı değil; bu istek oraya çıkamaz.')).toBeInTheDocument();
     expect(within(region).queryByText(/^Instagram hesabın/)).not.toBeInTheDocument();

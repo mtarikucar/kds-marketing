@@ -175,6 +175,8 @@ pub const ROUTES: &[(&str, &str)] = &[
         "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}",
     ),
     ("POST", "/api/inbox/people/{person_id}/send"),
+    ("GET", "/api/inbox/email-settings"),
+    ("PUT", "/api/inbox/email-settings"),
     ("POST", "/api/inbox/journeys/{journey_id}/quotes"),
     ("POST", "/api/inbox/quotes/{id}/accept"),
     ("GET", "/api/inbox/journeys/{journey_id}/quotes"),
@@ -349,6 +351,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/prospects/{prospect_id}"),
     ("POST", "/api/prospects/{prospect_id}/scores"),
     ("POST", "/api/prospects/{prospect_id}/decision"),
+    ("POST", "/api/prospects/{prospect_id}/draft"),
     ("POST", "/api/prospects/do-not-contact"),
     ("POST", "/api/prospects/do-not-contact/lift"),
     ("POST", "/api/prospects/{prospect_id}/erase"),
@@ -1066,6 +1069,18 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/inbox/people/{person_id}/send",
             "inbox.send",
             inbox::send,
+        ),
+        api_route(
+            "GET",
+            "/inbox/email-settings",
+            "inbox.email_settings_get",
+            inbox::email_settings_get,
+        ),
+        api_route(
+            "PUT",
+            "/inbox/email-settings",
+            "inbox.email_settings_set",
+            inbox::email_settings_set,
         ),
         api_route(
             "POST",
@@ -1870,6 +1885,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/prospects/{prospect_id}/decision",
             "prospects.decide",
             prospects::decide,
+        ),
+        api_route(
+            "POST",
+            "/prospects/{prospect_id}/draft",
+            "prospects.message_draft",
+            prospects::message_draft,
         ),
         api_route(
             "POST",

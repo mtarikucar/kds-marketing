@@ -16,6 +16,7 @@ import { InboxErasure } from './InboxErasure';
 import { InboxConversation } from './InboxConversation';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
 import { Deadline, conversationClass, journeyClass, useInboxKey } from './InboxShared';
+import { PersonMessage } from './inbox/PersonMessage';
 
 /** The surface badge of a row (spec §9): a direct message, a comment, relayed mail. */
 function surfaceKey(row: InboxConversationRow): 'private' | 'comment' | 'relay' {
@@ -277,6 +278,7 @@ export function InboxPage() {
                 </div>
               ) : <p className="text-sm text-muted-foreground">{t('inbox.choose')}</p>}
               {selectedPerson.data && !selectedPerson.data.person.erased_at && !selectedPerson.data.person.merged_into && <>
+                <PersonMessage key={`message:${selectedPerson.data.person.id}`} data={selectedPerson.data} />
                 <Disclosure key={selectedPerson.data.person.id} title={t('inbox.compliance.title')}><InboxCompliance personId={selectedPerson.data.person.id} /></Disclosure>
               </>}
               {personId && (

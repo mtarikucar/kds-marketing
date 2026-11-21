@@ -394,6 +394,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.suppressions.add", Exempt, "jeeta.inbox.suppressions_add", ("POST", "/api/inbox/people/{person_id}/suppressions"), Write),
     twin("inbox.suppressions.remove", Exempt, "jeeta.inbox.suppressions_remove", ("DELETE", "/api/inbox/people/{person_id}/suppressions/{channel}/{reason}"), Write),
     twin("inbox.send", GateMode::Gated, "jeeta.inbox.send", ("POST", "/api/inbox/people/{person_id}/send"), Write),
+    // The email facts a one-to-one email needs (sender identity, the business basis): the same
+    // store the campaigns read, without the campaigns module or an outreach permission.
+    twin("inbox.email_settings_get", Exempt, "jeeta.inbox.email_settings_get", ("GET", "/api/inbox/email-settings"), Read),
+    twin("inbox.email_settings_set", Exempt, "jeeta.inbox.email_settings_set", ("PUT", "/api/inbox/email-settings"), Write),
     twin("inbox.quotes.send", Exempt, "jeeta.inbox.quotes_send", ("POST", "/api/inbox/journeys/{journey_id}/quotes"), Write),
     twin("inbox.quotes.accept", Exempt, "jeeta.inbox.quotes_accept", ("POST", "/api/inbox/quotes/{id}/accept"), Write),
     twin("inbox.quotes.list", Exempt, "jeeta.inbox.quotes_list", ("GET", "/api/inbox/journeys/{journey_id}/quotes"), Read),
@@ -584,6 +588,8 @@ pub static CATALOG: &[UseCase] = &[
     twin("prospects.settings_set", GateMode::Gated, "jeeta.prospects.settings_set", ("PUT", "/api/prospects/settings"), Write),
     twin("prospects.promote", GateMode::Gated, "jeeta.prospects.promote", ("POST", "/api/prospects/promote"), Write),
     twin("prospects.report", GateMode::Gated, "jeeta.prospects.report", ("GET", "/api/prospects/report"), Read),
+    // A draft of the first message, for the person who sends it (panel only: an agent writes its own).
+    panel_only("prospects.message_draft", GateMode::Gated, ("POST", "/api/prospects/{prospect_id}/draft"), Write),
     // Research tasks (leads spec §3.7): the briefs agents fill the pool from, for `prospects.work`.
     twin("research.tasks_list", GateMode::Gated, "jeeta.research.tasks_list", ("GET", "/api/research/tasks"), Read),
     twin("research.tasks_get", GateMode::Gated, "jeeta.research.tasks_get", ("GET", "/api/research/tasks/{task_id}"), Read),

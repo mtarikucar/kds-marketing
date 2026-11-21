@@ -210,7 +210,7 @@
     "change": "Change",
     "trend": "{{metric}} trend",
     "totals": "Period totals",
-    "finishTiktok": "Finish your TikTok post",
+    "finishTiktok": "Approve your TikTok post",
     "approved": "Approved. It goes out at its time.",
     "approvalHelp": "This account's connection has “every action waits for a person's approval” switched on. Once you approve, the post goes out at its time; the setting is under Connections.",
     "noUpcoming": "No posts scheduled.",
@@ -2205,15 +2205,13 @@
       "declarationBranded": "By posting, you agree to TikTok's <branded>Branded Content Policy</branded> and <music>Music Usage Confirmation</music>.",
       "post": "Post to TikTok",
       "posting": "Posting…",
-      "processing": "After it is published, it may take a few minutes for the post to be processed and appear on the TikTok profile.",
-      "approved": "Posted from this screen: it is sent to TikTok at {{time}}, or right away once that time has passed.",
+      "approved": "Approved: it posts on TikTok by itself at {{time}}. Nothing more is needed from you.",
       "status": {
-        "waiting": "Post status: waiting for its scheduled time",
-        "due": "Post status: its scheduled time has passed; it is being sent to TikTok…",
-        "sending": "Post status: sending to TikTok…",
-        "processing": "Post status: TikTok is processing the post…",
-        "published": "Post status: published on TikTok",
-        "failed": "Post status: not published ({{reason}})"
+        "due": "Approved. Its time has passed, so it is being sent to TikTok now…",
+        "sending": "Sending to TikTok…",
+        "processing": "TikTok is processing the post; it may take a few minutes to show on the profile.",
+        "published": "Live on TikTok",
+        "failed": "Not posted ({{reason}})"
       },
       "viewPost": "View the post on TikTok",
       "refused": {
@@ -2257,13 +2255,12 @@
       "draftHelp": "TikTok will send a notification to your TikTok inbox: open it to finish editing and post. Who can view the post, comments, Duet, Stitch and the commercial content disclosure are chosen there.",
       "draftNoCaption": "A video draft takes no caption: you write it in TikTok when you finish the post.",
       "sendDraft": "Send to TikTok drafts",
-      "draftSent": "Sent: once TikTok has processed it, a notification in your TikTok inbox lets you finish editing and post it.",
-      "approvedDraft": "Approved on this screen: it is sent to your TikTok drafts at {{time}}, or right away once that time has passed.",
+      "approvedDraft": "Approved: it goes to your TikTok drafts by itself at {{time}}. Then you open TikTok's notification and post it there.",
       "draftStatus": {
-        "due": "Post status: its scheduled time has passed; it is being sent to your TikTok drafts…",
-        "sending": "Post status: sending to your TikTok drafts…",
-        "processing": "Post status: TikTok is processing the draft…",
-        "sent": "Post status: sent to your TikTok drafts"
+        "due": "Approved. Its time has passed, so it is being sent to your TikTok drafts now…",
+        "sending": "Sending to your TikTok drafts…",
+        "processing": "TikTok is processing the draft; when it is done, you post it from TikTok's notification.",
+        "sent": "Sent to your TikTok drafts; open TikTok's notification to post it."
       },
       "sentToDrafts": "Sent to your TikTok drafts: open the notification in your TikTok inbox to finish editing and post it. A draft has no counters.",
       "noCover": "No preview"
@@ -3144,7 +3141,6 @@
       "title": "Campaigns",
       "description": "Plain-text email campaigns and their steps, sent from your own mailbox.",
       "templatesLink": "Templates",
-      "settingsLink": "Email settings",
       "newCampaign": "New campaign",
       "statusFilter": "Status",
       "columns": {
@@ -3684,8 +3680,7 @@
     },
     "settings": {
       "title": "Email settings",
-      "description": "Campaigns' sender details, approval, warm-up and frequency limits.",
-      "descriptionEmail": "The sender details added under your emails, and the permission for first messages to businesses.",
+      "description": "Campaigns' approval, warm-up and frequency limits.",
       "general": "General settings",
       "readOnly": "Only managers can change these settings.",
       "identity": "Sender details (the footer of every email)",
@@ -3715,7 +3710,8 @@
         "note": "Note on the confirmation (who, when, what)",
         "notInForce": "The basis is recorded, but it is not in force while cold sending is off on the platform.",
         "save": "Save the basis"
-      }
+      },
+      "campaignTitle": "Campaign settings"
     },
     "filteredEmpty": {
       "title": "No matching results",
@@ -4376,7 +4372,7 @@
     "media_missing_video": "{{platform}} takes only video; this content has no video.",
     "media_missing": "This content has no file {{platform}} takes ({{format}}).",
     "only_format_video": "{{platform}} takes only video.",
-    "posting_screen": "You finish every {{platform}} post on the {{platform}} screen before it goes out.",
+    "posting_screen": "You approve every {{platform}} post on the {{platform}} screen before it goes out.",
     "approval": "Every post waits for your approval before it goes out.",
     "lead": "A {{format}} is planned {{hours}} hours ahead at the earliest.",
     "act": {
@@ -4477,7 +4473,7 @@
       "approvalAll": "Every post waits for your approval before it goes out.",
       "approvalNone": "Posts go out on time without waiting for approval.",
       "approvalExcept": "Posts go out without waiting for approval, except on {{accounts}}.",
-      "tiktok": "You finish TikTok yourself.",
+      "tiktok": "You approve every TikTok post yourself.",
       "stopped": "{{n}} ad campaigns stopped as they reached the new limit.",
       "autoReplyOn": "Automatic replies to messages: {{channels}} · {{min}}–{{max}}.",
       "autoReplyWaiting": "Automatic replies to messages start once the “Standart iş ve fiyat” card is filled in.",
@@ -4655,7 +4651,7 @@
       },
       "advice": {
         "approval": "It comes to you for approval",
-        "posting_screen": "You finish TikTok yourself",
+        "posting_screen": "You approve every TikTok post yourself",
         "video_only": "Your accounts take only video; without a video the agent makes one from an image"
       }
     },
@@ -4666,7 +4662,7 @@
       "connectAgent": "Connect an agent",
       "addAddress": "Add a wake address",
       "approve": "Approve",
-      "tiktok": "Finish on TikTok",
+      "tiktok": "Approve on TikTok's screen",
       "redo": "Ask for changes",
       "retry": "Prepare again",
       "cancel": "Cancel",
@@ -4777,8 +4773,9 @@
         "sentence": "It waits for your approval before it goes out."
       },
       "posting_screen": {
-        "status": "To finish on TikTok",
-        "sentence": "You finish TikTok's posting screen yourself."
+        "status": "Waiting for your TikTok approval",
+        "sentence": "Approve this post on TikTok's screen. Once approved, it posts by itself: {{at}}.",
+        "sentenceNow": "Approve this post on TikTok's screen. Its time has passed; once approved, it posts right away."
       },
       "capture": {
         "status": "Waiting for a photo",
@@ -4947,7 +4944,7 @@
       "switch": "Posting on",
       "approval": "Posts on this account come to me for approval",
       "rulesAll": "Every post comes to you for approval (Rules)",
-      "tiktok": "Every post waits for TikTok's screen",
+      "tiktok": "You approve every post on TikTok's screen",
       "replies": "Comment replies come to you for approval",
       "change": "Change",
       "numbers": "Numbers",
@@ -4966,5 +4963,11 @@
       "brake": "Stop all posting",
       "brakeHelp": "While it is on nothing goes out; switching it off lets the agent give the waiting posts a time again."
     }
+  },
+  "email": {
+    "title": "Email settings",
+    "description": "The sender details added under your emails, and the permission for first messages to businesses.",
+    "platformOff": "First messages to businesses without consent are off on this server; you can write to people who consented.",
+    "senderLink": "Sender details and first-message permission: Email settings"
   }
 }

@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
-import { mockFetch, renderAt, withStatus } from '@/test/render';
-import { LOADED, agentsList, leadsMe, outreachSettings, prospectId, prospectOut, team } from '@/test/leads';
+import { delayed, mockFetch, renderAt, withStatus } from '@/test/render';
+import { LOADED, agentsList, leadsManager, leadsMe, outreachSettings, prospectId, prospectOut, team } from '@/test/leads';
 import { legacyModules } from '@/test/modules';
 import { handoffUrl } from './MessageDialog';
 
@@ -26,10 +26,12 @@ function answers(extra: Record<string, unknown> = {}) {
     'GET /api/research/tasks': { items: [], next: null },
     [`GET /api/prospects/${ID}`]: prospectOut(1),
     'GET /api/capabilities': [live('mailbox', 'Satış posta kutusu'), live('sms_line', 'SMS hattı')],
-    'GET /api/outreach/settings': open,
+    'GET /api/inbox/email-settings': open,
     'POST /api/prospects/promote': promoted,
     'POST /api/inbox/people/person-1/send': { message_id: 'm-1', state: 'sent' },
     'POST /api/inbox/journeys/journey-1/notes': { id: 'n-1' },
+    // No model on the server: no draft, the field stays empty (as before drafts).
+    [`POST /api/prospects/${ID}/draft`]: { draft: null, reason: 'no_model' },
     ...extra,
   };
 }
@@ -88,7 +90,7 @@ describe('MessageDialog', () => {
     await user.click(dialog.getByRole('button', { name: 'Gönder' }));
     await waitFor(() => expect(posts(calls, '/api/inbox/people/person-1/send')).toHaveLength(1));
     expect(posts(calls, `/api/prospects/${ID}/decision`)[0].body).toEqual({ decision: 'qualify', expected_revision: 3 });
-    const order = calls.filter((c) => c.method === 'POST').map((c) => c.path);
+    const order = calls.filter((c) => c.method === 'POST' && !c.path.endsWith('/draft')).map((c) => c.path);
     expect(order).toEqual([`/api/prospects/${ID}/decision`, '/api/prospects/promote', '/api/inbox/people/person-1/send']);
     const body = posts(calls, '/api/inbox/people/person-1/send')[0].body as Record<string, unknown>;
     expect(body).toMatchObject({ channel: 'sms', text: 'Merhaba', intent: 'commercial' });
@@ -129,12 +131,14 @@ describe('MessageDialog', () => {
   it('says why a channel is closed and where it is opened, and falls to the first open one', async () => {
     const { dialog } = await openDialogWith({
       'GET /api/capabilities': [live('mailbox', 'Satış posta kutusu')],
-      'GET /api/outreach/settings': { ...outreachSettings, b2b_basis: [], b2b_channels_in_force: [] },
+      'GET /api/inbox/email-settings': { ...outreachSettings, b2b_basis: [], b2b_channels_in_force: [] },
     });
     const row = (name: string) => within(dialog.getByRole('radio', { name }).closest('label')!);
     await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeDisabled());
     expect(row('E-posta').getByText(/Bu kanalda işletmelere ilk mesaj izni kapalı/)).toBeInTheDocument();
-    expect(row('E-posta').getByRole('link', { name: 'İzni aç' })).toHaveAttribute('href', '/outreach/settings');
+    // The permission is opened here, in the dialog, not on another page.
+    expect(row('E-posta').queryByRole('link', { name: 'İzni aç' })).not.toBeInTheDocument();
+    expect(row('E-posta').getByRole('button', { name: 'İzni aç' })).toBeInTheDocument();
     expect(dialog.getByRole('radio', { name: 'SMS' })).toBeDisabled();
     expect(row('SMS').getByText(/Bağlı ve doğrulanmış SMS hattı yok/)).toBeInTheDocument();
     expect(row('SMS').getByRole('link', { name: 'Kanal bağla' })).toHaveAttribute('href', '/connect');
@@ -217,49 +221,157 @@ async function openDialogWith(extra: Record<string, unknown>) {
   return { user, calls, dialog };
 }
 
-/** The workspace's modules with Kampanyalar (`outreach`) not installed: email needs only a mailbox. */
-const withoutCampaigns = {
+/** The workspace's modules with Kampanyalar (`outreach`) installed or not. */
+const modulesWith = (campaigns: boolean) => ({
   ...legacyModules,
-  modules: legacyModules.modules.map((m) => ({ ...m, installed: m.blueprint.id !== 'outreach' })),
-};
+  modules: legacyModules.modules.map((m) => ({ ...m, installed: m.blueprint.id !== 'outreach' || campaigns })),
+});
 
-describe('MessageDialog without the campaigns module', () => {
-  it('sends a first email with only a mailbox connected', async () => {
-    const { user, calls, dialog } = await openDialog({ 'GET /api/workspace/modules': withoutCampaigns });
-    expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeChecked();
-    await user.type(dialog.getByRole('textbox', { name: 'Konu' }), 'Tanışma');
-    await user.type(dialog.getByRole('textbox', { name: 'Mesaj' }), 'Merhaba');
-    await user.click(dialog.getByRole('button', { name: 'Gönder' }));
-    await waitFor(() => expect(posts(calls, '/api/inbox/people/person-1/send')).toHaveLength(1));
-    expect(posts(calls, '/api/inbox/people/person-1/send')[0].body).toMatchObject({ channel: 'email', intent: 'commercial', subject: 'Tanışma' });
-    // Nothing of the campaigns is asked for.
-    expect(calls.some((c) => c.path.startsWith('/api/outreach/campaigns'))).toBe(false);
-  });
+describe('MessageDialog: what an email lacks is filled in where it is written', () => {
+  for (const campaigns of [true, false]) {
+    it(`completes the missing sender details in place and sends (campaigns module ${campaigns ? 'installed' : 'removed'})`, async () => {
+      const user = userEvent.setup();
+      const incomplete = { ...open, sender_address: '', privacy_notice_url: '', sender_identity_complete: false };
+      const calls = mockFetch(answers({
+        'GET /api/workspace/modules': modulesWith(campaigns),
+        'GET /api/inbox/email-settings': incomplete,
+        'PUT /api/inbox/email-settings': open,
+      }));
+      renderAt(`/prospects/${ID}`);
+      await user.click(await screen.findByRole('button', { name: 'Mesaj gönder' }, LOADED));
+      const dialog = within(await screen.findByRole('dialog'));
+      await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeDisabled());
+      const row = within(dialog.getByRole('radio', { name: 'E-posta' }).closest('label')!);
+      expect(row.getByText(/Gönderen bilgileri eksik/)).toBeInTheDocument();
+      // No way out of the dialog: a button, not a link.
+      expect(dialog.queryAllByRole('link').filter((a) => a.getAttribute('href')?.startsWith('/outreach'))).toHaveLength(0);
+      await user.click(row.getByRole('button', { name: 'Tamamla' }));
+      const step = within(dialog.getByRole('group', { name: tr.leads.settings.identity }));
+      // Only what is missing is asked for.
+      expect(step.queryByRole('textbox', { name: tr.leads.settings.company })).not.toBeInTheDocument();
+      await user.type(step.getByRole('textbox', { name: tr.leads.settings.address }), 'Örnek Mah. 1, İzmir');
+      await user.type(step.getByRole('textbox', { name: tr.leads.settings.privacy }), 'https://alfa.example.invalid/kvkk');
+      await user.click(step.getByRole('button', { name: tr.common.save }));
+      await waitFor(() => expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
+        sender_address: 'Örnek Mah. 1, İzmir',
+        privacy_notice_url: 'https://alfa.example.invalid/kvkk',
+      }));
+      expect(calls.find((c) => c.method === 'PUT')?.path).toBe('/api/inbox/email-settings');
+      // The email can be written at once, in the same dialog.
+      await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeChecked());
+      await user.type(dialog.getByRole('textbox', { name: 'Konu' }), 'Tanışma');
+      await user.type(dialog.getByRole('textbox', { name: 'Mesaj' }), 'Merhaba');
+      await user.click(dialog.getByRole('button', { name: 'Gönder' }));
+      await waitFor(() => expect(posts(calls, '/api/inbox/people/person-1/send')).toHaveLength(1));
+      expect(calls.some((c) => c.path.startsWith('/api/outreach'))).toBe(false);
+    });
+  }
 
-  it('a missing sender identity still closes email, and its link opens a page where it can be filled in', async () => {
+  it('the owner opens the first-message permission in place, with the lawyer confirmation', async () => {
     const user = userEvent.setup();
-    const incomplete = { ...open, sender_company: '', sender_identity_complete: false };
+    const closed = { ...open, b2b_basis: [], b2b_channels_in_force: [] };
     const calls = mockFetch(answers({
-      'GET /api/workspace/modules': withoutCampaigns,
-      'GET /api/outreach/settings': incomplete,
-      'PUT /api/outreach/settings': open,
+      'GET /api/capabilities': [live('mailbox', 'Satış posta kutusu')],
+      'GET /api/inbox/email-settings': closed,
+      'PUT /api/inbox/email-settings': { ...open, b2b_basis: ['email'], b2b_channels_in_force: ['email'] },
     }));
     renderAt(`/prospects/${ID}`);
     await user.click(await screen.findByRole('button', { name: 'Mesaj gönder' }, LOADED));
     const dialog = within(await screen.findByRole('dialog'));
     await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeDisabled());
-    const row = within(dialog.getByRole('radio', { name: 'E-posta' }).closest('label')!);
-    expect(row.getByText(/Gönderen kimliği eksik/)).toBeInTheDocument();
-    await user.click(row.getByRole('link', { name: 'Tamamla' }));
-    // The page opens: not the "install the module" screen.
-    const form = within(await screen.findByRole('form', { name: tr.leads.settings.general }, LOADED));
-    expect(screen.queryByText('Bu modül çalışma alanına eklenmemiş')).not.toBeInTheDocument();
-    await user.type(form.getByRole('textbox', { name: tr.leads.settings.company }), 'Alfa Atölye');
-    await user.click(form.getByRole('button', { name: tr.common.save }));
+    await user.click(within(dialog.getByRole('radio', { name: 'E-posta' }).closest('label')!).getByRole('button', { name: 'İzni aç' }));
+    const step = within(dialog.getByRole('group', { name: tr.leads.settings.b2b.title }));
+    expect(step.getByText(tr.leads.settings.b2b.legal)).toBeInTheDocument();
+    const save = step.getByRole('button', { name: tr.leads.settings.b2b.save });
+    // The lawyer's confirmation and its note, exactly as on the full form.
+    expect(save).toBeDisabled();
+    await user.click(step.getByRole('checkbox', { name: tr.leads.settings.b2b.counsel }));
+    expect(save).toBeDisabled();
+    await user.type(step.getByRole('textbox', { name: tr.leads.settings.b2b.note }), 'Avukat teyidi');
+    await user.click(save);
     await waitFor(() => expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
-      sender_company: 'Alfa Atölye',
-      sender_address: open.sender_address,
-      privacy_notice_url: open.privacy_notice_url,
+      b2b_basis: ['email'],
+      legal_ack: { counsel_confirmed: true, note: 'Avukat teyidi' },
     }));
+    await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeEnabled());
+  });
+
+  it('someone who is not the owner is told who opens the permission, with nowhere to go', async () => {
+    const { dialog } = await openDialogWith({
+      'GET /api/auth/me': leadsManager,
+      'GET /api/capabilities': [live('mailbox', 'Satış posta kutusu')],
+      'GET /api/inbox/email-settings': { ...open, b2b_basis: [], b2b_channels_in_force: [] },
+    });
+    await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeDisabled());
+    const row = within(dialog.getByRole('radio', { name: 'E-posta' }).closest('label')!);
+    expect(row.getByText(/İzni hesap sahibi açar/)).toBeInTheDocument();
+    expect(row.queryByRole('button', { name: 'İzni aç' })).not.toBeInTheDocument();
+    expect(row.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('a member with no outreach permission writes the first email', async () => {
+    const noOutreach = {
+      ...leadsMe,
+      memberships: [{ ...leadsMe.memberships[0], permissions: leadsMe.memberships[0].permissions.filter((p) => !p.startsWith('outreach.')) }],
+    };
+    const { user, calls, dialog } = await openDialog({ 'GET /api/auth/me': noOutreach, 'GET /api/workspace/modules': modulesWith(false) });
+    await user.type(dialog.getByRole('textbox', { name: 'Konu' }), 'Tanışma');
+    await user.type(dialog.getByRole('textbox', { name: 'Mesaj' }), 'Merhaba');
+    await user.click(dialog.getByRole('button', { name: 'Gönder' }));
+    await waitFor(() => expect(posts(calls, '/api/inbox/people/person-1/send')).toHaveLength(1));
+    expect(calls.some((c) => c.path.startsWith('/api/outreach'))).toBe(false);
+  });
+});
+
+describe('MessageDialog: the first message comes ready', () => {
+  const email = { draft: { subject: 'Örnek Kafe için tanışma', body: 'Merhaba,\n\nKısa bir tanışma.\n\nAlfa Atölye' }, reason: null };
+
+  it('fills the subject and the message with the draft for email, and sends only when the person presses send', async () => {
+    const { user, calls, dialog } = await openDialog({ [`POST /api/prospects/${ID}/draft`]: email });
+    await waitFor(() => expect(dialog.getByRole('textbox', { name: 'Mesaj' })).toHaveValue(email.draft.body));
+    expect(dialog.getByRole('textbox', { name: 'Konu' })).toHaveValue(email.draft.subject);
+    expect(posts(calls, `/api/prospects/${ID}/draft`)[0].body).toEqual({ channel: 'email' });
+    // Nothing goes out, nothing is promoted, until the person presses send.
+    expect(posts(calls, '/api/inbox/people/person-1/send')).toHaveLength(0);
+    expect(posts(calls, '/api/prospects/promote')).toHaveLength(0);
+    await user.type(dialog.getByRole('textbox', { name: 'Mesaj' }), ' Görüşmek isteriz.');
+    await user.click(dialog.getByRole('button', { name: 'Gönder' }));
+    await waitFor(() => expect(posts(calls, '/api/inbox/people/person-1/send')).toHaveLength(1));
+    // The same send as a written message: the person's text, intent commercial, the same path.
+    expect(posts(calls, '/api/inbox/people/person-1/send')[0].body).toMatchObject({
+      channel: 'email',
+      intent: 'commercial',
+      subject: email.draft.subject,
+      text: `${email.draft.body} Görüşmek isteriz.`,
+    });
+  });
+
+  it('a short-message channel gets its own short draft, with no subject', async () => {
+    const short = { draft: { subject: null, body: 'Merhaba, Alfa Atölye’den yazıyoruz.' }, reason: null };
+    // Email is closed without a mailbox: SMS is the first open way.
+    const { calls, dialog } = await openDialogWith({
+      'GET /api/capabilities': [live('sms_line', 'SMS hattı')],
+      [`POST /api/prospects/${ID}/draft`]: short,
+    });
+    await waitFor(() => expect(dialog.getByRole('radio', { name: 'SMS' })).toBeChecked());
+    await waitFor(() => expect(dialog.getByRole('textbox', { name: 'Mesaj' })).toHaveValue(short.draft.body));
+    expect(dialog.queryByRole('textbox', { name: 'Konu' })).not.toBeInTheDocument();
+    expect(posts(calls, `/api/prospects/${ID}/draft`).map((c) => c.body)).toContainEqual({ channel: 'sms' });
+  });
+
+  it('with no draft the field is empty and the message is written by hand', async () => {
+    const { dialog } = await openDialog();
+    await waitFor(() => expect(dialog.getByRole('textbox', { name: 'Mesaj' })).not.toHaveAttribute('aria-busy', 'true'));
+    expect(dialog.getByRole('textbox', { name: 'Mesaj' })).toHaveValue('');
+    expect(dialog.getByRole('textbox', { name: 'Konu' })).toHaveValue('');
+  });
+
+  it('shows a short wait while the draft is written, and what the person typed meanwhile stays', async () => {
+    const { user, dialog } = await openDialog({ [`POST /api/prospects/${ID}/draft`]: delayed(400, email) });
+    const message = dialog.getByRole('textbox', { name: 'Mesaj' });
+    expect(message).toHaveAttribute('placeholder', 'Taslak yazılıyor…');
+    await user.type(message, 'Kendi metnim');
+    await new Promise((r) => setTimeout(r, 600));
+    expect(message).toHaveValue('Kendi metnim');
   });
 });

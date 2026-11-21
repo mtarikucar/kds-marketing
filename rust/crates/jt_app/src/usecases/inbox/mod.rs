@@ -7,6 +7,7 @@ pub mod consumer;
 pub mod context;
 pub mod conversations;
 pub mod dictionaries;
+pub mod email_settings;
 pub mod erasure;
 pub mod journeys;
 mod leadgen;

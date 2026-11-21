@@ -18,7 +18,8 @@ import { StudioError, StudioReadStatus, buttonClass, inputClass, useStudioKey, u
 // its own options with no default, interactions off unless allowed (greyed out when the creator
 // turned them off; comments only on photos), the commercial content disclosure, the declaration
 // above the button, a preview with nothing laid over it, and nothing sent before the button is
-// pressed. Once posted, the screen says processing takes minutes and shows the post's status.
+// pressed. Pressing it approves the post and sends nothing: the screen then says, in one line,
+// that it goes out by itself at its time (or now, that time passed), then the post's status.
 // Under the account's name: its counters and its latest public videos, when TikTok gave them;
 // a published post's own counters read in the slot's detail. The human may instead send the post
 // to their TikTok drafts (the Content Posting API's upload): TikTok then notifies them in its
@@ -260,23 +261,29 @@ function when(slot: api.Slot, language: string): string {
 }
 
 /**
- * The status line of the slot's latest publish attempt, and the post's link once it is live; a
- * draft's in its own words (sent to the creator's TikTok drafts, never a post here). Before any
- * attempt, a slot whose time has passed (`due`) no longer waits for it: the publisher's next run
- * (`studio_publish`, every minute by default) picks it up.
+ * What the screen says once a person approved the slot and before it is sent: approving sends
+ * nothing (`studio.tiktok_post` records the choice); the publisher sends it at its time, or, once
+ * that time has passed (`due`), on its next run (`studio_publish`, every minute by default).
+ */
+function approvedText(t: TFunction, time: string, draft: boolean, due: boolean): string {
+  if (due) return draft ? t('studio.tiktok.draftStatus.due') : t('studio.tiktok.status.due');
+  return draft ? t('studio.tiktok.approvedDraft', { time }) : t('studio.tiktok.approved', { time });
+}
+
+/**
+ * The one line of the slot's state, and the post's link once it is live: approved and waiting
+ * for its time (or being sent, its time passed), then its latest publish attempt; a draft's in
+ * its own words (sent to the creator's TikTok drafts, never a post here).
  */
 function statusOf(
   t: TFunction,
   attempts: api.PublishAttempt[],
+  time: string,
   draft = false,
   due = false,
 ): { text: string; url: string | null; active: boolean; failed?: true } {
   const last = attempts[attempts.length - 1];
-  if (!last && due) {
-    const text = draft ? t('studio.tiktok.draftStatus.due') : t('studio.tiktok.status.due');
-    return { text, url: null, active: true };
-  }
-  if (!last) return { text: t('studio.tiktok.status.waiting'), url: null, active: false };
+  if (!last) return { text: approvedText(t, time, draft, due), url: null, active: due };
   const evidence = typeof last.outcome?.evidence === 'object' ? last.outcome.evidence : null;
   if (last.state === 'succeeded') {
     return draft
@@ -298,10 +305,10 @@ function statusOf(
 }
 
 /**
- * A TikTok slot posted from its screen: when it goes out, that TikTok takes minutes to process
- * it (or, for a draft, that its inbox notification finishes it), and its status, read again
- * while it is being sent and TikTok is still working on it. A failed post says why, not that
- * it is processed.
+ * A TikTok slot approved on its screen, in one line: approved and going out by itself at its
+ * time (or being sent now, its time passed), then being sent, processed by TikTok (which takes
+ * minutes; for a draft, its inbox notification finishes it), live, or why it failed. Read again
+ * while it is being sent and TikTok is still working on it.
  */
 export function TiktokPostStatus({ slot }: { slot: api.Slot }) {
   const { t, i18n } = useTranslation();
@@ -314,26 +321,18 @@ export function TiktokPostStatus({ slot }: { slot: api.Slot }) {
   const draft = sent.data?.draft ?? false;
   // Read at each render and each refetch: the time passes while the screen is open.
   const due = () => api.instant(slot.scheduled_at).getTime() <= Date.now();
+  const time = when(slot, i18n.language);
   const detail = useQuery({
     queryKey: [...key, 'slot', slot.id],
     queryFn: () => api.slotGet(slot.id),
     refetchInterval: (query) =>
-      query.state.data && statusOf(t, query.state.data.attempts, draft, due()).active
+      query.state.data && statusOf(t, query.state.data.attempts, time, draft, due()).active
         ? 15_000
         : false,
   });
-  const status = detail.data ? statusOf(t, detail.data.attempts, draft, due()) : null;
-  const time = when(slot, i18n.language);
+  const status = detail.data ? statusOf(t, detail.data.attempts, time, draft, due()) : null;
   return (
     <div className="space-y-1 rounded-md border border-border bg-surface-muted p-3 text-sm">
-      {!detail.data?.attempts.length && (
-        <p>{draft ? t('studio.tiktok.approvedDraft', { time }) : t('studio.tiktok.approved', { time })}</p>
-      )}
-      {!status?.failed && (
-        <p className="text-muted-foreground">
-          {draft ? t('studio.tiktok.draftSent') : t('studio.tiktok.processing')}
-        </p>
-      )}
       {status && (
         <p role="status" className="font-medium">
           {status.text}
@@ -351,7 +350,7 @@ export function TiktokPostStatus({ slot }: { slot: api.Slot }) {
 
 /** The posting screen of a TikTok slot awaiting its human (see the file's head). */
 export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const key = useStudioKey();
   const ids = useId();
   // Read fresh whenever the screen renders: TikTok's settings may have changed since.
@@ -428,7 +427,7 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
   if (post.isSuccess) {
     return (
       <div className="space-y-1 rounded-md border border-border bg-surface-muted p-3 text-sm">
-        <p role="status">{draft ? t('studio.tiktok.draftSent') : t('studio.tiktok.processing')}</p>
+        <p role="status">{approvedText(t, when(slot, i18n.language), draft, api.instant(slot.scheduled_at).getTime() <= Date.now())}</p>
       </div>
     );
   }

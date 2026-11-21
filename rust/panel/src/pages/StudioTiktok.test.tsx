@@ -218,7 +218,7 @@ describe('TikTok posting screen', () => {
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
   });
 
-  it('posts_exactly_what_was_chosen_and_says_processing_takes_minutes', async () => {
+  it('posts_exactly_what_was_chosen_and_says_it_is_sent_now_its_time_passed', async () => {
     const calls = mockFetch(answers(true, { 'POST /api/studio/slots/s1/tiktok': { revision: 3 } }));
     renderAt('/posts?slot=s1&tiktok=s1');
     const user = userEvent.setup();
@@ -245,11 +245,27 @@ describe('TikTok posting screen', () => {
         },
       }),
     );
+    // Approving sends nothing; this slot's time has passed, so the publisher sends it now.
+    expect(await screen.findByText("Onaylandı. Saati geçtiği için şimdi TikTok'a gönderiliyor…")).toBeInTheDocument();
+    expect(screen.queryByText(/Paylaşım durumu/)).not.toBeInTheDocument();
+  });
+
+  it('approving_a_post_planned_for_later_says_it_goes_out_by_itself_then', async () => {
+    const later = { ...slot, scheduled_at: new Date(Date.now() + 2 * 24 * 60 * 60_000).toISOString() };
+    mockFetch(answers(true, {
+      'GET /api/studio/slots/s1': { ...detail(), slot: later },
+      'GET /api/studio/slots/s1/tiktok': screenAnswer({ slot: later }),
+      'POST /api/studio/slots/s1/tiktok': { revision: 3 },
+    }));
+    renderAt('/posts?slot=s1&tiktok=s1');
+    const user = userEvent.setup();
+    const form = await postingScreen();
+    await user.selectOptions(await within(form).findByLabelText('Bu paylaşımı kimler görebilir'), 'SELF_ONLY');
+    await user.click(within(form).getByRole('button', { name: "TikTok'ta paylaş" }));
     expect(
-      await screen.findByText(
-        'Yayınlandıktan sonra paylaşımın işlenip TikTok profilinde görünmesi birkaç dakika sürebilir.',
-      ),
+      await screen.findByText(/^Onaylandı: .+ olunca TikTok'ta kendiliğinden paylaşılır\. Senden başka bir şey gerekmiyor\.$/),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/gönderiliyor|işleniyor|işliyor/)).not.toBeInTheDocument();
   });
 
   it('commercial_content_needs_a_choice_and_branded_content_is_never_private', async () => {
@@ -390,15 +406,12 @@ describe('TikTok posting screen', () => {
     );
     renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
-    expect(await within(card).findByText('Paylaşım durumu: TikTok paylaşımı işliyor…')).toBeInTheDocument();
-    // Processing is not an uncertain outcome to review.
-    expect(within(card).getByText('Sağlayıcı paylaşımı işliyor; görünmesi birkaç dakika sürebilir.')).toBeInTheDocument();
-    expect(within(card).queryByText('Yayın sonucu belirsiz')).not.toBeInTheDocument();
+    // One line: TikTok is working on it, which takes minutes; not an uncertain outcome to review.
     expect(
-      within(card).getByText(
-        'Yayınlandıktan sonra paylaşımın işlenip TikTok profilinde görünmesi birkaç dakika sürebilir.',
-      ),
+      await within(card).findByText('TikTok paylaşımı işliyor; profilde görünmesi birkaç dakika sürebilir.'),
     ).toBeInTheDocument();
+    expect(within(card).queryByText('Yayın sonucu belirsiz')).not.toBeInTheDocument();
+    expect(within(card).queryByText(/Onaylandı/)).not.toBeInTheDocument();
     expect(within(card).queryByRole('form', { name: "TikTok'ta paylaş" })).not.toBeInTheDocument();
   });
 
@@ -406,7 +419,11 @@ describe('TikTok posting screen', () => {
     mockFetch(approvedIn(60 * 60_000));
     renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
-    expect(await within(card).findByText('Paylaşım durumu: planlanan saati bekliyor')).toBeInTheDocument();
+    expect(
+      await within(card).findByText(/^Onaylandı: .+ olunca TikTok'ta kendiliğinden paylaşılır\. Senden başka bir şey gerekmiyor\.$/),
+    ).toBeInTheDocument();
+    // One confirmation, not an internal status line.
+    expect(within(card).queryByText(/Paylaşım durumu|Yayınlandıktan sonra/)).not.toBeInTheDocument();
   });
 
   it('a_passed_post_whose_time_has_passed_is_being_sent_not_waiting', async () => {
@@ -414,9 +431,9 @@ describe('TikTok posting screen', () => {
     renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
-      await within(card).findByText("Paylaşım durumu: planlanan saat geçti; TikTok'a gönderiliyor…"),
+      await within(card).findByText("Onaylandı. Saati geçtiği için şimdi TikTok'a gönderiliyor…"),
     ).toBeInTheDocument();
-    expect(within(card).queryByText('Paylaşım durumu: planlanan saati bekliyor')).not.toBeInTheDocument();
+    expect(within(card).queryByText(/kendiliğinden paylaşılır/)).not.toBeInTheDocument();
   });
 
   it('a_passed_draft_whose_time_has_passed_is_being_sent_to_the_drafts', async () => {
@@ -435,7 +452,7 @@ describe('TikTok posting screen', () => {
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
       await within(card).findByText(
-        'Paylaşım durumu: planlanan saat geçti; TikTok taslaklarınıza gönderiliyor…',
+        "Onaylandı. Saati geçtiği için şimdi TikTok'taki taslaklarına gönderiliyor…",
       ),
     ).toBeInTheDocument();
   });
@@ -467,12 +484,8 @@ describe('TikTok posting screen', () => {
     );
     renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
-    expect(await within(card).findByText(/^Paylaşım durumu: yayınlanamadı/)).toBeInTheDocument();
-    expect(
-      within(card).queryByText(
-        'Yayınlandıktan sonra paylaşımın işlenip TikTok profilinde görünmesi birkaç dakika sürebilir.',
-      ),
-    ).not.toBeInTheDocument();
+    expect(await within(card).findByText(/^Yayınlanamadı/)).toBeInTheDocument();
+    expect(within(card).queryByText(/işliyor/)).not.toBeInTheDocument();
     // Never sent again: Today says so and offers its way out.
     expect(within(card).getByText(/Jeeta bu paylaşımı yeniden göndermez/)).toBeInTheDocument();
     expect(within(card).getByRole('button', { name: 'İçeriği iptal et' })).toBeInTheDocument();
@@ -681,7 +694,7 @@ describe('TikTok posting screen', () => {
         },
       }),
     );
-    expect(await screen.findByText(/TikTok gelen kutunuzdaki bir bildirimle/)).toBeInTheDocument();
+    expect(await screen.findByText("Onaylandı. Saati geçtiği için şimdi TikTok'taki taslaklarına gönderiliyor…")).toBeInTheDocument();
   });
 
   it('a_photo_draft_keeps_its_caption', async () => {
@@ -746,8 +759,9 @@ describe('TikTok posting screen', () => {
     );
     renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
-    expect(await within(card).findByText('Paylaşım durumu: TikTok taslağı işliyor…')).toBeInTheDocument();
-    expect(within(card).getByText(/TikTok gelen kutunuzdaki bir bildirimle/)).toBeInTheDocument();
+    expect(
+      await within(card).findByText("TikTok taslağı işliyor; bitince TikTok'un bildirimiyle paylaşırsın."),
+    ).toBeInTheDocument();
   });
 
   it('a_sent_draft_says_where_it_is_in_the_slot_detail', async () => {
