@@ -475,8 +475,9 @@ pub fn verdict_tool() -> Value {
     }])
 }
 
-/// The request body of a check (see [`JudgeRequest`]): the instructions, then the cards with a
-/// cache breakpoint, the one strict tool, forced, and the text as the one user turn.
+/// The request body of a check (see [`JudgeRequest`]): the instructions, the cards with a cache
+/// breakpoint and the server's facts as the system text, the one strict tool, forced, and the
+/// judged text alone as the one user turn.
 pub fn judge_body(model: &str, request: &JudgeRequest) -> Value {
     json!({
         "model": model,
@@ -488,7 +489,8 @@ pub fn judge_body(model: &str, request: &JudgeRequest) -> Value {
                 "type": "text",
                 "text": request.cards,
                 "cache_control": { "type": "ephemeral" }
-            }
+            },
+            { "type": "text", "text": request.facts }
         ],
         "tools": verdict_tool(),
         "tool_choice": tool_choice(),

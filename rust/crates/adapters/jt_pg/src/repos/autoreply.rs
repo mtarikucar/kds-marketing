@@ -322,6 +322,38 @@ impl AutoReplyRepo for PgTenantRepos {
         u32::try_from(n).map_err(|_| AppError::internal("a count is out of range"))
     }
 
+    async fn queue_unscheduled(
+        &mut self,
+        capabilities: &[(CapabilityId, OffsetDateTime)],
+        newer_than: OffsetDateTime,
+        older_than: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ConversationId>, AppError> {
+        let ws = self.workspace_id();
+        let caps: Vec<Uuid> = capabilities.iter().map(|(c, _)| c.as_uuid()).collect();
+        let since: Vec<OffsetDateTime> = capabilities.iter().map(|(_, at)| *at).collect();
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "select c.id from unnest($2::uuid[], $3::timestamptz[]) as s(capability_id, since) \
+             join conversations c on c.workspace_id = $1 and c.capability_id = s.capability_id \
+             and c.state = 'ours' and c.executor_kind = 'agent' \
+             and c.last_inbound_at >= greatest(s.since, $4) and c.last_inbound_at <= $5 \
+             left join auto_reply_queue q on q.workspace_id = $1 and q.conversation_id = c.id \
+             where q.conversation_id is null or (q.due_at is null and q.lease_until is null \
+             and (q.handled_at is null or q.handled_at < c.last_inbound_at)) \
+             order by c.last_inbound_at, c.id limit $6",
+        )
+        .bind(ws.as_uuid())
+        .bind(&caps)
+        .bind(&since)
+        .bind(newer_than)
+        .bind(older_than)
+        .bind(i64::from(limit))
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list the unscheduled customer messages"))?;
+        Ok(ids.into_iter().map(ConversationId::from).collect())
+    }
+
     async fn runs_sent_since(
         &mut self,
         conversation: Option<ConversationId>,

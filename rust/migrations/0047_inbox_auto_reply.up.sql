@@ -29,6 +29,12 @@ create table if not exists auto_reply_queue (
     primary key (workspace_id, conversation_id)
 );
 
+-- The job's sweep for customer messages left without a schedule: the conversations ours and the
+-- agent's, by capability and latest customer message.
+create index if not exists conversations_auto_reply_sweep on conversations
+    (workspace_id, capability_id, last_inbound_at)
+    where state = 'ours' and executor_kind = 'agent';
+
 create index if not exists auto_reply_queue_due on auto_reply_queue (due_at) where due_at is not null;
 create index if not exists auto_reply_queue_lease on auto_reply_queue (lease_until)
     where lease_until is not null;

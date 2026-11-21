@@ -54,8 +54,10 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   other: recorded, counted and paid for.
 - It stops when a person takes the conversation over, or when a newer message arrives (that one is
   answered instead). Once a person writes in the conversation (in the panel, or from the phone's
-  Business App) it stays out for the rest of that customer journey, unless a person hands the
-  conversation back to the agent; a new journey starts clean. A held or queued automatic reply
+  Business App) it stays out for the rest of that customer journey and for at least 24 hours
+  after the person's last message, unless a person hands the conversation back to the agent;
+  then a customer message still waiting inside the reply window is answered at once. While the
+  replies stay out of a conversation, agents are offered it as usual. A held or queued automatic reply
   whose conversation moved on is refused (`stale`).
 - The capability's policy applies: approval (the reply waits in the approvals list), working hours
   (outside them the conversation goes to a person) and the daily cap.
@@ -66,9 +68,10 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   call at a conservative estimate). A rate limit or an outage is asked again; after three calls on
   one burst (counted before any step that could fail) the conversation goes to a person
   (`failed`). One tick works at most five conversations and 8 s per workspace, starts after the
-  workspace it served last, and stops starting new ones after 20 s. Once a minute the job also
-  schedules any customer message left without a schedule (a crash between the consumer and the
-  schedule).
+  workspace it served last, and stops starting new ones after 20 s. Once a minute, inside that
+  budget, the job also schedules a customer message left without a schedule (a crash between the
+  consumer and the schedule), only when it is at most 15 minutes old and came after the number
+  was turned on.
 - A hand-over: the conversation goes to the journey's owner (or the unassigned queue), the model's
   summary becomes a journey note, and its short line to the customer is sent when it passes the
   same rules. The conversation then shows in the owner's home list and in the inbox queue. No email

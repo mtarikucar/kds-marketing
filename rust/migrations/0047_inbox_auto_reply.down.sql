@@ -7,6 +7,7 @@ drop index if exists auto_reply_runs_conversation;
 drop index if exists auto_reply_runs_at;
 drop table if exists auto_reply_runs;
 drop index if exists auto_reply_queue_lease;
+drop index if exists conversations_auto_reply_sweep;
 drop index if exists auto_reply_queue_due;
 drop table if exists auto_reply_queue;
 alter table if exists knowledge_settings drop column if exists auto_reply;

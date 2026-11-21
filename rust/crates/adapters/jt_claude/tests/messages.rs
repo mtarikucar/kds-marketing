@@ -252,6 +252,7 @@ fn judge_request() -> JudgeRequest {
     JudgeRequest {
         system: "Check the text.".into(),
         cards: "Ürünler: el yapımı figür.".into(),
+        facts: "This message is not a quote.".into(),
         text: "Merhaba, figürünüz hazır.".into(),
         max_tokens: 1024,
     }
@@ -278,7 +279,12 @@ async fn a_check_sends_one_strict_forced_tool_and_reads_its_verdict() {
         body["system"][1]["cache_control"],
         json!({"type": "ephemeral"})
     );
+    assert_eq!(body["system"][2]["text"], "This message is not a quote.");
     assert_eq!(body["messages"][0]["role"], "user");
+    assert_eq!(
+        body["messages"][0]["content"][0]["text"],
+        "Merhaba, figürünüz hazır."
+    );
     assert!(body.get("temperature").is_none());
 }
 

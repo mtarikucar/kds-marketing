@@ -212,7 +212,7 @@ pub async fn rules_save(deps: &Deps, ctx: &Ctx, input: RulesInput) -> Result<Rul
         owner_or_manager(ctx)?;
     }
     let auto_reply = match &input.auto_reply {
-        Some(a) => auto_reply_of(r.as_mut(), a, now.auto_reply.as_ref()).await?,
+        Some(a) => auto_reply_of(r.as_mut(), a, now.auto_reply.as_ref(), ctx.now).await?,
         None => now.auto_reply.clone(),
     };
     let unchanged = prohibitions == now.prohibitions
@@ -287,6 +287,7 @@ async fn auto_reply_of(
     r: &mut dyn TenantRepos,
     input: &AutoReplyInput,
     stored: Option<&AutoReply>,
+    at: time::OffsetDateTime,
 ) -> Result<Option<AutoReply>, AppError> {
     let stored_price = stored.and_then(|a| a.price.as_ref());
     let range = validate_auto_reply(input, stored_price).map_err(invalid)?;
@@ -318,10 +319,22 @@ async fn auto_reply_of(
     if input.capability_ids.is_empty() && price.is_none() && stored.is_none() {
         return Ok(None);
     }
+    // When each listed number was turned on: kept while it stays listed, `at` for a new one.
+    let enabled_at = input
+        .capability_ids
+        .iter()
+        .map(|id| {
+            let kept = stored
+                .filter(|a| a.serves(*id))
+                .and_then(|a| a.enabled_at.get(id).copied());
+            (*id, kept.unwrap_or(at))
+        })
+        .collect();
     Ok(Some(AutoReply {
         capability_ids: input.capability_ids.clone(),
         price,
         quote_valid_days: stored.map_or(AUTO_QUOTE_VALID_DAYS, |a| a.quote_valid_days),
+        enabled_at,
     }))
 }
 

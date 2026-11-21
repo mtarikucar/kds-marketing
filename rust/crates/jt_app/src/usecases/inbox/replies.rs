@@ -1397,7 +1397,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
     };
     // An automatic message goes out only into the conversation it answered (spec addendum C).
     let fenced = match fenced {
-        Ok(basis) => super::autoreply::still_current(r.as_mut(), &c, &row)
+        Ok(basis) => super::autoreply::still_current(r.as_mut(), &c, &row, ctx.now)
             .await?
             .map(|()| basis)
             .map_err(refused),
@@ -2041,7 +2041,7 @@ pub(super) async fn approve_in(
         None => message.body.clone(),
     };
     let edited = text != message.body;
-    if let Err(reason) = super::autoreply::still_current(r, &c, &row).await? {
+    if let Err(reason) = super::autoreply::still_current(r, &c, &row, ctx.now).await? {
         // A held automatic reply approved after a newer message (the customer's or a person's)
         // is refused: it answered a conversation that has moved on.
         row.state = "refused".into();

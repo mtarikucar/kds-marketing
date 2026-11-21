@@ -23,6 +23,17 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// After a message written by a person (in the panel, or from the phone's Business App), the
+/// automatic replies stay out of the conversation at least this long (and for the rest of the
+/// journey it was written in), unless a person hands the conversation back after it.
+pub const HUMAN_QUIET: Duration = Duration::hours(24);
+/// The oldest customer message the job's sweep still answers.
+pub const RECONCILE_MAX_AGE: Duration = Duration::minutes(15);
+/// The most conversations one sweep of a workspace schedules.
+pub const RECONCILE_BATCH: u32 = 20;
+/// How many times a hand-over of a row that kept failing is tried before the row rests anyway.
+pub const GIVE_UP_RETRIES: u32 = 3;
+
 /// A reply goes out this long after the customer's last message, so several messages in a row
 /// make one answer.
 pub const AUTOREPLY_SETTLE: Duration = Duration::seconds(12);
@@ -186,7 +197,10 @@ pub struct JudgeRequest {
     pub system: String,
     /// The workspace's cards, the only facts the text may rest on.
     pub cards: String,
-    /// The text to check, with the one price a quote states, when it is a quote's.
+    /// The server's own facts about this text (the one price a quote may state, or that none
+    /// may be stated).
+    pub facts: String,
+    /// The text to check, alone, between the delimiters the instructions name.
     pub text: String,
     pub max_tokens: u32,
 }
@@ -361,6 +375,18 @@ pub trait AutoReplyRepo: Send + Sync {
     ) -> Result<u32, AppError>;
     /// The cost of every run at `since` or later, in millionths of a US dollar.
     async fn runs_spend_since(&mut self, since: OffsetDateTime) -> Result<i64, AppError>;
+    /// The job's sweep, in one bounded query: the conversations `ours` and the agent's on one of
+    /// `capabilities` (each with the time it was turned on) whose latest customer message is at
+    /// or after both that time and `newer_than`, at or before `older_than`, and newer than their
+    /// queue row's `handled_at`, with nothing due or leased; the oldest message first, at most
+    /// `limit`.
+    async fn queue_unscheduled(
+        &mut self,
+        capabilities: &[(CapabilityId, OffsetDateTime)],
+        newer_than: OffsetDateTime,
+        older_than: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ConversationId>, AppError>;
 }
 
 #[cfg(test)]

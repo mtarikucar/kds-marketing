@@ -254,7 +254,7 @@ const NUMBER_SUFFIXES: &[&str] = &[
 const CURRENCY_CODES: &[&str] = &["tl", "try", "usd", "eur", "gbp", "ytl"];
 /// Currency words, with any suffix.
 const CURRENCY_STEMS: &[&str] = &["lira", "dolar", "euro", "avro", "sterlin", "kuruş"];
-/// Money and discount words, with any suffix.
+/// Money and discount words, with any suffix (English ones too).
 const TERM_STEMS: &[&str] = &[
     "indirim",
     "iskonto",
@@ -266,7 +266,12 @@ const TERM_STEMS: &[&str] = &[
     "taksit",
     "peşin",
     "kapora",
+    "free",
+    "discount",
+    "percent",
 ];
+/// Words after which "hediye" (a gift) is a free item.
+const GIFT_AFTER: &[&str] = &["ikincisi", "ikinci", "üçüncü", "üçüncüsü", "yanında"];
 /// Units a count is allowed with: a stem the next word starts with.
 const UNITS: &[&str] = &[
     "gün", "saat", "hafta", "dakika", "adet", "kişi", "parça", "santim", "metre",
@@ -284,12 +289,67 @@ fn with_suffix(stem: &str, base: &str) -> bool {
         .is_some_and(|rest| NUMBER_SUFFIXES.contains(&rest))
 }
 
+/// "bin" (a thousand) in any form (`bine`, `binliğe`, `biner`): every word starting so but
+/// "bina" (a building) and its forms. "milyon" likewise.
 fn is_bin(w: &Word) -> bool {
-    with_suffix(&w.stem, "bin") || with_suffix(&w.stem, "milyon")
+    (w.stem.starts_with("bin") && !w.stem.starts_with("bina")) || w.stem.starts_with("milyon")
 }
 
 fn is_yuz(w: &Word) -> bool {
-    with_suffix(&w.stem, "yüz")
+    with_suffix(&w.stem, "yüz") || w.stem.starts_with("yüzlü") || w.stem.starts_with("yüzlük")
+}
+
+/// The distributive forms of the numbers (`kırkar`, `beşer`, `yüzer`): an amount each.
+const DISTRIBUTIVE: &[&str] = &[
+    "birer",
+    "ikişer",
+    "üçer",
+    "dörder",
+    "beşer",
+    "altışar",
+    "yedişer",
+    "sekizer",
+    "dokuzar",
+    "onar",
+    "yirmişer",
+    "otuzar",
+    "kırkar",
+    "ellişer",
+    "altmışar",
+    "yetmişer",
+    "seksener",
+    "doksanar",
+    "yüzer",
+    "biner",
+];
+
+/// Whether `stem` is two or more number words glued together (`üçbin`, `dokuzyüzelli`),
+/// optionally with a case suffix (`dokuzyüzelliye`).
+fn glued_number_words(stem: &str) -> bool {
+    const PARTS: &[&str] = &[
+        "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz", "on",
+        "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan", "yüz", "bin",
+        "milyon",
+    ];
+    fn go(rest: &str, parts: usize) -> bool {
+        if parts >= 2 && NUMBER_SUFFIXES.contains(&rest) {
+            return true;
+        }
+        PARTS
+            .iter()
+            .any(|p| rest.strip_prefix(p).is_some_and(|r| go(r, parts + 1)))
+    }
+    go(stem, 0)
+}
+
+/// Whether `c` is a letter of the Latin script (the Turkish letters included).
+fn latin(c: char) -> bool {
+    c.is_ascii_alphabetic() || matches!(c as u32, 0x00C0..=0x024F | 0x1E00..=0x1EFF)
+}
+
+/// A word mixing Latin letters with letters of another script (a disguise: `ТL`, `lіra`).
+fn mixed_script(w: &Word) -> bool {
+    w.text.chars().any(latin) && w.text.chars().any(|c| c.is_alphabetic() && !latin(c))
 }
 
 fn is_number_word(w: &Word) -> bool {
@@ -339,8 +399,12 @@ fn date_or_time(s: &str) -> bool {
     }
 }
 
+/// The fewest digits a phone number has in all, its groups together.
+const PHONE_DIGITS: usize = 10;
+
 /// `s` (digits, an optional leading `+`) as the start of a phone number: `+` and a country code,
-/// or a number of four digits or more beginning with `0` (prices never do).
+/// or a number of four digits or more beginning with `0` (prices never do); it is one only when
+/// its groups reach [`PHONE_DIGITS`] digits.
 fn phone_start(s: &str) -> bool {
     let digits = s.chars().filter(char::is_ascii_digit).count();
     s.chars().all(|c| c.is_ascii_digit() || c == '+')
@@ -372,7 +436,16 @@ fn parse_amount(token: &str) -> Option<(i64, i64)> {
 pub fn scan(text: &str, year: i32) -> Scan {
     let words = words_of(text);
     let mut out = Scan::default();
-    let mut in_phone = false;
+    // The phone number being read: its words and its digits so far.
+    let mut phone: Vec<usize> = Vec::new();
+    let mut phone_digits = 0;
+    let end_phone = |out: &mut Scan, phone: &mut Vec<usize>, digits: &mut usize| {
+        if !phone.is_empty() && *digits < PHONE_DIGITS {
+            out.numbers.append(phone);
+        }
+        phone.clear();
+        *digits = 0;
+    };
     for (i, w) in words.iter().enumerate() {
         let prev = i.checked_sub(1).map(|p| &words[p]);
         let next = words.get(i + 1);
@@ -382,9 +455,17 @@ pub fn scan(text: &str, year: i32) -> Scan {
             out.currency.push(i);
         }
         if is_term(w)
+            || mixed_script(w)
             || (w.stem == "yarı"
                 && next.is_some_and(|n| n.stem.starts_with("fiyat") || n.stem.starts_with("yarı")))
-            || (w.stem == "hediye" && next.is_some_and(|n| n.stem.starts_with("çek")))
+            || w.stem.starts_with("yarısı")
+            || w.stem == "yarıya"
+            || (w.stem.starts_with("hediye")
+                && (next.is_some_and(|n| n.stem.starts_with("çek"))
+                    || prev.is_some_and(|p| GIFT_AFTER.contains(&p.stem.as_str()))))
+            || (w.stem == "bizden"
+                && prev.is_some_and(|p| p.stem.starts_with("kargo") || p.stem == "ikincisi"))
+            || (w.stem == "half" && next.is_some_and(|n| n.stem.starts_with("price")))
         {
             out.terms.push(i);
         }
@@ -392,6 +473,10 @@ pub fn scan(text: &str, year: i32) -> Scan {
         let tens_suffixed = TENS.iter().any(|t| w.stem != *t && with_suffix(&w.stem, t));
         if is_bin(w)
             || tens_suffixed
+            || DISTRIBUTIVE.contains(&w.stem.as_str())
+            || w.stem.starts_with("yüzlü")
+            || w.stem.starts_with("yüzlük")
+            || glued_number_words(&w.stem)
             || (w.stem == "buçuk"
                 && (prev.is_some_and(|p| is_bin(p) || is_yuz(p))
                     || next.is_some_and(|n| is_bin(n) || is_yuz(n))))
@@ -402,7 +487,7 @@ pub fn scan(text: &str, year: i32) -> Scan {
         }
         // Digits: refused unless an allowed form.
         if !w.text.chars().any(|c| c.is_ascii_digit() || c.is_numeric()) {
-            in_phone = false;
+            end_phone(&mut out, &mut phone, &mut phone_digits);
             continue;
         }
         let symbol_before = w.stem.starts_with(['₺', '$', '€', '£']);
@@ -414,18 +499,22 @@ pub fn scan(text: &str, year: i32) -> Scan {
         let num = num.trim_end_matches(['.', ',', '-']);
         if num.is_empty() || !num.is_ascii() {
             out.numbers.push(i);
-            in_phone = false;
-            continue;
-        }
-        if glued.is_empty() && phone_start(num) {
-            in_phone = true;
+            end_phone(&mut out, &mut phone, &mut phone_digits);
             continue;
         }
         let digits_only = num.chars().all(|c| c.is_ascii_digit());
-        if in_phone && glued.is_empty() && digits_only && (2..=4).contains(&num.len()) {
+        let digits = num.chars().filter(char::is_ascii_digit).count();
+        if !phone.is_empty() && glued.is_empty() && digits_only && (2..=4).contains(&num.len()) {
+            phone.push(i);
+            phone_digits += digits;
             continue;
         }
-        in_phone = false;
+        end_phone(&mut out, &mut phone, &mut phone_digits);
+        if glued.is_empty() && phone_start(num) {
+            phone.push(i);
+            phone_digits = digits;
+            continue;
+        }
         let glued_currency = matches!(glued, "tl" | "try" | "₺" | "$" | "€");
         let money = symbol_before || glued_currency || next.is_some_and(is_currency);
         if money {
@@ -451,7 +540,10 @@ pub fn scan(text: &str, year: i32) -> Scan {
                 && p.chars()
                     .all(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
         });
-        let unit_next = next.is_some_and(is_unit)
+        // A count of months is a count only up to 24 (`36 ay` is a price's instalments).
+        let months = next.is_some_and(|n| n.stem.starts_with("ay"))
+            && !num.parse::<u32>().is_ok_and(|n| n <= 24);
+        let unit_next = (next.is_some_and(is_unit) && !months)
             || (next.is_some_and(|n| n.stem == "iş")
                 && after_next.is_some_and(|n| n.stem.starts_with("gün")));
         if range && ((glued.is_empty() && unit_next) || GLUED_UNITS.contains(&glued)) {
@@ -469,6 +561,7 @@ pub fn scan(text: &str, year: i32) -> Scan {
         }
         out.numbers.push(i);
     }
+    end_phone(&mut out, &mut phone, &mut phone_digits);
     out
 }
 
@@ -612,6 +705,10 @@ mod tests {
             "Yüz yüze görüşebiliriz.",
             "Bir figür mü, iki figür mü?",
             "Boyu 2.5 cm",
+            "12 ay garanti",
+            "Binanıza teslim",
+            "Hediye paketi isterseniz söyleyin.",
+            "Yarın kargoda.",
         ] {
             assert_eq!(reply(text), Ok(()), "{text}");
         }
@@ -669,6 +766,28 @@ mod tests {
             "2 figür",
             "2028 olur",
             "2026 TL",
+            // The third review's.
+            "binliğe yaparız",
+            "biner tane",
+            "yüzlüğe",
+            "kırkar",
+            "üçbin",
+            "dokuzyüzelli",
+            "dokuzyüzelliye",
+            "ikincisi hediye",
+            "yanında hediye",
+            "hediye çekimiz var",
+            "yarısına",
+            "kargo bizden",
+            "ikincisi bizden",
+            "free shipping",
+            "20 percent discount",
+            "half price",
+            "ТL",
+            "lіra",
+            "0532 123",
+            "36 ay",
+            "+90 532",
         ] {
             assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
         }
