@@ -100,6 +100,34 @@ export interface RulesOut {
   tiktok_connected: boolean;
   /** The workspace has a metered capability (SMS and the like): the message field is shown. */
   metered: boolean;
+  /** The inbox's automatic replies. */
+  auto_reply: AutoReplyView;
+}
+
+/** `jt_knowledge::PriceRange`: the automatic quotes' range, in minor units of `currency`. */
+export interface PriceRange {
+  min_minor: number;
+  max_minor: number;
+  currency: string;
+}
+
+/** `read::AutoReplyView`: the inbox's automatic replies as the rules show them. */
+export interface AutoReplyView {
+  /** The server has a model configured: the switches can be turned on. */
+  available: boolean;
+  /** `no_key`: no model on the server; `standard_missing`: on, but the range or the "Standart iş ve fiyat" card is missing. */
+  off_reason: 'no_key' | 'standard_missing' | null;
+  capability_ids: Uuid[];
+  price: PriceRange | null;
+  /** The WhatsApp numbers they can be turned on for. */
+  accounts: ApprovalAccount[];
+}
+
+/** `jt_knowledge::AutoReplyInput`: the numbers and the range (left out: the stored one). */
+export interface AutoReplyInput {
+  capability_ids: Uuid[];
+  min_minor?: number;
+  max_minor?: number;
 }
 
 /** `KnowledgeOut.goals`: "Hedefler". */
@@ -260,6 +288,8 @@ export interface RulesInput {
   post_approval: boolean;
   /** Left out: unchanged. */
   post_approval_accounts?: Uuid[];
+  /** Left out: unchanged. */
+  auto_reply?: AutoReplyInput;
 }
 
 /**

@@ -4473,6 +4473,9 @@
       "approvalExcept": "Posts go out without waiting for approval, except on {{accounts}}.",
       "tiktok": "You finish TikTok yourself.",
       "stopped": "{{n}} ad campaigns stopped as they reached the new limit.",
+      "autoReplyOn": "Automatic replies to messages: {{channels}} · {{min}}–{{max}}.",
+      "autoReplyWaiting": "Automatic replies to messages start once the “Standart iş ve fiyat” card is filled in.",
+      "autoReplyNoKey": "Automatic replies to messages are off: the server has no Claude key.",
       "dialog": {
         "help": "The system enforces the budget, the message limit and approval; the agents read the prohibitions in every job and follow them.",
         "prohibitions": "Prohibitions",
@@ -4494,7 +4497,13 @@
         "stillWaits": "Posts on {{accounts}} still wait for your approval.",
         "clearAccounts": "Turn it off for them too",
         "approvalOwnerOnly": "Only an owner or a manager turns approval off.",
-        "approvalAll": "Every post waits for your approval; turn it off in the rules first."
+        "approvalAll": "Every post waits for your approval; turn it off in the rules first.",
+        "autoReply": "Automatic replies to messages",
+        "autoReplyNoKey": "The server has no Claude key, so automatic replies are off.",
+        "autoReplyMin": "At least",
+        "autoReplyMax": "At most",
+        "autoReplyHelp": "Write in the “Standart iş ve fiyat” card how you price within the range. Requests outside the standard come to you.",
+        "autoReplyInvalid": "Enter both amounts; the lower one cannot be above the higher one."
       }
     },
     "goals": {
@@ -4543,7 +4552,8 @@
         "who_we_seek": "Which businesses do you want to reach? Sector, city, size.",
         "accounts_channels": "What do you use each account for?",
         "references": "Customers and projects you can name, with their permission.",
-        "own": "Write what the agents should know."
+        "own": "Write what the agents should know.",
+        "reply_standard": "What is your standard work, what places a price within the range, and what is outside the standard?"
       }
     },
     "history": {

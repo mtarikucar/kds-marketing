@@ -23,6 +23,7 @@ export const PROPOSAL_RULE = '0190a000-0000-7000-8000-0000000000e3';
 export const PROPOSAL_GOAL = '0190a000-0000-7000-8000-0000000000e4';
 export const AREA_ID = '0190a000-0000-7000-8000-0000000000f1';
 export const INSTAGRAM_ID = '0190a000-0000-7000-8000-0000000000a7';
+export const WHATSAPP_ID = '0190a000-0000-7000-8000-0000000000a8';
 
 export const PRODUCTS_BODY = 'El yapımı kupa ₺450, kargo dahil. Atölye dersi kişi başı ₺900.';
 
@@ -118,6 +119,7 @@ export const knowledge: KnowledgeOut = {
     post_approval_accounts: [{ capability_id: INSTAGRAM_ID, name: 'Alfa Instagram', kind: 'instagram' }],
     tiktok_connected: true,
     metered: false,
+    auto_reply: { available: true, off_reason: null, capability_ids: [], price: null, accounts: [{ capability_id: WHATSAPP_ID, name: 'Alfa WhatsApp', kind: 'whatsapp_cloud' }] },
   },
   goals: { revision: 2, items: ['Ayda 20 kupa siparişi', 'Ayda 2 atölye dersi', 'Haftada 3 paylaşım', '3 ayda 2 kahve dükkânı ortaklığı'] },
   notes,
@@ -135,7 +137,7 @@ export const emptyKnowledge: KnowledgeOut = {
     card({ id: CARD_PRODUCTS, key: 'products_prices', title: 'Ürünler ve fiyat' }),
     card({ id: CARD_VOICE, key: 'voice', title: 'Ses tonu' }),
   ],
-  rules: { revision: 1, prohibitions: [], ad_cap: null, message_cap: null, post_approval: false, post_approval_accounts: [], tiktok_connected: false, metered: false },
+  rules: { revision: 1, prohibitions: [], ad_cap: null, message_cap: null, post_approval: false, post_approval_accounts: [], tiktok_connected: false, metered: false, auto_reply: { available: false, off_reason: 'no_key', capability_ids: [], price: null, accounts: [] } },
   goals: { revision: 1, items: [] },
   notes: [],
   notes_agent: { state: 'none', next_at: null },
