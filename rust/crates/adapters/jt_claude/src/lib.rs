@@ -7,7 +7,7 @@
 //! blocks (the fixed instructions, then the workspace's part with a cache breakpoint: the tools
 //! and the system render first, so the whole stable prefix is cached), the three tools (`reply`,
 //! `quote`, `hand_over`, each `strict` with `additionalProperties: false` and every property
-//! required), [`TOOL_CHOICE`], and the conversation as alternating `user` / `assistant` turns
+//! required), [`tool_choice`], and the conversation as alternating `user` / `assistant` turns
 //! ending with the customer's, its last block carrying the second breakpoint. No sampling
 //! parameter (`temperature`, `top_p`, `top_k`), no thinking budget and no assistant prefill is
 //! ever sent.

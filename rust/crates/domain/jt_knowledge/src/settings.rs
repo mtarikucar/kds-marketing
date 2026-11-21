@@ -220,14 +220,18 @@ impl KnowledgeSettings {
 
     /// What a `rules` revision row keeps: the whole rules box.
     pub fn rules_content(&self) -> Value {
-        json!({
+        let mut out = json!({
             "prohibitions": self.prohibitions,
             "ad_cap": self.ad_cap,
             "message_cap": self.message_cap,
             "post_approval": self.post_approval,
             "post_approval_accounts": self.post_approval_accounts,
-            "auto_reply": self.auto_reply,
-        })
+        });
+        // The automatic replies, once set up (a box that never had them reads as before).
+        if let Some(auto) = &self.auto_reply {
+            out["auto_reply"] = json!(auto);
+        }
+        out
     }
 
     /// What a `goals` revision row keeps: the goals.

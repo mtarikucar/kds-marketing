@@ -259,7 +259,6 @@ impl Locked {
                         "message_budget": cap(&s.message_cap),
                         "post_approval": s.post_approval,
                         "post_approval_accounts": s.post_approval_accounts.len(),
-                        "auto_reply": s.auto_reply.as_ref().map(|a| a.capability_ids.len()),
                         "revision": revision,
                         "kb_revision": kb,
                         "cause": change.cause.key(),
@@ -287,6 +286,12 @@ impl Locked {
                 )?
             }
         };
+        if change.subject == Subject::Rules
+            && let Some(auto) = &self.settings.auto_reply
+        {
+            // How many numbers the automatic replies answer on; absent while never set up.
+            entry.payload["auto_reply"] = json!(auto.capability_ids.len());
+        }
         entry.strategy_version_id = self.frame.map(|v| v.as_uuid());
         r.ledger().append(entry).await?;
         Ok(kb)

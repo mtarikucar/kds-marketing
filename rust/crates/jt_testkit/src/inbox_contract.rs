@@ -2636,7 +2636,7 @@ pub async fn erasure_refuses_held_replies(uow: Arc<dyn UnitOfWork>) {
 
 /// The automatic replies' rows (`0047_inbox_auto_reply`): one queue row per conversation, saved
 /// over and removed; the takeable ones (due and free, or a lapsed lease) and the workspaces
-/// holding one; a row for a conversation the workspace lacks refused; the runs counted (sent ones
+/// holding one; the runs counted (sent ones
 /// only, by conversation and capability) and their cost summed from a time on; another
 /// workspace sees none of it.
 pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
@@ -2717,14 +2717,6 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
     t.auto_reply().queue_delete(c.id).await.unwrap();
     assert_eq!(t.auto_reply().queue_lock(c.id).await.unwrap(), None);
     t.commit().await.unwrap();
-    // A conversation the workspace does not hold.
-    let mut t = uow.tenant(f.ws).await.unwrap();
-    let stray = QueueRow {
-        conversation_id: ConversationId::new_v7(),
-        ..row.clone()
-    };
-    assert!(t.auto_reply().queue_save(&stray).await.is_err());
-    drop(t);
     // Runs: only replies and quotes count as sent; the cost of every run is summed.
     let run = |outcome, s, cost| RunRow {
         id: Uuid::now_v7(),

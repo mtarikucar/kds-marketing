@@ -10,7 +10,7 @@ use jt_inbox::ConversationId;
 use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
 
-use super::state::{MemBundle, exists};
+use super::state::MemBundle;
 use super::tenant::MemTenant;
 
 /// The workspaces' automatic replies, as the fake stores them.
@@ -55,14 +55,6 @@ impl AutoReplyRepo for MemTenant {
         let row = row.clone();
         self.call(|this| {
             let ws = this.ws;
-            exists(
-                this.state()
-                    .inbox
-                    .conversations
-                    .iter()
-                    .any(|c| c.workspace_id == ws && c.id == row.conversation_id),
-                "auto_reply_queue.conversation_id",
-            )?;
             this.tx.write(move |s| {
                 s.auto_reply
                     .queue

@@ -22,9 +22,9 @@ create table if not exists auto_reply_queue (
     attempts integer not null default 0 check (attempts >= 0),
     -- When a person last handed the conversation back to the agent.
     handed_back_at timestamptz,
-    primary key (workspace_id, conversation_id),
-    foreign key (conversation_id, workspace_id) references conversations (id, workspace_id)
-        on delete cascade
+    -- No foreign key to `conversations`: the inbox's own downs drop that table, and erasure
+    -- removes a person's rows (`inbox/erasure.rs`).
+    primary key (workspace_id, conversation_id)
 );
 
 create index if not exists auto_reply_queue_due on auto_reply_queue (due_at) where due_at is not null;

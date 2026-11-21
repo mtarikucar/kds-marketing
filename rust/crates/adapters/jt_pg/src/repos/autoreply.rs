@@ -11,7 +11,7 @@ use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::{FOREIGN_KEY_VIOLATION, dangling, map_sqlx, stored};
+use super::{map_sqlx, stored};
 use crate::tx::PlatformTx;
 use crate::uow::PgTenantRepos;
 
@@ -161,12 +161,7 @@ impl AutoReplyRepo for PgTenantRepos {
         .bind(row.handed_back_at)
         .execute(self.tx.conn())
         .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(d) if d.code().as_deref() == Some(FOREIGN_KEY_VIOLATION) => {
-                dangling("auto_reply_queue.conversation_id")
-            }
-            _ => map_sqlx(e, "save an automatic reply's queue row"),
-        })?;
+        .map_err(|e| map_sqlx(e, "save an automatic reply's queue row"))?;
         Ok(())
     }
 

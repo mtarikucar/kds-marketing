@@ -193,7 +193,7 @@ pub async fn consume_event(
     r.commit().await?;
     // Never part of consuming the message: a failure to schedule is logged, the message stays.
     if let Some(id) = scheduled.filter(|_| outcome == "consumed") {
-        super::autoreply::schedule_after(deps, event.workspace_id, id, now).await;
+        super::autoreply::mark_due_after(deps, event.workspace_id, id, now).await;
     }
     Ok(outcome)
 }

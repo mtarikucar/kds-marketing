@@ -45,7 +45,7 @@ const TABLES_AFTER_CONNECTORS: i64 = 23;
 const TABLES_AFTER_ALL: i64 = 111;
 
 /// The tables before `0028_mail_files` adds `mail_files`.
-const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 5;
+const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;

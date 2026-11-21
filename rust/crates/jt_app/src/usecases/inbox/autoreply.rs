@@ -7,8 +7,9 @@
 //! person's replies go through `replies` unchanged, and with no model configured or the setting
 //! off nothing here runs.
 //!
-//! **When.** [`schedule`] runs in the inbound consumer's transaction, after a customer's message
-//! is stored: when the conversation may be served ([`eligible`]) it upserts the conversation's
+//! **When.** `mark_due` runs right after the inbound consumer committed a customer's message, in a
+//! transaction of its own: when the conversation may be served (`eligible`) it upserts the
+//! conversation's
 //! queue row, due [`AUTOREPLY_SETTLE`] after the last message and never later than
 //! [`AUTOREPLY_SETTLE_MAX`] after the first. Shared history, the business app's own messages and
 //! other echoes schedule nothing. The `inbox_auto_reply` job ([`run`]) works each due row in
@@ -322,9 +323,9 @@ pub(crate) async fn still_current(
     Ok(Ok(()))
 }
 
-/// [`schedule`] in a transaction of its own, after the consumer committed the customer's message:
+/// [`mark_due`] in a transaction of its own, after the consumer committed the customer's message:
 /// a failure here is logged with its code and never undoes the message.
-pub(crate) async fn schedule_after(
+pub(crate) async fn mark_due_after(
     deps: &Deps,
     ws: WorkspaceId,
     id: ConversationId,
@@ -334,7 +335,7 @@ pub(crate) async fn schedule_after(
         let mut r = deps.uow.tenant(ws).await?;
         r.people().lock_workspace().await?;
         r.people().set_write_time(now).await?;
-        schedule(deps, r.as_mut(), id, now).await?;
+        mark_due(deps, r.as_mut(), id, now).await?;
         r.commit().await
     }
     .await;
@@ -348,7 +349,7 @@ pub(crate) async fn schedule_after(
 /// the conversation may be answered automatically, its queue row is due [`AUTOREPLY_SETTLE`] from
 /// `now`, but never later than [`AUTOREPLY_SETTLE_MAX`] after the burst's first message. Nothing
 /// without a model or with the setting off.
-pub(crate) async fn schedule(
+pub(crate) async fn mark_due(
     deps: &Deps,
     r: &mut dyn TenantRepos,
     id: ConversationId,
