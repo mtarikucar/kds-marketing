@@ -1891,11 +1891,14 @@ async fn only_a_held_automatic_reply_is_marked_and_handled_in_the_thread() {
     assert_eq!(held["held"], json!(outbox));
     assert!(items[0].get("automatic").is_none() && items[0].get("held").is_none());
 
-    // An agent's held reply keeps its presentation: neither field.
+    // An agent's reply keeps its presentation: neither field. (An agent's direct message is never
+    // held; its held public replies keep their own card, and `held` is never set on a public
+    // conversation.)
     let t = setup_with(false, true).await;
     require_approval(&t);
     inbound(&t, 0, 0).await;
     let agent = t.w.agent(&["inbox.work"]).await;
+    t.meta.push_send_text(accepted());
     replies::reply(
         &t.w.deps,
         &at(&agent, consumed_at(2)),
@@ -1904,8 +1907,8 @@ async fn only_a_held_automatic_reply_is_marked_and_handled_in_the_thread() {
     )
     .await
     .unwrap();
-    assert_eq!(t.w.uow.snapshot().inbox.outbox[0].state, "held");
     let items = thread(&t).await;
+    assert_eq!(items.as_array().unwrap().len(), 2);
     for item in items.as_array().unwrap() {
         assert!(item.get("automatic").is_none(), "{item}");
         assert!(item.get("held").is_none(), "{item}");
