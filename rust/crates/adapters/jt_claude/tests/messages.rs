@@ -211,19 +211,13 @@ async fn the_order_tool_is_sent_and_read_only_when_offered() {
     });
     let answer = model.answer(&offered).await.unwrap();
     assert_eq!(answer.stop, ModelStop::ToolUse);
-    let Some(ModelTool::CreateOrder {
-        fields,
-        acceptance,
-        text,
-    }) = answer.tool.clone()
-    else {
+    let Some(ModelTool::CreateOrder { fields, text }) = answer.tool.clone() else {
         panic!("a create_order call");
     };
     assert_eq!(fields.email, "deneme@example.com");
     assert_eq!(fields.district, "Merkez");
     assert_eq!(fields.payment_method, "card");
     assert_eq!(fields.phone, "");
-    assert_eq!(acceptance, "Tamam, olur");
     assert_eq!(text, "Teşekkürler, siparişinizi hazırlıyorum.");
     // Its details never print.
     let printed = format!("{:?}", answer.tool);
@@ -246,6 +240,10 @@ async fn the_order_tool_is_sent_and_read_only_when_offered() {
         props
             .keys()
             .all(|k| !k.contains("amount") && !k.contains("price"))
+    );
+    assert!(
+        props.get("acceptance").is_none(),
+        "the server judges the confirmation"
     );
     assert_eq!(
         schema["properties"]["payment_method"]["enum"],

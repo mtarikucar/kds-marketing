@@ -226,30 +226,30 @@ pub fn tools() -> Value {
 }
 
 /// The order tool, offered only after a quote with a shop to order from ([`tools_for`]): every
-/// detail the order needs (empty for one the customer did not give), the customer's own words of
-/// acceptance and a short line. It has no amount: the server orders the quote's.
+/// detail the order needs (empty for one the customer did not give) and a short line. It has no
+/// amount (the server orders the quote's) and no acceptance (the server asks the customer to
+/// confirm a summary and judges the answer itself).
 pub fn create_order_tool() -> Value {
     let field = |description: &str| json!({ "type": "string", "description": description });
     json!({
         "name": "create_order",
-        "description": "Create the order for the quoted price once the customer clearly accepted it and gave every detail the order needs. The server orders the quoted amount and sends the customer the payment link itself.",
+        "description": "Create the order for the quoted price once the customer accepted it and gave every detail the order needs. The first call makes the server show the customer a summary to confirm; after the customer confirms, call it again with exactly the same details. The server orders the quoted amount and sends the payment link itself.",
         "strict": true,
         "input_schema": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["name", "email", "phone", "street", "neighbourhood", "district", "province", "postcode", "payment_method", "item", "acceptance", "text"],
+            "required": ["name", "email", "phone", "street", "neighbourhood", "district", "province", "postcode", "payment_method", "item", "text"],
             "properties": {
-                "name": field("The customer's full name, as they wrote it."),
-                "email": field("The customer's email address, exactly as they wrote it."),
-                "phone": field("A phone number the customer wrote, if it differs from this WhatsApp number; empty for this number."),
-                "street": field("The street address: street, building and flat, as the customer wrote it."),
-                "neighbourhood": field("The neighbourhood, if the customer gave it; empty otherwise."),
-                "district": field("The district."),
-                "province": field("The province."),
-                "postcode": field("The postcode, if the customer gave it; empty otherwise."),
+                "name": field("The customer's full name, copied exactly from their messages."),
+                "email": field("The customer's email address, copied exactly from their messages."),
+                "phone": field("A phone number the customer wrote, if it differs from this WhatsApp number, copied exactly; empty for this number."),
+                "street": field("The street address (street, building, flat), copied exactly from the customer's words: never corrected, expanded or completed."),
+                "neighbourhood": field("The neighbourhood, copied exactly, if the customer gave it; empty otherwise."),
+                "district": field("The district, copied exactly from the customer's words."),
+                "province": field("The province, copied exactly from the customer's words."),
+                "postcode": field("The postcode, copied exactly, if the customer gave it; empty otherwise."),
                 "payment_method": { "type": "string", "enum": PAYMENT_METHODS },
                 "item": field("What is ordered, in a few words (at most 120 characters), without any amount or link."),
-                "acceptance": field("The customer's own words accepting the quoted price, copied exactly from their message."),
                 "text": field("A short line to the customer sent before the payment link: no amount, no link, none of their details; empty for none.")
             }
         }
@@ -371,8 +371,6 @@ struct CreateOrderIn {
     #[serde(flatten)]
     fields: OrderFields,
     #[serde(default)]
-    acceptance: String,
-    #[serde(default)]
     text: String,
 }
 
@@ -387,7 +385,6 @@ fn tool_of(block: &Value) -> Option<ModelTool> {
             .ok()
             .map(|o| ModelTool::CreateOrder {
                 fields: Box::new(o.fields),
-                acceptance: o.acceptance,
                 text: o.text,
             }),
         "reply" => serde_json::from_value::<ReplyIn>(input)
