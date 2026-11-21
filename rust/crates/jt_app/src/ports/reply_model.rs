@@ -24,9 +24,12 @@ use uuid::Uuid;
 use crate::error::AppError;
 
 /// After a message written by a person (in the panel, or from the phone's Business App), the
-/// automatic replies stay out of the conversation at least this long (and for the rest of the
-/// journey it was written in), unless a person hands the conversation back after it.
-pub const HUMAN_QUIET: Duration = Duration::hours(24);
+/// automatic replies stay out of the conversation this long, unless a person hands the
+/// conversation back after it; a customer's message in between is answered when it ends.
+pub const HUMAN_QUIET: Duration = Duration::minutes(15);
+/// How long after a customer's last message the business may still answer it (WhatsApp's
+/// customer service window).
+pub const REPLY_WINDOW: Duration = Duration::hours(24);
 /// The oldest customer message the job's sweep still answers.
 pub const RECONCILE_MAX_AGE: Duration = Duration::minutes(15);
 /// The most conversations one sweep of a workspace schedules.
@@ -36,9 +39,9 @@ pub const GIVE_UP_RETRIES: u32 = 3;
 
 /// A reply goes out this long after the customer's last message, so several messages in a row
 /// make one answer.
-pub const AUTOREPLY_SETTLE: Duration = Duration::seconds(12);
+pub const AUTOREPLY_SETTLE: Duration = Duration::seconds(6);
 /// ... but never later than this after the first, however many follow it.
-pub const AUTOREPLY_SETTLE_MAX: Duration = Duration::seconds(45);
+pub const AUTOREPLY_SETTLE_MAX: Duration = Duration::seconds(20);
 /// How long a run holds its conversation while it asks the model; a run that died is retried
 /// after it.
 pub const AUTOREPLY_LEASE: Duration = Duration::minutes(2);
@@ -173,6 +176,9 @@ pub struct ModelRequest {
     pub system_fixed: String,
     /// The workspace's part: its name and identity, its cards, its rules, its notes, its range.
     pub system_workspace: String,
+    /// A note from the server for this call alone (the repair of a refused reply): sent after the
+    /// cached system blocks, never cached, never in a customer's turn.
+    pub system_note: Option<String>,
     pub history: Vec<Turn>,
     pub max_tokens: u32,
 }

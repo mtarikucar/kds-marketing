@@ -76,6 +76,7 @@ fn request() -> ModelRequest {
     ModelRequest {
         system_fixed: "Fixed instructions.".into(),
         system_workspace: "# The business\nName: Test Atölye\n".into(),
+        system_note: None,
         history: vec![
             Turn {
                 speaker: Speaker::Customer,
@@ -336,4 +337,27 @@ async fn a_refused_or_tool_less_check_has_no_verdict() {
     }
     let (model, _) = mock(500, vec![], include_str!("fixtures/messages_500.json")).await;
     assert!(model.judge(&judge_request()).await.is_err());
+}
+
+#[tokio::test]
+async fn a_servers_note_goes_after_the_cached_system_blocks_never_in_a_turn() {
+    let (model, seen) = mock(
+        200,
+        vec![],
+        include_str!("fixtures/messages_tool_use_200.json"),
+    )
+    .await;
+    let mut request = request();
+    request.system_note = Some("Answer again without digits.".into());
+    model.answer(&request).await.unwrap();
+    let requests = seen.requests.lock().unwrap();
+    let body: Value = serde_json::from_str(&requests[0].2).unwrap();
+    let system = body["system"].as_array().unwrap();
+    assert_eq!(system.len(), 3);
+    assert_eq!(system[1]["cache_control"], json!({"type": "ephemeral"}));
+    assert_eq!(
+        system[2],
+        json!({"type": "text", "text": "Answer again without digits."})
+    );
+    assert!(!body["messages"].to_string().contains("Answer again"));
 }

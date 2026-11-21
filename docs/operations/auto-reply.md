@@ -40,8 +40,12 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
 
 ## What it does
 
-- A customer's message is scheduled 12 s after the last one of a burst (never more than 45 s after
-  the first); the `inbox_auto_reply` job runs every 3 s. The model reads the fixed instructions,
+- A customer's message is scheduled 6 s after the last one of a burst (never more than 20 s after
+  the first); the `inbox_consume` job reads new messages every 3 s and the `inbox_auto_reply` job
+  runs every 3 s. A typical answer goes out about 10 to 25 s after the customer's last message
+  (consume within 3 s, settle 6 s, the next tick within 3 s, then the model and its check); a
+  customer who keeps typing is answered at most about 20 s after the first message of the burst
+  plus that time, and a message arriving during a run drops that answer and is answered instead. The model reads the fixed instructions,
   the workspace's cards, rules, notes and range, and the last 30 messages.
 - A customer's photo is stored as the text `[image]` (and its caption on the next line); a
   document as `[document: name]` (and its caption). When the model is asked, the latest four of
@@ -53,7 +57,11 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   the model is told it cannot open them. The model uses what it sees to place the work in the
   range, and hands over when a photo is unclear or shows something outside the standard. The
   server's check on the answer stays text-only.
-- It answers through one tool: a reply, a quote, or a hand-over to a person.
+- It answers through one tool: a reply, a quote, or a hand-over to a person. A reply the server's
+  rules refuse for a number, an amount or a link is asked for once more in the same run, with a
+  line saying why; the second answer is checked the same way (and by the model's check), and only
+  if it fails too is the conversation handed over with the first reason. That call is stored and
+  counted like any other.
 - It never says or implies it is a person. Asked whether the customer is talking to a person, a bot
   or an AI, it says in one short sentence that it is the business's automatic assistant and that a
   person from the team can take over whenever the customer wants; it does not say so unprompted. A
@@ -74,11 +82,16 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   anything but a clear "allowed" (a refusal, an error, no answer) is not sent and the conversation
   goes to a person (`judge_refused`, `judge_unavailable`). The check is a model call like any
   other: recorded, counted and paid for.
-- It stops when a person takes the conversation over, or when a newer message arrives (that one is
-  answered instead). Once a person writes in the conversation (in the panel, or from the phone's
-  Business App) it stays out for the rest of that customer journey and for at least 24 hours
-  after the person's last message, unless a person hands the conversation back to the agent;
-  then a customer message still waiting inside the reply window is answered at once. While the
+- It stops when a person takes the conversation over (until it is handed back), or when a newer
+  message arrives (that one is answered instead). A message a person writes in the conversation
+  (in the panel, or from the phone's Business App) keeps it out for 15 minutes from that message.
+  A customer message arriving inside those 15 minutes is answered when they end, if it is then
+  still the last message, unanswered, inside the 24-hour reply window and the conversation is
+  still the agent's; a person writing again moves the end. A hand-back after the person's message
+  lets it in at once.
+- When a person on the team stated money in the current journey (an amount, a currency, a
+  discount or payment word), it never quotes in that journey: a quote becomes a hand-over
+  (`human_quoted`), and the model is told so. Replies that are not about price still go out. While the
   replies stay out of a conversation, agents are offered it as usual. The hand-back's mark commits
   with the hand-back itself, so no agent is offered the conversation in between. A held or queued
   automatic reply whose conversation moved on is refused (`stale`).
