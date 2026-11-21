@@ -416,6 +416,7 @@ rotasının (`connector.complete_oauth`) aracı yoktur: ajan sahibin tarayıcı 
 | | `jeeta.connector.reconnect` | Girişi düşen ya da hiç bağlanmamış (`declared`) Meta ya da X kabiliyeti için ona bağlı bir giriş başlatır (`handoff` ile); onayda ilk seçilen varlık o kabiliyet olur | WRITE |
 | | `jeeta.connector.hooks` | Sağlayıcılara girilecek webhook adresleri: alanın her amaç için NetGSM adresi (alanın anahtarıyla) ve platformun Meta adresi (doğrulama anahtarı asla) | READ |
 | | `jeeta.connector.set_pbx_policy` | NetGSM santralinin çağrı politikası: `call_mode` (`originate` ya da `linkup`) ve `recording_allowed` (görüşmeler santralde kaydedilsin mi); verilmeyen alan değişmez | WRITE |
+| | `jeeta.connector.set_shop_order` | Alanın mağazasının (`shop_mcp`) sipariş şablonu: otomatik yanıtın kabul edilen teklif için mağazada sipariş taslağı açarken çağırdığı araç, argümanları (yer tutucularla) ve sonuçta ödeme bağlantısının yeri; `enabled: false` kapatır | WRITE |
 | olaylar | `jeeta.events.pending` | İşlenmemiş gelen olaylar, en eskisi başta, sayfa sayfa (`next` ile ileri) | READ |
 | | `jeeta.events.ack` | İşlenen olayları işaretler (1–200 kimlik, hepsi ya da hiçbiri); `{acked}` | WRITE |
 | | `jeeta.events.list` | Bütün gelen olaylar, en yenisi başta; işlenenler dahil, sağlayıcı ve tür süzgeçleri | READ |
@@ -1157,6 +1158,7 @@ yazma izni yoktur; `workspace.read` olayları yalnız okur.
 | Sağlık (yanıt liste, araçta `{connectors}`) | `GET /api/connectors/health` | `jeeta.connector.health` | `workspace.read` |
 | Kabiliyete bağlı giriş: yeniden bağlama ya da `declared` bir kabiliyetin ilk bağlanması (gövdesiz; yanıt başlatma gibi) | `POST /api/connectors/{capability_id}/reconnect` | `jeeta.connector.reconnect` | `capabilities.manage` |
 | Santralin çağrı politikası (gövde `{call_mode?, recording_allowed?}`, en az biri; yalnız `netgsm_pbx`, başka tür `409`; yanıt `{capability_id, call_mode, recording_allowed}`; günlük `connector.pbx_policy_set`). Bu iki `connector_public` anahtarı ayrılmıştır: bildirim ve bağlantı adımı yazamaz, kaydın açılması tek ve günlüklü bir karardır | `PUT /api/connectors/{capability_id}/pbx-policy` | `jeeta.connector.set_pbx_policy` | `capabilities.manage` |
+| Mağazanın sipariş şablonu (gövde `{enabled, tool, currency, arguments, result}`, bütünüyle denetlenir, kuralı çiğneyen `422`; yalnız `shop_mcp`, başka tür `409`; yanıt `{capability_id, enabled, tool, currency}`; günlük `connector.shop_order_set {tool, enabled}`). `connector_public.order` ayrılmış bir anahtardır: yalnız bu yazar (bkz. `docs/operations/auto-reply.md`) | `PUT /api/connectors/{capability_id}/shop-order` | `jeeta.connector.set_shop_order` | `capabilities.manage` |
 
 Kimlik bilgisi biçimleri (`credential.kind`): `netgsm_sms` (`usercode`, `password`, `msgheader`;
 `sms_line` için), `netgsm_pbx` (`username`, `password`, isteğe bağlı `trunk`, `pbxnum`; `netgsm_pbx` için)
