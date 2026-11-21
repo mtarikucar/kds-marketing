@@ -61,7 +61,7 @@ export const decideProspect = (id: string, input: DecideInput) =>
 /** A draft of the first message (`prospects.message_draft`); `draft: null` when none could be made. */
 export interface MessageDraftOut {
   draft: { subject: string | null; body: string } | null;
-  reason: 'no_model' | 'daily_limit' | 'failed' | null;
+  reason: 'no_model' | 'daily_limit' | 'failed' | 'unsafe_draft' | null;
 }
 /** `POST /api/prospects/{id}/draft`: only text for the person; the server never sends it. */
 export const draftFirstMessage = (id: string, channel: 'email' | 'sms' | 'whatsapp' | 'instagram') =>
