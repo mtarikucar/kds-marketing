@@ -104,6 +104,45 @@ describe('Inbox', () => {
     expect(within(messages).getByText(/^Gönderilemedi: alıcı, Meta test numarasının izinli alıcıları/)).toBeInTheDocument();
   });
 
+  it('approves or discards a held automatic reply in the thread', async () => {
+    const draft = (id: string, held: string, body: string) => ({
+      id,
+      conversation_id: 'conv-1',
+      workspace_id: WS_ID,
+      direction: 'outbound',
+      author: 'system',
+      body,
+      status: 'queued',
+      external_id: null,
+      cost_minor: null,
+      at: '2026-10-23T10:05:00Z',
+      failure_reason: null,
+      automatic: true,
+      held,
+    });
+    const listed = inboxAnswers['GET /api/inbox/conversations/conv-1/messages'] as { items: unknown[] };
+    const calls = await openConversation({
+      ...inboxAnswers,
+      'GET /api/inbox/conversations/conv-1/messages': {
+        items: [...listed.items, draft('message-3', 'outbox-3', 'Taslak bir'), draft('message-4', 'outbox-4', 'Taslak iki')],
+        next_cursor: null,
+      },
+      'POST /api/inbox/replies/outbox-3/approve': { message_id: 'message-3', state: 'pending' },
+      'POST /api/inbox/replies/outbox-4/discard': { message_id: 'message-4', state: 'discarded' },
+    });
+    const user = userEvent.setup();
+    const messages = await screen.findByRole('list', { name: 'Mesajlar' });
+    const first = within(messages).getByText('Taslak bir').closest('li')!;
+    expect(within(first).getByText('otomatik')).toBeInTheDocument();
+    expect(within(first).getByText('Onay bekliyor')).toBeInTheDocument();
+    await user.click(within(first).getByRole('button', { name: 'Onayla' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path === '/api/inbox/replies/outbox-3/approve')).toBe(true));
+    expect(calls.find((c) => c.path === '/api/inbox/replies/outbox-3/approve')?.body).toEqual({});
+    const second = within(messages).getByText('Taslak iki').closest('li')!;
+    await user.click(within(second).getByRole('button', { name: 'Vazgeç' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.path === '/api/inbox/replies/outbox-4/discard')).toBe(true));
+  });
+
   it('human_holder_does_not_disable_panel_reply', async () => {
     const calls = await openConversation();
     const user = userEvent.setup();

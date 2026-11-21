@@ -7,7 +7,8 @@ standard goes to a person. This reverses the "no AI inside Jeeta" rule for inbox
 
 Code: `rust/crates/jt_app/src/usecases/inbox/autoreply.rs` (the use case), `rust/crates/domain/
 jt_inbox/src/autoreply.rs` (the server's rules), `rust/crates/adapters/jt_claude` (the API
-adapter), migration `0047_inbox_auto_reply`.
+adapter), migrations `0047_inbox_auto_reply` and `0048_inbox_person_latest` (an index for the
+person's-hold lookup).
 
 ## Configuration
 
@@ -18,9 +19,14 @@ adapter), migration `0047_inbox_auto_reply`.
 
 The key goes into `/etc/jeeta/jeeta.env` (root:jeeta, 0640) as `JEETA_ANTHROPIC_API_KEY=...`,
 then `systemctl restart jeeta`. Requests go to `api.anthropic.com` only (the `anthropic` entry of
-`jt_outbound`'s fixed hosts), under a 20 s timeout.
+`jt_outbound`'s fixed hosts), under a 20 s timeout. A customer's photo is read from Meta
+(`graph.facebook.com`, then `lookaside.fbsbx.com`, both `meta` entries of the fixed hosts).
 
 ## Turning it on for a workspace
+
+**Turning it on sends the number's customer messages, their text and their photos, to Anthropic
+(the Claude API).** Photos can show faces and children. The owner's privacy notice must say so
+before the switch is turned on (see "Data protection").
 
 1. The workspace is `active` (a `pending_payment` workspace sends nothing), the inbox module is
    installed and its WhatsApp number is connected and verified.
@@ -37,6 +43,16 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
 - A customer's message is scheduled 12 s after the last one of a burst (never more than 45 s after
   the first); the `inbox_auto_reply` job runs every 3 s. The model reads the fixed instructions,
   the workspace's cards, rules, notes and range, and the last 30 messages.
+- A customer's photo is stored as the text `[image]` (and its caption on the next line); a
+  document as `[document: name]` (and its caption). When the model is asked, the latest four of
+  the customer's photos in those messages are read from Meta by the inbound event's media id, in
+  memory only, and shown to the model as images in the customer's turn: JPEG, PNG or WebP by
+  their bytes, at most 5 MiB each, 8 s each and 15 s in all. A photo that cannot be read (an
+  error, too large, another type, too slow) is shown as its text with a note that the model cannot
+  see it; an older photo with a note that it is not shown. Documents and 3D files are never read:
+  the model is told it cannot open them. The model uses what it sees to place the work in the
+  range, and hands over when a photo is unclear or shows something outside the standard. The
+  server's check on the answer stays text-only.
 - It answers through one tool: a reply, a quote, or a hand-over to a person.
 - The server checks every answer. A reply (and a hand-over's line) is first normalised (NFKC,
   zero-width and other format characters removed, every script's digits as ASCII, Turkish lower
@@ -57,9 +73,12 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   Business App) it stays out for the rest of that customer journey and for at least 24 hours
   after the person's last message, unless a person hands the conversation back to the agent;
   then a customer message still waiting inside the reply window is answered at once. While the
-  replies stay out of a conversation, agents are offered it as usual. A held or queued automatic reply
-  whose conversation moved on is refused (`stale`).
-- The capability's policy applies: approval (the reply waits in the approvals list), working hours
+  replies stay out of a conversation, agents are offered it as usual. The hand-back's mark commits
+  with the hand-back itself, so no agent is offered the conversation in between. A held or queued
+  automatic reply whose conversation moved on is refused (`stale`).
+- The capability's policy applies: approval (the reply waits in the approvals list and in the
+  conversation, where it can be approved or discarded; automatic messages carry an "otomatik"
+  mark there), working hours
   (outside them the conversation goes to a person) and the daily cap.
 - Limits per local day: 24 model calls per conversation and 600 per workspace (each automatic
   message takes two: the answer and its check), $2 of model cost per workspace. Reaching one
@@ -86,11 +105,14 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   `inbox.reply.held`, with codes and numbers only.
 - No customer text, model answer, quote basis or hand-over summary in logs or the ledger; logs
   name the job, the workspace, a code and Anthropic's `request-id`.
+- No photo anywhere: the feature never writes one to disk, the database, a log or the ledger. It
+  lives in memory for one model call (a photo that cannot be shown logs the code `image_unseen`).
 
 ## Data protection
 
-Customer messages now go to Anthropic as a data processor. The owner's privacy notice must name it
-(KVKK) before the feature is turned on.
+Turning the feature on sends the customers' message text and photos to Anthropic, as a data
+processor. Photos can show faces and children. The owner's privacy notice must name Anthropic and
+say that photos are included (KVKK) before the feature is turned on.
 
 ## Turning it off
 

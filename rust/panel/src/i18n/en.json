@@ -1704,6 +1704,10 @@
     "taskNotFound": "Task not found.",
     "journey": "Journey",
     "noJourney": "No journey to show.",
+    "automatic": "automatic",
+    "heldReply": "Awaiting approval",
+    "approveHeld": "Approve",
+    "discardHeld": "Discard",
     "agentExecutor": "Executor: Agent",
     "humanExecutor": "Executor: {{user}}",
     "you": "You",
@@ -4502,7 +4506,7 @@
         "autoReplyNoKey": "The server has no Claude key, so automatic replies are off.",
         "autoReplyMin": "At least",
         "autoReplyMax": "At most",
-        "autoReplyHelp": "Write in the “Standart iş ve fiyat” card how you price within the range. Requests outside the standard come to you.",
+        "autoReplyHelp": "Write in the “Standart iş ve fiyat” card how you price within the range. Requests outside the standard come to you. While it is on, customer messages and their photos are sent to Anthropic (Claude) to answer them.",
         "autoReplyInvalid": "Enter both amounts; the lower one cannot be above the higher one."
       }
     },
