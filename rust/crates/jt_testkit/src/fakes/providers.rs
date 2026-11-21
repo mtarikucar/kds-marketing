@@ -1964,6 +1964,7 @@ pub struct ScriptedRegistry {
     pollers: BTreeMap<Provider, Arc<ScriptedPoller>>,
     waker: Option<Arc<ScriptedWaker>>,
     model: Option<Arc<ScriptedModel>>,
+    shop: Option<Arc<super::ScriptedShop>>,
 }
 
 impl ScriptedRegistry {
@@ -1976,6 +1977,12 @@ impl ScriptedRegistry {
     /// Registers `model` as the automatic replies' model ([`ConnectorRegistry::reply_model`]).
     pub fn with_model(mut self, model: Arc<ScriptedModel>) -> Self {
         self.model = Some(model);
+        self
+    }
+
+    /// Registers `shop` as the workspaces' shop client ([`ConnectorRegistry::shop`]).
+    pub fn with_shop(mut self, shop: Arc<super::ScriptedShop>) -> Self {
+        self.shop = Some(shop);
         self
     }
 
@@ -2118,6 +2125,12 @@ impl ConnectorRegistry for ScriptedRegistry {
         self.model
             .clone()
             .map(|m| m as Arc<dyn jt_app::ports::reply_model::ReplyModel>)
+    }
+
+    fn shop(&self) -> Option<Arc<dyn jt_app::ports::shop::ShopClient>> {
+        self.shop
+            .clone()
+            .map(|s| s as Arc<dyn jt_app::ports::shop::ShopClient>)
     }
 }
 

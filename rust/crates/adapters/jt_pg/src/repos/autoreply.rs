@@ -1,12 +1,16 @@
 //! The inbox's automatic replies (migration `0047_inbox_auto_reply`): `auto_reply_queue`, the
 //! debounced work list (one row per conversation), and `auto_reply_runs`, one row per model call
-//! with codes and numbers only. `workspaces_with_due_auto_replies` is the one platform-wide read.
+//! with codes and numbers only; and (migration `0050_auto_reply_orders`) `auto_reply_orders`, the
+//! orders they asked of the workspace's shop (codes, amounts, the shop's reference and link: no
+//! customer details). `workspaces_with_due_auto_replies` is the one platform-wide read.
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
-use jt_app::ports::reply_model::{AutoReplyRepo, QueueRow, RunOutcome, RunRow, Usage};
+use jt_app::ports::reply_model::{
+    AutoReplyRepo, OrderRow, OrderState, QueueRow, RunOutcome, RunRow, Usage,
+};
 use jt_capability::CapabilityId;
-use jt_inbox::ConversationId;
+use jt_inbox::{ConversationId, JourneyId};
 use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -119,6 +123,48 @@ impl RunRecord {
             },
             outbox_id: self.outbox_id,
             quote_id: self.quote_id,
+        })
+    }
+}
+
+const ORDER_COLUMNS: &str = "id, journey_id, conversation_id, quote_id, shop_capability_id, \
+     run_id, state, reason, amount_minor, currency, reference, pay_url, created_at, finished_at";
+
+#[derive(sqlx::FromRow)]
+struct OrderRecord {
+    id: Uuid,
+    journey_id: Uuid,
+    conversation_id: Uuid,
+    quote_id: Uuid,
+    shop_capability_id: Uuid,
+    run_id: Uuid,
+    state: String,
+    reason: Option<String>,
+    amount_minor: i64,
+    currency: String,
+    reference: Option<String>,
+    pay_url: Option<String>,
+    created_at: OffsetDateTime,
+    finished_at: Option<OffsetDateTime>,
+}
+
+impl OrderRecord {
+    fn into_row(self) -> Result<OrderRow, AppError> {
+        Ok(OrderRow {
+            id: self.id,
+            journey_id: JourneyId::from(self.journey_id),
+            conversation_id: ConversationId::from(self.conversation_id),
+            quote_id: self.quote_id,
+            shop_capability_id: CapabilityId(self.shop_capability_id),
+            run_id: self.run_id,
+            state: stored(OrderState::parse(&self.state), "auto_reply_orders.state")?,
+            reason: self.reason,
+            amount_minor: self.amount_minor,
+            currency: self.currency,
+            reference: self.reference,
+            pay_url: self.pay_url,
+            created_at: self.created_at,
+            finished_at: self.finished_at,
         })
     }
 }
@@ -363,7 +409,7 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let n: i64 = sqlx::query_scalar(
             "select count(*) from auto_reply_runs where workspace_id = $1 and at >= $2 \
-             and outcome in ('replied', 'quoted') \
+             and outcome in ('replied', 'quoted', 'ordered') \
              and ($3::uuid is null or conversation_id = $3) \
              and ($4::uuid is null or capability_id = $4)",
         )
@@ -389,5 +435,176 @@ impl AutoReplyRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "sum the automatic replies' cost"))?;
         Ok(n.unwrap_or(0))
+    }
+
+    async fn runs_with_reason(
+        &mut self,
+        conversation: ConversationId,
+        reason: &str,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let ws = self.workspace_id();
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from auto_reply_runs where workspace_id = $1 and conversation_id = $2 \
+             and reason = $3 and at >= $4",
+        )
+        .bind(ws.as_uuid())
+        .bind(conversation.as_uuid())
+        .bind(reason)
+        .bind(since)
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count the automatic replies' runs by reason"))?;
+        u32::try_from(n).map_err(|_| AppError::internal("a count is out of range"))
+    }
+
+    async fn order_insert(&mut self, row: &OrderRow) -> Result<bool, AppError> {
+        let ws = self.workspace_id();
+        let done = sqlx::query(
+            "insert into auto_reply_orders (workspace_id, id, journey_id, conversation_id, \
+             quote_id, shop_capability_id, run_id, state, reason, amount_minor, currency, \
+             reference, pay_url, created_at, finished_at) values ($1, $2, $3, $4, $5, $6, $7, $8, \
+             $9, $10, $11, $12, $13, $14, $15) on conflict do nothing",
+        )
+        .bind(ws.as_uuid())
+        .bind(row.id)
+        .bind(row.journey_id.as_uuid())
+        .bind(row.conversation_id.as_uuid())
+        .bind(row.quote_id)
+        .bind(row.shop_capability_id.as_uuid())
+        .bind(row.run_id)
+        .bind(row.state.key())
+        .bind(row.reason.as_deref())
+        .bind(row.amount_minor)
+        .bind(&row.currency)
+        .bind(row.reference.as_deref())
+        .bind(row.pay_url.as_deref())
+        .bind(row.created_at)
+        .bind(row.finished_at)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "store an automatic reply's order"))?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn order_by_journey(&mut self, journey: JourneyId) -> Result<Option<OrderRow>, AppError> {
+        let ws = self.workspace_id();
+        let sql = format!(
+            "select {ORDER_COLUMNS} from auto_reply_orders where workspace_id = $1 and journey_id = $2"
+        );
+        let record: Option<OrderRecord> = sqlx::query_as(&sql)
+            .bind(ws.as_uuid())
+            .bind(journey.as_uuid())
+            .fetch_optional(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "read a journey's order"))?;
+        record.map(OrderRecord::into_row).transpose()
+    }
+
+    async fn order_get(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError> {
+        let ws = self.workspace_id();
+        let sql = format!(
+            "select {ORDER_COLUMNS} from auto_reply_orders where workspace_id = $1 and id = $2"
+        );
+        let record: Option<OrderRecord> = sqlx::query_as(&sql)
+            .bind(ws.as_uuid())
+            .bind(id)
+            .fetch_optional(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "read an automatic reply's order"))?;
+        record.map(OrderRecord::into_row).transpose()
+    }
+
+    async fn order_lock(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError> {
+        let ws = self.workspace_id();
+        let sql = format!(
+            "select {ORDER_COLUMNS} from auto_reply_orders where workspace_id = $1 and id = $2 \
+             for update"
+        );
+        let record: Option<OrderRecord> = sqlx::query_as(&sql)
+            .bind(ws.as_uuid())
+            .bind(id)
+            .fetch_optional(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "lock an automatic reply's order"))?;
+        record.map(OrderRecord::into_row).transpose()
+    }
+
+    async fn order_save(&mut self, row: &OrderRow) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        let done = sqlx::query(
+            "update auto_reply_orders set state = $3, reason = $4, reference = $5, pay_url = $6, \
+             finished_at = $7 where workspace_id = $1 and id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(row.id)
+        .bind(row.state.key())
+        .bind(row.reason.as_deref())
+        .bind(row.reference.as_deref())
+        .bind(row.pay_url.as_deref())
+        .bind(row.finished_at)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "update an automatic reply's order"))?;
+        if done.rows_affected() == 0 {
+            return Err(AppError::not_found("no such automatic reply order"));
+        }
+        Ok(())
+    }
+
+    async fn orders_since(
+        &mut self,
+        shop: CapabilityId,
+        since: OffsetDateTime,
+    ) -> Result<u32, AppError> {
+        let ws = self.workspace_id();
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from auto_reply_orders where workspace_id = $1 \
+             and shop_capability_id = $2 and created_at >= $3",
+        )
+        .bind(ws.as_uuid())
+        .bind(shop.as_uuid())
+        .bind(since)
+        .fetch_one(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "count the automatic replies' orders"))?;
+        u32::try_from(n).map_err(|_| AppError::internal("a count is out of range"))
+    }
+
+    async fn orders_calling_before(
+        &mut self,
+        before: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<Uuid>, AppError> {
+        let ws = self.workspace_id();
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "select id from auto_reply_orders where workspace_id = $1 and state = 'calling' \
+             and created_at < $2 order by created_at, id limit $3",
+        )
+        .bind(ws.as_uuid())
+        .bind(before)
+        .bind(i64::from(limit))
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list the interrupted orders"))?;
+        Ok(ids)
+    }
+
+    async fn orders_forget_links(
+        &mut self,
+        conversations: &[ConversationId],
+    ) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        let ids: Vec<Uuid> = conversations.iter().map(|c| c.as_uuid()).collect();
+        sqlx::query(
+            "update auto_reply_orders set pay_url = null where workspace_id = $1 \
+             and conversation_id = any($2)",
+        )
+        .bind(ws.as_uuid())
+        .bind(&ids)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "clear the erased person's payment links"))?;
+        Ok(())
     }
 }

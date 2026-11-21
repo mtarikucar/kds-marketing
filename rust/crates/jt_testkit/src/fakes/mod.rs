@@ -74,6 +74,8 @@ mod prospects;
 mod providers;
 pub use prospects::{MemProspects, StoredBlock};
 mod services;
+mod shop;
+pub use shop::{ScriptedShop, ShopCallMade, ShopResult};
 mod state;
 mod strategy;
 mod tenant;
