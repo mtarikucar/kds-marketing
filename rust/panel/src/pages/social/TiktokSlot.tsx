@@ -67,7 +67,6 @@ export function TiktokSlot({ id, manage, waiting }: { id: string; manage: boolea
         ? <TiktokPostStatus slot={data.slot} />
         : manage ? <TiktokPostingScreen key={`${id}-${data.slot.revision}`} slot={data.slot} />
           : <p>{t('studio.forbidden')}</p>)}
-    {data?.attempts.at(-1)?.state === 'unknown' && data.attempts.at(-1)?.outcome?.status === 'observed' && <p className="text-sm">{t('studio.processing')}</p>}
     {manage && data?.attempts.some(attempt => attempt.state === 'failed' || attempt.state === 'refused') && <div className="flex flex-wrap gap-2"><CancelPost slotId={id} revision={data.slot.revision} /></div>}
   </section>;
 }

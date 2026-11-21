@@ -49,7 +49,7 @@ Paylaşımlar:
   kanal, 8 adımlık küçük ilerleme, durum, yayın zamanı.
 - Chips: "Tümü", "Seni bekleyen", then only the stages that currently hold something.
 - A row opens a right panel **without tabs and without the process/step list** (the owner removed
-  them): görsel, başlık, kanal ve zaman, durum, eylemler (Onayla / TikTok'ta tamamla / Düzenleme iste /
+  them): görsel, başlık, kanal ve zaman, durum, eylemler (Onayla / TikTok ekranında onayla / Düzenleme iste /
   İptal), the post text, details (Kanal, Tarih, Biçim, Kategori), and a note when the image is an AI
   illustration.
 - One composer, "Ne paylaşalım?": free text and optional files, **no platform picker** ("platform
@@ -204,7 +204,7 @@ The pill word, its tone, and when. One status per row, first matching line wins.
 | `published` | `Yayında` | green | went out (`published_at` set) |
 
 The panel's status line under the title is more precise than the pill: the first wait's own
-status (`Onayını bekliyor`, `TikTok'ta tamamlanacak`, …, §2.6), else the sub-state of `preparing`:
+status (`Onayını bekliyor`, `TikTok onayını bekliyor`, …, §2.6), else the sub-state of `preparing`:
 
 | Sub-state | Panel line |
 |---|---|
@@ -252,7 +252,7 @@ one primary action, sometimes one quiet secondary; the panel shows the sentence 
 | Code | Status line | Sentence | Primary action → call | Secondary |
 |---|---|---|---|---|
 | `approval` | `Onayını bekliyor` | `Yayından önce onayını bekliyor.` | `Onayla` → `studio.approve` | — |
-| `posting_screen` | `TikTok'ta tamamlanacak` | `TikTok'un paylaşım ekranını sen tamamlarsın.` | `TikTok'ta tamamla` → opens the unchanged TikTok posting dialog (`studio.tiktok_posting`, `studio.tiktok_post`) | — |
+| `posting_screen` | `TikTok onayını bekliyor` | `Bu paylaşımı TikTok ekranında onaylaman gerekiyor. Onaylarsan kendiliğinden paylaşılır: {zaman}.` (its time passed, inside its grace: `… Saati geçti; onaylarsan hemen paylaşılır.`) | `TikTok ekranında onayla` → opens the unchanged TikTok posting dialog (`studio.tiktok_posting`, `studio.tiktok_post`); passing it approves the post and sends nothing (§2.7.3) | — |
 | `capture` | `Fotoğraf bekliyor` | `Ajan bunun için bir fotoğraf ya da video istiyor: “{istek}”` | `Dosya ekle` → `content.files_add` (target `capture`) | `Gerek yok` → `studio.project_request_update` status `dismissed` |
 | `files_permission` | `İzin bekliyor` | sensitive: `Dosyanda {yüz / isim / çocuk / logo / kurum adı} görünüyor; paylaşılması için izin ver.`; not checked (analysis failed, no materials agent, or an analysis without `sensitive_checked`): `Dosyalarının paylaşılabilir olduğunu onayla.` | `İzin ver` → `studio.material_permission` (`shareable`) for each such file | `Bu dosya olmadan devam et` → `studio.project_materials` (remove); on a need or a special day: `Başka fotoğraf ekle` → `content.files_add` |
 | `files_quality` | `Dosya uygun değil` | `Ajan bu dosyayı paylaşmaya uygun bulmadı: {neden}.` | `Yine de kullan` → `studio.material_intelligence_update` (quality `publishable`) | `Bu dosya olmadan devam et` |
@@ -301,7 +301,7 @@ No tabs, no step list. Top to bottom (mockup F):
 2. Wait sentence when the row waits (§2.6), amber box.
 3. **Actions**, one row of buttons, only those the server says this viewer may take
    (`actions`, §3.2.3), in this order: the wait's primary action (filled), `Onayla` or
-   `TikTok'ta tamamla` when not already the primary, `Düzenleme iste`, `İptal`; the wait's
+   `TikTok ekranında onayla` when not already the primary, `Düzenleme iste`, `İptal`; the wait's
    secondary action (`Bırak`, `Gerek yok`, `Yine de kabul et`, …) as a text button under them. No
    action: no button row. `paused` rows show the sentence `Tüm paylaşımlar durduruldu; sürdürünce
    zamanında çıkar.` with `Sürdür` (the page's brake action).
@@ -338,11 +338,18 @@ Dialog title `İptal edilsin mi?`, body by target (`actions.cancel.kind`):
 Optional input `Neden? (isteğe bağlı)`; an empty reason is sent as `Sahibi iptal etti`. Buttons
 `İptal et` (destructive), `Vazgeç`.
 
-#### 2.7.3 "Onayla" and "TikTok'ta tamamla"
+#### 2.7.3 "Onayla" and "TikTok ekranında onayla"
 
 `Onayla` calls `studio.approve {target: {slot}, expected_revision}` at once; toast
-`Onaylandı. {zaman} paylaşılacak.` `TikTok'ta tamamla` opens the existing dialog
+`Onaylandı. {zaman} paylaşılacak.` `TikTok ekranında onayla` opens the existing dialog
 (`TiktokDialog`/`StudioTiktok`, unchanged) and writes `tiktok={slot_id}` into the address.
+Passing TikTok's screen is the approval (`studio.tiktok_post` records the choice; nothing is sent
+then): the publisher sends the post at its time, or on its next run once that time has passed.
+So the dialog then says it in one line, `Onaylandı: {zaman} olunca TikTok'ta kendiliğinden
+paylaşılır. Senden başka bir şey gerekmiyor.`, or, its time passed, `Onaylandı. Saati geçtiği için
+şimdi TikTok'a gönderiliyor…`; then `TikTok'a gönderiliyor…`, `TikTok paylaşımı işliyor; profilde
+görünmesi birkaç dakika sürebilir.`, `TikTok'ta yayınlandı`. The row is then `Planlandı`, with no
+wait and no button.
 
 #### 2.7.4 Revisions and conflicts
 
@@ -393,7 +400,7 @@ until one is usable, and disappears then (R2; the day's content appears as a row
 
 - **Advice** (`approval`, `posting_screen`, `video_only`) is one quiet line, shown only while the
   input has focus or text, its parts joined by ` · `: `Onayına gelir` (the approval switch is on),
-  `TikTok'u sen tamamlarsın` (a TikTok account is connected), `Hesapların yalnızca video alıyor;
+  `TikTok'ta her paylaşımı sen onaylarsın` (a TikTok account is connected), `Hesapların yalnızca video alıyor;
   video eklemezsen ajan görselden video yapar` (every postable account takes only video).
 - **A platform named in the text** (R1): the panel matches platform names in the typed text
   (case-insensitive, with Turkish suffixes: `tiktok`, `instagram`/`insta`, `facebook`/`face`,
@@ -444,7 +451,7 @@ A right sheet (full screen on a phone), what `AccountRail` and `AccountHeader` g
   list (`strategy.post_approval_set`, §4.6.5; turning it off needs owner or manager). It never writes
   the capability's stored flag, which keeps holding that account's comment replies as today
   (`Yorum yanıtları onayına gelir` is shown read-only when that flag is set, with `Değiştir` opening
-  the capability's policy dialog). TikTok always reads `Her paylaşım TikTok ekranını bekler`.
+  the capability's policy dialog). TikTok always reads `Her paylaşımı TikTok ekranında sen onaylarsın`.
 
 #### 2.9.3 Ayarlar
 
@@ -581,7 +588,7 @@ goes.
 | 31 | New-olay button | /content | Dosyalar › `Kategori ekle` |
 | 32 | Home work items and agenda links into /content and /social | home | retargeted (§2.13) |
 | 33 | Account period `days=7\|30\|90` | /social | Hesaplar `days` |
-| 34 | Badge `Her paylaşım TikTok ekranını bekler` | /social | Hesaplar, per TikTok account |
+| 34 | Badge `Her paylaşımı TikTok ekranında sen onaylarsın` | /social | Hesaplar, per TikTok account |
 | 35 | Agent wake line of the analysis queue | /content | Dosyalar header |
 
 ### 2.13 Links into the page
