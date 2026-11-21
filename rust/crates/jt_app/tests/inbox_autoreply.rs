@@ -1547,12 +1547,13 @@ async fn a_give_up_is_tried_again_and_then_the_row_rests() {
     });
     job(&t, due(0)).await;
     assert!(t.model.requests().is_empty());
-    assert!(
-        t.w.uow
-            .snapshot()
-            .auto_reply
-            .queue
-            .iter()
-            .all(|(_, q)| q.is_idle())
-    );
+    let s = t.w.uow.snapshot();
+    assert!(s.auto_reply.queue.iter().all(|(_, q)| q.is_idle()), "rests");
+    // Not takeable any more: a later tick touches nothing.
+    assert_eq!(job(&t, due(0) + Duration::minutes(10)).await.touched, 0);
+    // And a person's work list has the conversation.
+    handed_to_a_person(&t);
+    assert_eq!(reasons(&t, "inbox.autoreply.handed_over"), ["failed"]);
+    let pending = context::pending(&t.w.deps, &t.w.owner_ctx).await.unwrap();
+    assert_eq!(pending.ours.len(), 1);
 }

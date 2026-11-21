@@ -944,8 +944,34 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
         return Ok(Taken::No);
     }
     if row.attempts >= AUTOREPLY_MAX_ATTEMPTS + GIVE_UP_RETRIES {
-        // Even the hand-over kept failing: the row rests, the response SLA hands it over.
+        // Even the hand-over kept failing: the row rests (nothing due, not takeable), and the
+        // conversation goes to a person with the plainest write there is (the executor and one
+        // ledger line, no note, no line to the customer), so a person's work list has it.
         idle(r.as_mut(), row).await?;
+        if let Some(c) = r
+            .conversations()
+            .get(id)
+            .await?
+            .filter(|c| c.executor == Executor::Agent && c.state == ConvState::Ours)
+        {
+            let owner = r
+                .journeys()
+                .open_for(c.person_id)
+                .await?
+                .and_then(|j| j.owner);
+            r.conversations()
+                .update_executor(c.id, Executor::Human { user_id: owner })
+                .await?;
+            record(
+                r.as_mut(),
+                ctx,
+                "inbox.autoreply.handed_over",
+                "conversation",
+                c.id,
+                json!({ "run_id": null, "reason": "failed", "by": By::Server.key() }),
+            )
+            .await?;
+        }
         r.commit().await?;
         warn(Some(ctx.workspace_id), "give_up_failed");
         return Ok(Taken::No);
