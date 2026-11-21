@@ -119,7 +119,7 @@ export function DetailPanel({
       </div>
 
       {wait && (
-        <p data-testid="wait-sentence" className="rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2.5 text-sm">{waitSentence(t, wait, row.channel)}</p>
+        <p data-testid="wait-sentence" className="rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2.5 text-sm">{waitSentence(t, wait, row.channel, row.publish_at, lang)}</p>
       )}
       {row.status === 'paused' && (
         <div className="space-y-2 rounded-lg border border-border bg-surface-muted px-3 py-2.5 text-sm">
