@@ -386,7 +386,7 @@ fn tool_of(block: &Value) -> Option<ModelTool> {
         "create_order" => serde_json::from_value::<CreateOrderIn>(input)
             .ok()
             .map(|o| ModelTool::CreateOrder {
-                fields: o.fields,
+                fields: Box::new(o.fields),
                 acceptance: o.acceptance,
                 text: o.text,
             }),

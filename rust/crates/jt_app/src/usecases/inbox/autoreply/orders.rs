@@ -297,7 +297,7 @@ pub(super) async fn decide(
     s: &Snapshot,
     c: &Conversation,
     run_id: Uuid,
-    fields: order::OrderFields,
+    fields: Box<order::OrderFields>,
     acceptance: String,
     text: String,
     verdict: Verdict,

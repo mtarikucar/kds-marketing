@@ -2692,7 +2692,7 @@ fn fields() -> OrderFields {
 
 fn create_order(fields: OrderFields, acceptance: &str, text: &str) -> ModelResult {
     tool(ModelTool::CreateOrder {
-        fields,
+        fields: Box::new(fields),
         acceptance: acceptance.into(),
         text: text.into(),
     })

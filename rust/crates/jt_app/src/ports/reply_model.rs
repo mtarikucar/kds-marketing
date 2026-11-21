@@ -221,7 +221,7 @@ pub enum ModelTool {
     /// customer's own words of acceptance, and a short line to send with the payment link (empty
     /// for none). Never stored or logged: `Debug` masks the details and the words.
     CreateOrder {
-        fields: OrderFields,
+        fields: Box<OrderFields>,
         acceptance: String,
         text: String,
     },
