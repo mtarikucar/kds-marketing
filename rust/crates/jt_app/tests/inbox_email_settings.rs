@@ -133,10 +133,10 @@ async fn the_business_basis_stays_the_owners_act_with_the_counsels_confirmation(
     // A manager is no owner; an agent never opens it.
     let manager = w.member("manager").await;
     let e = err(email_settings_set(&w.deps, &manager, input(open.clone())).await);
-    assert_eq!(e.message, "owner_required");
+    assert_eq!(e.details["reason"], "owner_required");
     let agent = w.agent(&["inbox.work", "inbox.manage"]).await;
     let e = err(email_settings_set(&w.deps, &agent, input(open.clone())).await);
-    assert_eq!(e.message, "owner_required");
+    assert_eq!(e.details["reason"], "owner_required");
     // The owner without the counsel's confirmation is refused.
     let e = err(email_settings_set(
         &w.deps,

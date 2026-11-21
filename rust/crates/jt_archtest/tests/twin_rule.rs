@@ -159,7 +159,7 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("distribution", 5),
     ("outreach", 18),
     ("events", 3),
-    ("inbox", 48),
+    ("inbox", 50),
     ("studio", 54),
     ("content", 5),
     ("social", 4),
@@ -171,7 +171,7 @@ fn the_registry_holds_exactly_the_documented_tools() {
     let specs = jt_mcp::registry();
     assert_eq!(specs.len(), 252);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 250);
+    assert_eq!(total, 252);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
