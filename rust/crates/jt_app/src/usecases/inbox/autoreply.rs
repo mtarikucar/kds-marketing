@@ -829,7 +829,8 @@ const BARGAIN_STEMS: &[&str] = &[
 /// phrase of [`BARGAIN_STEMS`], or an amount in a money form (beside a currency, or with "bin" or
 /// "k") lower than `current`. A bare number (an address, a quantity, a postcode) does not.
 fn bargains(text: &str, year: i32, current: i64) -> bool {
-    let lower = text.to_lowercase();
+    // Turkish lower case ("İndirim" is "indirim"), the server's own normal form.
+    let lower = rules::normalise(text);
     if BARGAIN_STEMS.iter().any(|s| lower.contains(s)) {
         return true;
     }
@@ -1005,7 +1006,7 @@ fn money_text(minor: i64, currency: &str) -> String {
     let whole = (minor / 100).to_string();
     let mut grouped = String::new();
     for (i, ch) in whole.chars().enumerate() {
-        if i > 0 && (whole.len() - i) % 3 == 0 {
+        if i > 0 && (whole.len() - i).is_multiple_of(3) {
             grouped.push('.');
         }
         grouped.push(ch);
