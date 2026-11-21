@@ -220,6 +220,11 @@ fn wire(cred: &MailCred<'_>, mail: &MailMessage) -> Result<Vec<u8>, ConnectorErr
         || mail.in_reply_to.as_ref().is_some_and(|v| !valid_id(v))
         || mail.references.iter().any(|v| !valid_id(v))
         || mail.from_name.as_deref().is_some_and(|n| !valid_name(n))
+        || mail.notice_marker.as_deref().is_some_and(|m| {
+            m.is_empty()
+                || m.len() > 64
+                || !m.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
         || mail
             .list_unsubscribe
             .as_ref()
@@ -266,6 +271,24 @@ fn wire(cred: &MailCred<'_>, mail: &MailMessage) -> Result<Vec<u8>, ConnectorErr
             .raw_header(HeaderValue::new(
                 HeaderName::new_from_ascii_str("List-Unsubscribe-Post"),
                 "List-Unsubscribe=One-Click".to_owned(),
+            ));
+    }
+    if let Some(marker) = &mail.notice_marker {
+        builder = builder.raw_header(HeaderValue::new(
+            HeaderName::new_from_ascii_str("X-Jeeta-Notice"),
+            marker.clone(),
+        ));
+    }
+    if mail.auto_submitted {
+        // RFC 3834: a machine's message; and Exchange's switch for its automatic answers.
+        builder = builder
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("Auto-Submitted"),
+                "auto-generated".to_owned(),
+            ))
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("X-Auto-Response-Suppress"),
+                "All".to_owned(),
             ));
     }
     let text = SinglePart::plain(mail.text.clone());

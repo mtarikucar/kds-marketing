@@ -225,8 +225,8 @@ async fn studio_exact_catalog_and_gate_set() {
     // the workspace module registry of 0032, the account snapshots of 0037_social_accounts and
     // the ad campaigns of 0040_ads_campaigns, the agents' wake rows of 0045_agent_wake, and the
     // five knowledge base tables of 0046_knowledge_base, and the automatic replies' queue and runs
-    // of 0047_inbox_auto_reply.
-    assert_eq!(all_tables.len(), 114);
+    // of 0047_inbox_auto_reply, and the owner's notices of 0049_owner_notices.
+    assert_eq!(all_tables.len(), 115);
 
     // All 26 Studio tables are tenant-scoped, including intelligence and productions.
     assert_eq!(
@@ -1290,6 +1290,13 @@ fn all_connector_write_sites_have_reservation_paths() {
             "send_step".into(),
             "send_text".into(),
         ),
+        // The owner's email notices: free mail through the workspace's own mailbox, capped per
+        // rolling day where they are queued (`queue_in` counts them, below).
+        (
+            "crates/jt_app/src/usecases/inbox/notices.rs".into(),
+            "send_one".into(),
+            "send".into(),
+        ),
     ]);
     assert_eq!(
         found, expected,
@@ -1307,6 +1314,7 @@ fn all_connector_write_sites_have_reservation_paths() {
         ("inbox/replies.rs", "send_step", "claim"),
         // The inbox names the module that spends (a campaign's step, else the inbox).
         ("inbox/replies.rs", "claim", "reserve_metered_for"),
+        ("inbox/notices.rs", "queue_in", "count_since"),
     ] {
         let ast = syntax(&format!("crates/jt_app/src/usecases/{file}"));
         let funcs = functions(&ast);

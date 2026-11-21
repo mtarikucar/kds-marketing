@@ -154,6 +154,7 @@ fn tenant_tables_are_read_from_the_migrations() {
         "knowledge_proposals",
         "auto_reply_queue",
         "auto_reply_runs",
+        "owner_notices",
     ] {
         assert!(
             tables.iter().any(|x| x == t),

@@ -1569,6 +1569,8 @@ fn mail_message() -> jt_app::ports::connectors::MailMessage {
         from_name: None,
         list_unsubscribe: None,
         attachment_files: vec![],
+        auto_submitted: false,
+        notice_marker: None,
     }
 }
 

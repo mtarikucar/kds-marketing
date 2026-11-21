@@ -156,11 +156,12 @@ pub enum Job {
     AgentWake,
     KnowledgeSettle,
     InboxAutoReply,
+    OwnerNotices,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 38] = [
+    pub const ALL: [Job; 39] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -199,6 +200,7 @@ impl Job {
         Job::AgentWake,
         Job::KnowledgeSettle,
         Job::InboxAutoReply,
+        Job::OwnerNotices,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -243,6 +245,7 @@ impl Job {
             Job::AgentWake => "agent_wake",
             Job::KnowledgeSettle => "knowledge_settle",
             Job::InboxAutoReply => "inbox_auto_reply",
+            Job::OwnerNotices => "owner_notices",
         }
     }
 
@@ -292,6 +295,7 @@ impl Job {
             Job::AgentWake => run_agent_wake(deps, now).await,
             Job::KnowledgeSettle => run_knowledge_settle(deps, now).await,
             Job::InboxAutoReply => run_inbox_auto_reply(deps, now).await,
+            Job::OwnerNotices => run_owner_notices(deps, now).await,
         }
     }
 }
@@ -1766,6 +1770,14 @@ pub async fn run_inbox_consume(deps: &Deps, now: OffsetDateTime) -> JobReport {
 pub async fn run_inbox_auto_reply(deps: &Deps, now: OffsetDateTime) -> JobReport {
     let report = super::inbox::autoreply::run(deps, now).await;
     finish(Job::InboxAutoReply, report)
+}
+
+/// Sends the owner's email notices that are due (`inbox::notices`), in every workspace holding one
+/// (found with one platform-wide read), a few per workspace and within a time budget; without a
+/// mail sender nothing runs.
+pub async fn run_owner_notices(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let report = super::inbox::notices::run(deps, now).await;
+    finish(Job::OwnerNotices, report)
 }
 
 /// Hand overdue agent conversations to their journey owner or the unassigned queue.

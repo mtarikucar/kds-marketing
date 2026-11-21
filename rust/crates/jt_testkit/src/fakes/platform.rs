@@ -481,6 +481,24 @@ impl PlatformRepos for MemPlatform {
         Ok(ids.into_iter().collect())
     }
 
+    async fn workspaces_with_due_notices(
+        &mut self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        use jt_app::ports::notices::NoticeState;
+        let ids: BTreeSet<WorkspaceId> = self
+            .state()
+            .notices
+            .iter()
+            .filter(|(_, n)| {
+                (n.state == NoticeState::Queued && n.next_at.is_none_or(|at| at <= now))
+                    || n.state == NoticeState::Sending
+            })
+            .map(|(w, _)| *w)
+            .collect();
+        Ok(ids.into_iter().collect())
+    }
+
     async fn workspaces_with_live_agent_calls(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
         let ids: BTreeSet<WorkspaceId> = self
             .state()

@@ -258,6 +258,9 @@ impl TenantRepos for Tenant {
     fn auto_reply(&mut self) -> &mut dyn jt_app::ports::reply_model::AutoReplyRepo {
         self.inner.auto_reply()
     }
+    fn notices(&mut self) -> &mut dyn jt_app::ports::notices::NoticeRepo {
+        self.inner.notices()
+    }
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.inner.commit().await
     }
@@ -495,6 +498,12 @@ impl PlatformRepos for Platform {
     }
     async fn workspaces_with_auto_reply(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
         self.inner.workspaces_with_auto_reply().await
+    }
+    async fn workspaces_with_due_notices(
+        &mut self,
+        now: time::OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        self.inner.workspaces_with_due_notices(now).await
     }
     async fn workspaces_with_due_auto_replies(
         &mut self,

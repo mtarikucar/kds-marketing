@@ -518,6 +518,9 @@ impl TenantRepos for FailingTenant {
     fn auto_reply(&mut self) -> &mut dyn jt_app::ports::reply_model::AutoReplyRepo {
         self.0.auto_reply()
     }
+    fn notices(&mut self) -> &mut dyn jt_app::ports::notices::NoticeRepo {
+        self.0.notices()
+    }
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.0.commit().await
     }

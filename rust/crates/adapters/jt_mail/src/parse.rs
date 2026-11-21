@@ -281,6 +281,17 @@ pub(crate) fn polled(
     let mut payload = json!({"from":from, "name":name, "to":header(&mail,"To"), "subject":subject,
         "text":text, "message_id":header(&mail,"Message-ID"), "in_reply_to":header(&mail,"In-Reply-To"),
         "date":date, "attachments":attachments, "mailbox":mailbox, "account_id":account});
+    // What tells a machine's message and the owner's own notices apart (`inbox::notices`): kept
+    // only when present, so other mail's payload is unchanged.
+    if let Some(v) = header(&mail, "Auto-Submitted") {
+        payload["auto_submitted"] = json!(v);
+    }
+    if let Some(v) = header(&mail, "X-Jeeta-Notice") {
+        payload["jeeta_notice"] = json!(v);
+    }
+    if mail.ctype.mimetype == "multipart/report" {
+        payload["report"] = json!(true);
+    }
     let mut kind = EventKind::Message;
     if is_sent {
         kind = EventKind::Status;
@@ -349,6 +360,23 @@ pub(crate) fn polled(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_machines_headers_and_the_notice_marker_reach_the_payload_only_when_present() {
+        let draft = super::event("support@example.com", "INBOX", 7, 1,
+            b"From: support@example.com\r\nTo: owner@example.com\r\nMessage-ID: <x@provider.example>\r\nSubject: Jeeta\r\nAuto-Submitted: auto-generated\r\nX-Jeeta-Notice: 0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b\r\n\r\nHello", false).unwrap();
+        assert_eq!(draft.payload["auto_submitted"], "auto-generated");
+        assert_eq!(
+            draft.payload["jeeta_notice"],
+            "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+        );
+        assert!(draft.payload.get("report").is_none());
+        let plain = super::event("support@example.com", "INBOX", 7, 2,
+            b"From: ada@example.com\r\nTo: support@example.com\r\nMessage-ID: <a@example.com>\r\nSubject: Help\r\n\r\nHello", false).unwrap();
+        for key in ["auto_submitted", "jeeta_notice", "report"] {
+            assert!(plain.payload.get(key).is_none(), "{key}");
+        }
+    }
+
     #[test]
     fn display_name_from_yields_single_mailbox_identity() {
         let draft = super::event("support@example.com", "INBOX", 7, 1,

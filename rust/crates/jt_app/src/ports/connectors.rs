@@ -493,6 +493,14 @@ pub struct MailMessage {
     /// provider call (spec §3.15): ids only, never bytes, in a stored intent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_files: Vec<uuid::Uuid>,
+    /// A machine's message (the owner's notices): written with `Auto-Submitted: auto-generated`
+    /// and `X-Auto-Response-Suppress: All`, so mail servers send no automatic answer to it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_submitted: bool,
+    /// The owner's notice the message is (its id), written as `X-Jeeta-Notice`: how the mailbox
+    /// recognises the notice when it is polled back, whatever its `Message-ID` became.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice_marker: Option<String>,
 }
 
 /// Where a recipient unsubscribes from commercial email: written as `List-Unsubscribe: <https>,

@@ -921,6 +921,38 @@ describe('KnowledgePage automatic replies', () => {
     });
   });
 
+  it('names the mailbox email notices go out from, and turns them off in the dialog', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': onRules }, { ...knowledge, rules: onRules }));
+    renderAt('/knowledge');
+    await page();
+    const rules = screen.getByRole('region', { name: k.rules.title });
+    expect(within(rules).getByText('E-posta bildirimi: iletisim@alfa.test')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    const section = within(dialog).getByRole('region', { name: k.rules.dialog.autoReply });
+    const box = within(section).getByRole('checkbox', { name: k.rules.dialog.notify });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+    expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toMatchObject({
+      auto_reply: { capability_ids: [WHATSAPP_ID], notify_email: false },
+    });
+  });
+
+  it('shows no email line and no checkbox without a verified mailbox', async () => {
+    const user = userEvent.setup();
+    const noMailbox = { ...onRules, auto_reply: { ...onRules.auto_reply, notify: { available: false, on: true, from: null } } };
+    mockFetch(routes({}, { ...knowledge, rules: noMailbox }));
+    renderAt('/knowledge');
+    await page();
+    expect(within(screen.getByRole('region', { name: k.rules.title })).queryByText(/E-posta bildirimi/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    expect(within(dialog).queryByRole('checkbox', { name: k.rules.dialog.notify })).not.toBeInTheDocument();
+  });
+
   it('keeps the switches off and says why when the server has no key', async () => {
     const user = userEvent.setup();
     const noKey = { ...knowledge.rules, auto_reply: { ...knowledge.rules.auto_reply, available: false, off_reason: 'no_key' as const } };

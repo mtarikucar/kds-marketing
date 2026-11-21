@@ -137,6 +137,7 @@ async fn turn_on(t: &T) {
                 capability_ids: vec![t.cap.as_uuid()],
                 min_minor: Some(MIN),
                 max_minor: Some(MAX),
+                notify_email: None,
             }),
         },
     )
@@ -403,6 +404,7 @@ async fn with_the_setting_off_or_the_standard_card_empty_nothing_runs() {
                 capability_ids: vec![t.cap.as_uuid()],
                 min_minor: Some(MIN),
                 max_minor: Some(MAX),
+                notify_email: None,
             }),
         },
     )
@@ -1913,4 +1915,646 @@ async fn only_a_held_automatic_reply_is_marked_and_handled_in_the_thread() {
         assert!(item.get("automatic").is_none(), "{item}");
         assert!(item.get("held").is_none(), "{item}");
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The owner's email notices
+// ---------------------------------------------------------------------------------------------
+
+/// The owner's address in the test world.
+const OWNER_EMAIL: &str = "owner@acme.example";
+/// The workspace's invented mailbox.
+const MAILBOX: &str = "iletisim@atolye.test";
+
+/// [`setup`] with a verified mailbox and a scripted mail sender; the sender.
+async fn with_mailbox(t: &mut T) -> (Arc<ScriptedConnector>, CapabilityId) {
+    let (meta, model) = (t.meta.clone(), t.model.clone());
+    let w = &mut t.w;
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        w.ws,
+        NewCapability {
+            kind_key: "mailbox".into(),
+            name: "Atölye e-posta".into(),
+            ..Default::default()
+        },
+        FIXED_NOW_T - Duration::days(3),
+    )
+    .unwrap();
+    cap.external_id = Some(MAILBOX.into());
+    cap.status = StoredStatus::Verified;
+    cap.last_verified_at = Some(FIXED_NOW_T - Duration::days(1));
+    let cred = Credential::Mailbox {
+        smtp_host: "smtp.atolye.test".into(),
+        smtp_port: 465,
+        imap_host: "imap.atolye.test".into(),
+        imap_port: 993,
+        username: MAILBOX.into(),
+        password: "invented-password".into(),
+        from_address: MAILBOX.into(),
+        tls: jt_connector::MailTls::Implicit,
+    };
+    let sealed = w
+        .deps
+        .seal
+        .seal(w.ws, &serde_json::to_vec(&cred).unwrap())
+        .unwrap();
+    let id = cap.id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+    r.commit().await.unwrap();
+    let mail = Arc::new(ScriptedConnector::new(Provider::Mail));
+    w.deps.connectors = Arc::new(
+        ScriptedRegistry::new()
+            .with_connector(meta)
+            .with_connector(mail.clone())
+            .with_model(model),
+    );
+    (mail, id)
+}
+
+fn mails(mail: &ScriptedConnector) -> Vec<jt_app::ports::connectors::MailMessage> {
+    mail.calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            jt_testkit::fakes::ConnectorCall::SendMail { message, .. } => Some(message),
+            _ => None,
+        })
+        .collect()
+}
+
+fn notices(t: &T) -> Vec<jt_app::ports::notices::NoticeRow> {
+    t.w.uow
+        .snapshot()
+        .notices
+        .into_iter()
+        .map(|(_, n)| n)
+        .collect()
+}
+
+/// A customer's message answered with a hand-over (`asks_for_person`), with a summary the email
+/// must never carry.
+async fn handed_over(t: &T, tick: i64) {
+    inbound(t, 0, tick).await;
+    t.model.answer(tool(ModelTool::HandOver {
+        reason: "asks_for_person".into(),
+        summary: "Gizli özet: müşteri bir kişi istiyor.".into(),
+        text: None,
+    }));
+    job(t, due(tick)).await;
+    notices_job(t, due(tick)).await;
+}
+
+/// One run of the owner's notices' own job at `at`.
+async fn notices_job(t: &T, at: OffsetDateTime) -> JobReport {
+    jobs::run_owner_notices(&t.w.deps, at).await
+}
+
+fn receipt() -> Result<SendReceipt, jt_connector::ConnectorError> {
+    Ok(SendReceipt {
+        provider_id: "smtp-1".into(),
+        cost_minor: None,
+    })
+}
+
+#[tokio::test]
+async fn a_hand_over_emails_each_manager_once_without_the_customers_words() {
+    let mut t = setup().await;
+    let (mail, mailbox) = with_mailbox(&mut t).await;
+    mail.push_mail(receipt());
+    handed_over(&t, 0).await;
+    handed_to_a_person(&t);
+    let sent = mails(&mail);
+    assert_eq!(sent.len(), 1, "one manager, one email");
+    let m = &sent[0];
+    assert_eq!(m.to, OWNER_EMAIL);
+    assert_eq!(m.subject, "Jeeta: bir konuşma sizi bekliyor");
+    assert_eq!(m.from_name.as_deref(), Some("Jeeta"));
+    assert!(m.auto_submitted);
+    let notice = &notices(&t)[0];
+    assert_eq!(
+        m.message_id,
+        format!("<jeeta-notice.{}.0@atolye.test>", notice.id)
+    );
+    assert!(m.text.contains("Müşteri bir kişiyle görüşmek istedi"));
+    assert!(m.text.contains(&conversation(&t).id.to_string()));
+    assert!(m.text.contains("Kurallar'dan kapatabilirsiniz"));
+    // No customer text, name or summary.
+    for secret in ["Merhaba, açık mısınız?", "Test Kişi", "Gizli özet"] {
+        assert!(!m.text.contains(secret) && !m.subject.contains(secret));
+    }
+    assert_eq!(notice.state, jt_app::ports::notices::NoticeState::Sent);
+    assert_eq!(notice.mailbox_capability_id, Some(mailbox));
+    assert_eq!(notice.reason.as_deref(), Some("asks_for_person"));
+    // Another run sends nothing again; the automatic replies' job never sends notices.
+    job(&t, due(0) + Duration::minutes(5)).await;
+    notices_job(&t, due(0) + Duration::minutes(30)).await;
+    assert_eq!(mails(&mail).len(), 1);
+    assert_eq!(notices(&t).len(), 1);
+}
+
+#[tokio::test]
+async fn the_automatic_replies_job_sends_no_notice_itself() {
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(tool(ModelTool::HandOver {
+        reason: "complaint".into(),
+        summary: "Özet.".into(),
+        text: None,
+    }));
+    job(&t, due(0)).await;
+    handed_to_a_person(&t);
+    assert_eq!(
+        notices(&t)[0].state,
+        jt_app::ports::notices::NoticeState::Queued
+    );
+    assert!(mails(&mail).is_empty(), "sent by its own job only");
+    mail.push_mail(receipt());
+    notices_job(&t, due(0)).await;
+    assert_eq!(mails(&mail).len(), 1);
+}
+
+#[tokio::test]
+async fn a_failing_notice_write_never_undoes_the_hand_over() {
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    t.w.uow.fail_notice_insert(1);
+    handed_over(&t, 0).await;
+    handed_to_a_person(&t);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.handed_over"),
+        ["asks_for_person"]
+    );
+    assert!(notices(&t).is_empty(), "only the notice was undone");
+    assert!(mails(&mail).is_empty());
+}
+
+#[tokio::test]
+async fn a_failed_attempt_waits_its_backoff_and_a_spent_notice_never_blocks_the_next() {
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    for _ in 0..4 {
+        mail.push_mail(Err(jt_connector::ConnectorError::transient("down")));
+    }
+    handed_over(&t, 0).await;
+    let first = notices(&t)[0].clone();
+    assert_eq!(first.attempts, 1);
+    assert_eq!(first.next_at, Some(due(0) + Duration::minutes(1)));
+    // Not before its time.
+    notices_job(&t, due(0) + Duration::seconds(30)).await;
+    assert_eq!(mails(&mail).len(), 1);
+    // Then 1, 5 and 15 minutes apart, and failed after the fourth attempt.
+    let mut at = due(0);
+    for wait in [1, 5, 15] {
+        at += Duration::minutes(wait);
+        notices_job(&t, at).await;
+    }
+    let first = notices(&t)[0].clone();
+    assert_eq!(first.attempts, 4);
+    assert_eq!(first.state, jt_app::ports::notices::NoticeState::Failed);
+    assert_eq!(mails(&mail).len(), 4);
+    // The next notice goes out.
+    let ws = t.w.ws;
+    let next = Uuid::now_v7();
+    t.w.uow.edit(move |st| {
+        st.notices.push((
+            ws,
+            jt_app::ports::notices::NoticeRow {
+                id: next,
+                kind: jt_app::ports::notices::NoticeKind::HandedOver,
+                conversation_id: ConversationId::new_v7(),
+                dedupe_key: "next".into(),
+                reason: Some("complaint".into()),
+                created_at: FIXED_NOW_T,
+                state: jt_app::ports::notices::NoticeState::Queued,
+                attempts: 0,
+                next_at: None,
+                sent_at: None,
+                mailbox_capability_id: None,
+            },
+        ));
+    });
+    mail.push_mail(receipt());
+    notices_job(&t, at + Duration::minutes(1)).await;
+    let next = notices(&t).into_iter().find(|n| n.id == next).unwrap();
+    assert_eq!(next.state, jt_app::ports::notices::NoticeState::Sent);
+}
+
+#[tokio::test]
+async fn an_error_before_the_send_counts_an_attempt_and_the_next_notice_is_still_tried() {
+    let mut t = setup().await;
+    let (mail, mailbox) = with_mailbox(&mut t).await;
+    // The mailbox's credential cannot be opened.
+    t.w.uow.edit(move |st| {
+        for c in &mut st.capabilities {
+            if c.capability.id == mailbox {
+                c.sealed = Some(b"not-a-sealed-credential".to_vec());
+            }
+        }
+    });
+    let ws = t.w.ws;
+    let ids = [Uuid::now_v7(), Uuid::now_v7()];
+    t.w.uow.edit(move |st| {
+        for (n, id) in ids.into_iter().enumerate() {
+            st.notices.push((
+                ws,
+                jt_app::ports::notices::NoticeRow {
+                    id,
+                    kind: jt_app::ports::notices::NoticeKind::HandedOver,
+                    conversation_id: ConversationId::new_v7(),
+                    dedupe_key: format!("broken:{n}"),
+                    reason: Some("complaint".into()),
+                    created_at: FIXED_NOW_T,
+                    state: jt_app::ports::notices::NoticeState::Queued,
+                    attempts: 0,
+                    next_at: None,
+                    sent_at: None,
+                    mailbox_capability_id: None,
+                },
+            ));
+        }
+    });
+    notices_job(&t, FIXED_NOW_T).await;
+    for row in notices(&t) {
+        assert_eq!(row.attempts, 1, "{row:?}");
+        assert_eq!(row.state, jt_app::ports::notices::NoticeState::Queued);
+        assert_eq!(row.next_at, Some(FIXED_NOW_T + Duration::minutes(1)));
+    }
+    assert!(mails(&mail).is_empty());
+}
+
+#[tokio::test]
+async fn a_notice_left_sending_is_taken_as_sent_and_never_sent_again() {
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(tool(ModelTool::HandOver {
+        reason: "complaint".into(),
+        summary: "Özet.".into(),
+        text: None,
+    }));
+    job(&t, due(0)).await;
+    // A crash between the send and its answer: the row stays `sending`.
+    t.w.uow.edit(|st| {
+        for (_, n) in &mut st.notices {
+            n.state = jt_app::ports::notices::NoticeState::Sending;
+            n.attempts = 1;
+            n.sent_at = Some(FIXED_NOW_T);
+        }
+    });
+    notices_job(&t, FIXED_NOW_T + Duration::minutes(20)).await;
+    assert_eq!(
+        notices(&t)[0].state,
+        jt_app::ports::notices::NoticeState::Sent
+    );
+    assert!(mails(&mail).is_empty());
+}
+
+#[tokio::test]
+async fn past_twenty_notices_in_a_day_the_next_is_kept_as_skipped() {
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    let ws = t.w.ws;
+    t.w.uow.edit(move |st| {
+        for n in 0..20 {
+            st.notices.push((
+                ws,
+                jt_app::ports::notices::NoticeRow {
+                    id: Uuid::now_v7(),
+                    kind: jt_app::ports::notices::NoticeKind::HandedOver,
+                    conversation_id: ConversationId::new_v7(),
+                    dedupe_key: format!("earlier:{n}"),
+                    reason: Some("complaint".into()),
+                    created_at: FIXED_NOW_T - Duration::hours(2),
+                    state: jt_app::ports::notices::NoticeState::Sent,
+                    attempts: 1,
+                    next_at: None,
+                    sent_at: Some(FIXED_NOW_T - Duration::hours(2)),
+                    mailbox_capability_id: None,
+                },
+            ));
+        }
+    });
+    handed_over(&t, 0).await;
+    let last = notices(&t)
+        .into_iter()
+        .find(|n| n.dedupe_key.starts_with("handed_over:"))
+        .unwrap();
+    assert_eq!(last.state, jt_app::ports::notices::NoticeState::Skipped);
+    assert_eq!(last.reason.as_deref(), Some("daily_cap"));
+    assert!(mails(&mail).is_empty());
+}
+
+#[tokio::test]
+async fn no_mailbox_or_the_setting_off_sends_nothing_and_keeps_nothing() {
+    // No mailbox: nothing is kept.
+    let t = setup().await;
+    handed_over(&t, 0).await;
+    handed_to_a_person(&t);
+    assert!(notices(&t).is_empty());
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert!(!k.rules.auto_reply.notify.available);
+
+    // A mailbox, the setting off.
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert!(k.rules.auto_reply.notify.available && k.rules.auto_reply.notify.on);
+    assert_eq!(k.rules.auto_reply.notify.from.as_deref(), Some(MAILBOX));
+    rules::rules_save(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        rules::RulesInput {
+            expected_revision: k.rules.revision,
+            prohibitions: vec![],
+            ad_budget: None,
+            message_budget: None,
+            post_approval: false,
+            post_approval_accounts: None,
+            auto_reply: Some(AutoReplyInput {
+                capability_ids: vec![t.cap.as_uuid()],
+                min_minor: None,
+                max_minor: None,
+                notify_email: Some(false),
+            }),
+        },
+    )
+    .await
+    .unwrap();
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert!(!k.rules.auto_reply.notify.on);
+    handed_over(&t, 0).await;
+    handed_to_a_person(&t);
+    assert!(notices(&t).is_empty());
+    assert!(mails(&mail).is_empty());
+}
+
+/// A mail the mailbox polled, as `jt_mail` stores it: an inbox `Message`, or a Sent copy (`Status`).
+async fn polled(
+    t: &T,
+    mailbox: CapabilityId,
+    sent: bool,
+    message_id: &str,
+    in_reply_to: Option<&str>,
+) -> String {
+    polled_as(t, mailbox, sent, message_id, in_reply_to, |_| {}).await
+}
+
+/// [`polled`], its payload changed by `edit` first.
+async fn polled_as(
+    t: &T,
+    mailbox: CapabilityId,
+    sent: bool,
+    message_id: &str,
+    in_reply_to: Option<&str>,
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> String {
+    let w = &t.w;
+    let mut payload = json!({
+        "from": if sent { MAILBOX } else { "birisi@disarisi.test" },
+        "name": null,
+        "to": if sent { OWNER_EMAIL } else { MAILBOX },
+        "subject": "Jeeta: bir konuşma sizi bekliyor",
+        "text": "Otomatik yanıt",
+        "message_id": message_id,
+        "in_reply_to": in_reply_to,
+        "attachments": [],
+        "mailbox": if sent { "Sent" } else { "INBOX" },
+        "account_id": MAILBOX,
+    });
+    if sent {
+        payload["status"] = json!("sent");
+    }
+    edit(&mut payload);
+    let event = InboundEvent {
+        id: InboundEventId::new_v7(),
+        workspace_id: w.ws,
+        capability_id: Some(mailbox),
+        provider: Provider::Mail,
+        external_id: format!("mail:{message_id}:{sent}"),
+        kind: if sent {
+            jt_connector::EventKind::Status
+        } else {
+            jt_connector::EventKind::Message
+        },
+        payload,
+        received_at: FIXED_NOW_T + Duration::minutes(10),
+        processed_at: None,
+    };
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.inbound_events()
+        .insert_if_new(event.clone(), None)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    // Any outcome but `own_notice` is the mail taken as any other.
+    match jt_app::usecases::inbox::consumer::consume_event(
+        &w.deps,
+        &event,
+        FIXED_NOW_T + Duration::minutes(10),
+    )
+    .await
+    {
+        Ok(outcome) => outcome.to_owned(),
+        Err(e) => e.code.as_str().to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn a_notice_polled_back_is_never_a_conversation() {
+    let mut t = setup().await;
+    let (mail, mailbox) = with_mailbox(&mut t).await;
+    mail.push_mail(receipt());
+    handed_over(&t, 0).await;
+    let id = mails(&mail)[0].message_id.clone();
+    let people = t.w.uow.snapshot().inbox.people.len();
+    assert_eq!(polled(&t, mailbox, false, &id, None).await, "own_notice");
+    assert_eq!(polled(&t, mailbox, true, &id, None).await, "own_notice");
+    // An answer to it (an out-of-office, a person's reply).
+    assert_eq!(
+        polled(&t, mailbox, false, "<answer-1@disarisi.test>", Some(&id)).await,
+        "own_notice"
+    );
+    assert_eq!(t.w.uow.snapshot().inbox.people.len(), people, "no person");
+    // A `jeeta-notice` id the workspace does not hold is any other mail.
+    let forged = format!("<jeeta-notice.{}.0@disarisi.test>", Uuid::now_v7());
+    assert_ne!(
+        polled(&t, mailbox, false, &forged, None).await,
+        "own_notice"
+    );
+}
+
+#[tokio::test]
+async fn an_uncertain_send_is_never_retried_and_a_transient_one_is() {
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    mail.push_mail(Err(jt_connector::ConnectorError::unknown("after DATA")));
+    handed_over(&t, 0).await;
+    assert_eq!(
+        notices(&t)[0].state,
+        jt_app::ports::notices::NoticeState::Sent
+    );
+    notices_job(&t, due(0) + Duration::hours(1)).await;
+    assert_eq!(mails(&mail).len(), 1, "never sent again");
+
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    mail.push_mail(Err(jt_connector::ConnectorError::transient("busy")));
+    handed_over(&t, 0).await;
+    let row = notices(&t)[0].clone();
+    assert_eq!(row.state, jt_app::ports::notices::NoticeState::Queued);
+    assert_eq!(row.attempts, 1);
+    mail.push_mail(receipt());
+    notices_job(&t, due(0) + Duration::minutes(2)).await;
+    assert_eq!(
+        notices(&t)[0].state,
+        jt_app::ports::notices::NoticeState::Sent
+    );
+    assert_eq!(mails(&mail).len(), 2);
+}
+
+#[tokio::test]
+async fn a_notice_whose_message_id_was_rewritten_is_known_by_its_marker() {
+    let mut t = setup().await;
+    let (mail, mailbox) = with_mailbox(&mut t).await;
+    mail.push_mail(receipt());
+    handed_over(&t, 0).await;
+    let sent = &mails(&mail)[0];
+    let marker = sent.notice_marker.clone().unwrap();
+    assert_eq!(marker, notices(&t)[0].id.to_string());
+    let people = t.w.uow.snapshot().inbox.people.len();
+    // The provider rewrote its Message-ID: the sender, `Auto-Submitted` and the marker remain.
+    let rewritten = |p: &mut serde_json::Value| {
+        p["from"] = json!(MAILBOX);
+        p["auto_submitted"] = json!("auto-generated");
+        p["jeeta_notice"] = json!(marker.clone());
+    };
+    assert_eq!(
+        polled_as(
+            &t,
+            mailbox,
+            false,
+            "<rewritten-1@provider.test>",
+            None,
+            rewritten
+        )
+        .await,
+        "own_notice"
+    );
+    // The marker from another sender, or without `Auto-Submitted`, is any other mail.
+    let marker2 = marker.clone();
+    assert_ne!(
+        polled_as(
+            &t,
+            mailbox,
+            false,
+            "<rewritten-2@provider.test>",
+            None,
+            move |p| {
+                p["auto_submitted"] = json!("auto-generated");
+                p["jeeta_notice"] = json!(marker2);
+            }
+        )
+        .await,
+        "own_notice"
+    );
+    let marker3 = marker.clone();
+    assert_ne!(
+        polled_as(
+            &t,
+            mailbox,
+            false,
+            "<rewritten-3@provider.test>",
+            None,
+            move |p| {
+                p["from"] = json!(MAILBOX);
+                p["jeeta_notice"] = json!(marker3);
+            }
+        )
+        .await,
+        "own_notice"
+    );
+    let _ = people;
+}
+
+#[tokio::test]
+async fn a_bounce_of_a_notice_is_never_a_conversation() {
+    let mut t = setup().await;
+    let (mail, mailbox) = with_mailbox(&mut t).await;
+    mail.push_mail(receipt());
+    handed_over(&t, 0).await;
+    let id = notices(&t)[0].id;
+    let people = t.w.uow.snapshot().inbox.people.len();
+    // A mail daemon's report quoting the notice's marker header.
+    assert_eq!(
+        polled_as(
+            &t,
+            mailbox,
+            false,
+            "<dsn-1@mx.provider.test>",
+            None,
+            move |p| {
+                p["from"] = json!("MAILER-DAEMON@mx.provider.test");
+                p["subject"] = json!("Undelivered Mail Returned to Sender");
+                p["text"] = json!(format!(
+                    "The mail could not be delivered.
+X-Jeeta-Notice: {id}
+"
+                ));
+            }
+        )
+        .await,
+        "own_notice"
+    );
+    // A `multipart/report` quoting its Message-ID.
+    assert_eq!(
+        polled_as(
+            &t,
+            mailbox,
+            false,
+            "<dsn-2@mx.provider.test>",
+            None,
+            move |p| {
+                p["report"] = json!(true);
+                p["text"] = json!(format!(
+                    "Original-Message-ID: <jeeta-notice.{id}.0@atolye.test>"
+                ));
+            }
+        )
+        .await,
+        "own_notice"
+    );
+    // A postmaster's report with the notice's subject, back to the mailbox, minutes later.
+    assert_eq!(
+        polled_as(&t, mailbox, false, "<dsn-3@mx.provider.test>", None, |p| {
+            p["from"] = json!("postmaster@provider.test");
+            p["subject"] = json!("Delivery failure: Jeeta: bir konuşma sizi bekliyor");
+            p["text"] = json!("No such user.");
+        })
+        .await,
+        "own_notice"
+    );
+    assert_eq!(t.w.uow.snapshot().inbox.people.len(), people, "no person");
+    // A customer's mail with the same subject is any other mail.
+    assert_ne!(
+        polled_as(
+            &t,
+            mailbox,
+            false,
+            "<customer-1@disarisi.test>",
+            None,
+            |p| {
+                p["subject"] = json!("Re: Jeeta: bir konuşma sizi bekliyor");
+            }
+        )
+        .await,
+        "own_notice"
+    );
 }

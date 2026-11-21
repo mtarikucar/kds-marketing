@@ -332,6 +332,10 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    fn notices(&mut self) -> &mut dyn jt_app::ports::notices::NoticeRepo {
+        self
+    }
+
     async fn savepoint(&mut self) -> Result<(), AppError> {
         sqlx::query("savepoint jt_savepoint")
             .execute(self.tx.conn())
@@ -678,6 +682,13 @@ impl PlatformRepos for PgPlatformRepos {
 
     async fn workspaces_with_auto_reply(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
         crate::repos::autoreply::workspaces_with_auto_reply(&mut self.tx).await
+    }
+
+    async fn workspaces_with_due_notices(
+        &mut self,
+        now: time::OffsetDateTime,
+    ) -> Result<Vec<WorkspaceId>, AppError> {
+        crate::repos::notices::workspaces_with_due_notices(&mut self.tx, now).await
     }
 
     async fn workspaces_with_due_auto_replies(

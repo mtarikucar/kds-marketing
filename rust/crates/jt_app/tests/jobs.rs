@@ -307,6 +307,7 @@ fn every_job_has_a_lock_named_after_it() {
             "agent_wake",
             "knowledge_settle",
             "inbox_auto_reply",
+            "owner_notices",
         ]
     );
     for job in Job::ALL {

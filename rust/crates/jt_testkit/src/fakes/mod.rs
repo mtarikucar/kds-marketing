@@ -61,6 +61,7 @@ pub use inbox::{MemInbox, StoredConsumption, StoredRequestKey};
 mod autoreply;
 pub use autoreply::MemAutoReply;
 mod knowledge;
+mod notices;
 pub use knowledge::MemKnowledge;
 mod outreach;
 pub use outreach::MemOutreach;

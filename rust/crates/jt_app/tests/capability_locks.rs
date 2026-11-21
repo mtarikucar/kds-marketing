@@ -312,6 +312,9 @@ impl TenantRepos for SpyTenant {
     fn auto_reply(&mut self) -> &mut dyn jt_app::ports::reply_model::AutoReplyRepo {
         self.inner.auto_reply()
     }
+    fn notices(&mut self) -> &mut dyn jt_app::ports::notices::NoticeRepo {
+        self.inner.notices()
+    }
 
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         self.inner.commit().await

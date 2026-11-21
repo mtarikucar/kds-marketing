@@ -149,6 +149,8 @@ pub struct MemState {
     pub knowledge: super::knowledge::MemKnowledge,
     /// The automatic replies' queue and runs (`0047_inbox_auto_reply`).
     pub auto_reply: super::autoreply::MemAutoReply,
+    /// The owner's email notices (`0049_owner_notices`).
+    pub notices: Vec<(jt_tenancy::WorkspaceId, jt_app::ports::notices::NoticeRow)>,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
     pub sessions: Vec<SessionRow>,
@@ -438,6 +440,8 @@ pub struct InMemoryUow {
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
     mail_cursor_faults: Arc<AtomicUsize>,
+    /// How many of the next `NoticeRepo::insert` calls fail ([`InMemoryUow::fail_notice_insert`]).
+    notice_insert_faults: Arc<AtomicUsize>,
     studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
     budget_item_after_list: Arc<Mutex<Option<BudgetItem>>>,
@@ -500,6 +504,11 @@ impl InMemoryUow {
         self.mail_cursor_faults.store(times, Ordering::SeqCst);
     }
 
+    /// Fail the next owner's notice writes, as a database error would.
+    pub fn fail_notice_insert(&self, times: usize) {
+        self.notice_insert_faults.store(times, Ordering::SeqCst);
+    }
+
     /// Fail completion after consumer effects to exercise atomic rollback.
     pub fn fail_inbox_consumption(&self, times: usize) {
         self.inbox_consumption_faults.store(times, Ordering::SeqCst);
@@ -551,6 +560,8 @@ pub(super) struct MemTx {
     inbox_task_status_faults: Arc<AtomicUsize>,
     inbox_consumption_faults: Arc<AtomicUsize>,
     mail_cursor_faults: Arc<AtomicUsize>,
+    /// How many of the next `NoticeRepo::insert` calls fail ([`InMemoryUow::fail_notice_insert`]).
+    notice_insert_faults: Arc<AtomicUsize>,
     studio_brake_faults: Arc<AtomicUsize>,
     capability_after_list: Arc<Mutex<Option<StoredCapability>>>,
     budget_item_after_list: Arc<Mutex<Option<BudgetItem>>>,
@@ -594,6 +605,7 @@ impl MemTx {
             inbox_task_status_faults: Arc::clone(&uow.inbox_task_status_faults),
             inbox_consumption_faults: Arc::clone(&uow.inbox_consumption_faults),
             mail_cursor_faults: Arc::clone(&uow.mail_cursor_faults),
+            notice_insert_faults: Arc::clone(&uow.notice_insert_faults),
             studio_brake_faults: Arc::clone(&uow.studio_brake_faults),
             capability_after_list: Arc::clone(&uow.capability_after_list),
             budget_item_after_list: Arc::clone(&uow.budget_item_after_list),
@@ -726,6 +738,12 @@ impl MemTx {
 
     pub(super) fn studio_brake_fails(&self) -> bool {
         self.studio_brake_faults
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+    }
+
+    pub(super) fn notice_insert_fails(&self) -> bool {
+        self.notice_insert_faults
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
     }
