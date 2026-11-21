@@ -150,6 +150,9 @@ pub struct AutoReplyView {
     pub accounts: Vec<AccountRef>,
     /// The owner's email notices of a hand-over or an order (`inbox::notices`).
     pub notify: NotifyView,
+    /// The bargaining discount, in percent: the preferred step and the largest (0: none).
+    pub discount_preferred_pct: u8,
+    pub discount_max_pct: u8,
 }
 
 /// The owner's email notices as the rules show them.
@@ -426,6 +429,8 @@ fn rules_view(
                 kind: c.kind_key.clone(),
             })
             .collect(),
+        discount_preferred_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount().0),
+        discount_max_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount().1),
         notify: {
             let mailbox = crate::usecases::inbox::notices::mailbox(capabilities);
             NotifyView {

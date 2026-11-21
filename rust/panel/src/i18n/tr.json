@@ -4504,6 +4504,9 @@
         "autoReplyMin": "En az",
         "autoReplyMax": "En çok",
         "notify": "Devir ve siparişleri e-postayla bildir",
+        "discount": "Pazarlık indirimi",
+        "discountPreferred": "tercihen %",
+        "discountMax": "en fazla %",
         "autoReplyHelp": "Fiyatı nasıl vereceğini “Standart iş ve fiyat” kartına yaz. Standart dışı istekler sana gelir. Açıkken müşteri mesajları ve fotoğrafları yanıt için Anthropic’e (Claude) gönderilir.",
         "autoReplyInvalid": "En az ve en çok tutarı yaz; en az, en çoktan büyük olamaz."
       }

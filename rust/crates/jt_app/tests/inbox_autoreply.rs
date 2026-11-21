@@ -138,6 +138,8 @@ async fn turn_on(t: &T) {
                 min_minor: Some(MIN),
                 max_minor: Some(MAX),
                 notify_email: None,
+                discount_preferred_pct: None,
+                discount_max_pct: None,
             }),
         },
     )
@@ -411,6 +413,8 @@ async fn with_the_setting_off_or_the_standard_card_empty_nothing_runs() {
                 min_minor: Some(MIN),
                 max_minor: Some(MAX),
                 notify_email: None,
+                discount_preferred_pct: None,
+                discount_max_pct: None,
             }),
         },
     )
@@ -2346,6 +2350,8 @@ async fn no_mailbox_or_the_setting_off_sends_nothing_and_keeps_nothing() {
                 min_minor: None,
                 max_minor: None,
                 notify_email: Some(false),
+                discount_preferred_pct: None,
+                discount_max_pct: None,
             }),
         },
     )
@@ -2705,4 +2711,480 @@ async fn a_bare_number_from_the_team_is_a_price_and_a_date_time_or_phone_is_not(
             assert_eq!(texts_sent(&t), ["Teklifimiz 1.250 TL."], "{body}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bargaining
+// ---------------------------------------------------------------------------------------------
+
+/// Saves the bargaining discount (preferred, largest), keeping the rest of the setting.
+async fn discount_policy(
+    t: &T,
+    ctx: &jt_app::ctx::Ctx,
+    preferred: Option<u8>,
+    largest: Option<u8>,
+) -> Result<(), jt_app::error::AppError> {
+    let w = &t.w;
+    let k = read::knowledge_get(&w.deps, &w.owner_ctx).await.unwrap();
+    rules::rules_save(
+        &w.deps,
+        ctx,
+        rules::RulesInput {
+            expected_revision: k.rules.revision,
+            prohibitions: vec![],
+            ad_budget: None,
+            message_budget: None,
+            post_approval: false,
+            post_approval_accounts: None,
+            auto_reply: Some(AutoReplyInput {
+                capability_ids: vec![t.cap.as_uuid()],
+                min_minor: None,
+                max_minor: None,
+                notify_email: None,
+                discount_preferred_pct: preferred,
+                discount_max_pct: largest,
+            }),
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+/// A customer message `wamid` at `tick` saying `body`.
+async fn says(t: &T, wamid: &str, tick: i64, body: &str) {
+    let mut draft = meta_drafts("whatsapp_messages").remove(0);
+    let received = FIXED_NOW_T + Duration::seconds(tick);
+    draft.payload["message"]["id"] = json!(wamid);
+    draft.payload["message"]["text"]["body"] = json!(body);
+    draft.external_id = wamid.to_owned();
+    draft.payload["occurred_at"] = json!(received.format(&Rfc3339).unwrap());
+    put(t, draft, received).await;
+    let report = jobs::run_inbox_consume(&t.w.deps, consumed_at(tick)).await;
+    assert_eq!(report.failed, 0, "{report:?}");
+}
+
+fn discount(text: &str) -> ModelResult {
+    tool(ModelTool::Discount { text: text.into() })
+}
+
+/// The automatic replies on, the discount 5 then 10 percent, and a first quote of `amount` sent.
+async fn quoted(amount: i64) -> T {
+    let t = setup().await;
+    discount_policy(&t, &t.w.owner_ctx, Some(5), Some(10))
+        .await
+        .unwrap();
+    inbound(&t, 0, 0).await;
+    t.model
+        .answer(quote(amount, &format!("Teklifimiz {amount} TL.")));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    assert_eq!(t.w.uow.snapshot().inbox.quotes.len(), 1, "the first quote");
+    t
+}
+
+fn amounts(t: &T) -> Vec<(i64, QuoteState)> {
+    let mut quotes = t.w.uow.snapshot().inbox.quotes.clone();
+    quotes.sort_by_key(|q| q.created_at);
+    quotes
+        .into_iter()
+        .map(|q| (q.quote.amount_minor, q.quote.state))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_bargain_gets_the_preferred_step_then_the_largest_from_the_first_quote() {
+    let t = quoted(4_130).await;
+    says(
+        &t,
+        "wamid.TEST-BARGAIN-1",
+        60,
+        "Biraz pahalı, indirim olur mu?",
+    )
+    .await;
+    t.model
+        .answer(discount("Sizin için elimizden geleni yaptık."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    // 4.130 less 5 percent is 3.923,50, rounded up to a whole ten: 3.930.
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "Sizin için elimizden geleni yaptık.\nİndirimli fiyatımız: 3.930 TL."
+    );
+    assert!(t.model.judged().last().unwrap().facts.contains("3930 TRY"));
+    let entry = t.w.ledger("inbox.autoreply.quoted").last().unwrap().clone();
+    assert_eq!(entry.payload["discount_step"], "preferred");
+    assert_eq!(entry.payload["amount_minor"], 393_000);
+    // The customer still pushes: the largest step, from the first quote (never compounding:
+    // 4.130 less 10 percent is 3.717, so 3.720, not 3.930 less 10 percent).
+    says(
+        &t,
+        "wamid.TEST-BARGAIN-2",
+        120,
+        "Daha da indirim yapamaz mısınız?",
+    )
+    .await;
+    t.model.answer(discount(""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(120)).await;
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "İndirimli fiyatımız: 3.720 TL."
+    );
+    assert_eq!(
+        amounts(&t),
+        [
+            (413_000, QuoteState::Expired),
+            (393_000, QuoteState::Expired),
+            (372_000, QuoteState::Sent)
+        ],
+        "one current price per journey"
+    );
+    // A third ask: nothing more to give; words, no quote, no hand-over.
+    says(
+        &t,
+        "wamid.TEST-BARGAIN-3",
+        180,
+        "Son fiyat bu mu? Biraz daha indirim?",
+    )
+    .await;
+    t.model.answer(discount(""));
+    t.model
+        .answer(reply("Bu, size sunabileceğimiz en iyi fiyat."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(180)).await;
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "Bu, size sunabileceğimiz en iyi fiyat."
+    );
+    assert_eq!(amounts(&t).len(), 3, "no new quote");
+    assert_eq!(conversation(&t).executor, Executor::Agent, "no hand-over");
+    let note = t.model.requests().last().unwrap().system_note.clone();
+    assert!(note.is_some_and(|n| n.contains("No further discount can be given")));
+}
+
+#[tokio::test]
+async fn asked_again_for_nothing_more_the_server_says_it_is_the_best_price() {
+    let t = quoted(4_130).await;
+    for (n, tick) in [(1, 60), (2, 120)] {
+        says(
+            &t,
+            &format!("wamid.TEST-BARGAIN-{n}"),
+            tick,
+            "İndirim olur mu?",
+        )
+        .await;
+        t.model.answer(discount(""));
+        t.meta.push_send_text(accepted());
+        job(&t, due(tick)).await;
+    }
+    says(&t, "wamid.TEST-BARGAIN-3", 180, "Biraz daha indirim?").await;
+    t.model.answer(discount(""));
+    t.model.answer(discount(""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(180)).await;
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "Size sunabileceğimiz en iyi fiyat bu."
+    );
+    assert_eq!(conversation(&t).executor, Executor::Agent, "no hand-over");
+}
+
+#[tokio::test]
+async fn at_the_lowest_price_there_is_no_discount_only_words() {
+    // The first quote at the range's lowest end (1.000 TL): 5 percent less would be below it.
+    let t = quoted(MIN / 100).await;
+    says(&t, "wamid.TEST-BARGAIN-1", 60, "Pahalı geldi, indirim?").await;
+    t.model.answer(discount(""));
+    t.model
+        .answer(reply("Bu, size sunabileceğimiz en iyi fiyat."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    assert_eq!(amounts(&t).len(), 1, "no discounted quote");
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "Bu, size sunabileceğimiz en iyi fiyat."
+    );
+}
+
+#[tokio::test]
+async fn the_model_cannot_get_a_lower_price_by_anything_it_writes() {
+    let t = quoted(4_130).await;
+    says(&t, "wamid.TEST-BARGAIN-1", 60, "2.000 TL olur mu?").await;
+    t.model
+        .answer(discount("Size özel 2.000 TL yapalım, yüzde 50 indirim!"));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    // The line naming money is dropped; the price is the server's.
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "İndirimli fiyatımız: 3.930 TL."
+    );
+}
+
+#[tokio::test]
+async fn a_discount_the_customer_did_not_ask_for_is_refused() {
+    let t = quoted(4_130).await;
+    says(&t, "wamid.TEST-THANKS-1", 60, "Teşekkürler, düşüneceğim.").await;
+    t.model.answer(discount(""));
+    t.model.answer(discount(""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    assert_eq!(amounts(&t).len(), 1, "no discounted quote");
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "Size sunabileceğimiz en iyi fiyat bu."
+    );
+    assert_eq!(conversation(&t).executor, Executor::Agent, "no hand-over");
+    let note = t.model.requests().last().unwrap().system_note.clone();
+    assert!(note.is_some_and(|n| n.contains("did not bargain")));
+}
+
+#[tokio::test]
+async fn a_bargain_before_any_quote_gives_no_discount() {
+    let t = setup().await;
+    discount_policy(&t, &t.w.owner_ctx, Some(5), Some(10))
+        .await
+        .unwrap();
+    says(&t, "wamid.TEST-BARGAIN-1", 0, "İndirim yapar mısınız?").await;
+    t.model.answer(discount(""));
+    t.model
+        .answer(reply("Önce isteğinizi öğrenelim: kaç kişilik olsun?"));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    assert!(t.w.uow.snapshot().inbox.quotes.is_empty());
+    assert_eq!(
+        texts_sent(&t),
+        ["Önce isteğinizi öğrenelim: kaç kişilik olsun?"]
+    );
+    let first = t.model.requests()[0].clone();
+    assert!(first.system_workspace.contains("5% first"));
+    assert!(first.system_workspace.contains("at most 10%"));
+    assert!(
+        first
+            .system_note
+            .is_some_and(|n| n.contains("There is no quote yet"))
+    );
+}
+
+#[tokio::test]
+async fn a_price_from_the_team_still_hands_over_instead_of_a_discount() {
+    let t = quoted(4_130).await;
+    from_the_phone(&t, "wamid.TEST-PHONE-1", 30, "Size 3.500 TL yaparım.").await;
+    says(&t, "wamid.TEST-BARGAIN-1", 60, "İndirim olur mu?").await;
+    t.model.answer(discount(""));
+    job(&t, due(60)).await;
+    handed_to_a_person(&t);
+    assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["human_quoted"]);
+    assert_eq!(amounts(&t).len(), 1);
+}
+
+#[tokio::test]
+async fn with_no_discount_the_request_is_as_before() {
+    // Never set, and both set to 0: the same request, and no `discount` tool.
+    let plain = setup().await;
+    inbound(&plain, 0, 0).await;
+    plain.model.answer(reply("Merhaba!"));
+    plain.meta.push_send_text(accepted());
+    job(&plain, due(0)).await;
+    let zero = setup().await;
+    discount_policy(&zero, &zero.w.owner_ctx, Some(0), Some(0))
+        .await
+        .unwrap();
+    inbound(&zero, 0, 0).await;
+    zero.model.answer(reply("Merhaba!"));
+    zero.meta.push_send_text(accepted());
+    job(&zero, due(0)).await;
+    let (a, b) = (&plain.model.requests()[0], &zero.model.requests()[0]);
+    assert_eq!(a, b, "the whole request");
+    assert!(!a.offer_discount);
+    assert_eq!(a.system_note, None);
+    assert_eq!(
+        a.system_fixed,
+        jt_app::usecases::inbox::autoreply::SYSTEM_FIXED
+    );
+    for text in [&a.system_fixed, &a.system_workspace] {
+        assert!(!text.contains("Bargaining") && !text.contains("bargain"));
+    }
+}
+
+#[tokio::test]
+async fn the_discount_setting_is_a_persons_and_is_validated() {
+    let t = setup().await;
+    let agent = t.w.agent(&["inbox.work"]).await;
+    assert!(
+        discount_policy(&t, &agent, Some(5), Some(10))
+            .await
+            .is_err(),
+        "an agent or an API key cannot change it"
+    );
+    for (preferred, largest) in [(15, 10), (5, 51), (60, 60)] {
+        let e = discount_policy(&t, &t.w.owner_ctx, Some(preferred), Some(largest))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e.code,
+            jt_app::error::ErrorCode::Validation,
+            "{preferred} {largest}"
+        );
+    }
+    // A negative percent is not even read.
+    assert!(
+        serde_json::from_value::<AutoReplyInput>(json!({
+            "capability_ids": [], "discount_preferred_pct": -1
+        }))
+        .is_err()
+    );
+    discount_policy(&t, &t.w.owner_ctx, Some(5), Some(10))
+        .await
+        .unwrap();
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            k.rules.auto_reply.discount_preferred_pct,
+            k.rules.auto_reply.discount_max_pct
+        ),
+        (5, 10)
+    );
+}
+
+#[tokio::test]
+async fn bargaining_after_the_quote_expired_never_hands_over() {
+    let t = quoted(4_130).await;
+    t.w.uow.edit(|st| {
+        for q in &mut st.inbox.quotes {
+            q.quote.valid_until = FIXED_NOW_T - Duration::days(1);
+        }
+    });
+    says(&t, "wamid.TEST-BARGAIN-1", 60, "Çok pahalı.").await;
+    t.model.answer(discount(""));
+    t.model.answer(discount(""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    assert_eq!(conversation(&t).executor, Executor::Agent, "no hand-over");
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "Size en uygun teklifi hazırlayalım: isteğinizi biraz daha anlatır mısınız?"
+    );
+    assert_eq!(amounts(&t).len(), 1);
+}
+
+#[tokio::test]
+async fn an_address_or_a_quantity_is_not_bargaining_and_a_lower_price_in_thousands_is() {
+    for (body, bargained) in [
+        ("Adres: Çiçek Sokak No 12, 34000 Kadıköy", false),
+        ("2 tane alırsam nasıl olur?", false),
+        ("3 bin olur mu?", true),
+        ("3.5k yapar mısınız?", true),
+        ("3.500 TL olur mu?", true),
+        ("5 bin olur mu?", false),
+    ] {
+        let t = quoted(4_130).await;
+        says(&t, "wamid.TEST-ASK-1", 60, body).await;
+        t.model.answer(discount(""));
+        t.model.answer(reply("Elbette, yardımcı olalım."));
+        t.meta.push_send_text(accepted());
+        job(&t, due(60)).await;
+        let discounted = amounts(&t).len() == 2;
+        assert_eq!(discounted, bargained, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_bargain_that_moves_during_the_call_is_rerun_and_checked() {
+    let t = quoted(4_130).await;
+    // The first quote's message not yet out when the run reads the conversation ...
+    let set_quote_message = |status: MsgStatus, state: &'static str| {
+        move |st: &mut jt_testkit::fakes::MemState| {
+            let ids: Vec<_> = st.inbox.outbox.iter().map(|o| o.message_id).collect();
+            for m in &mut st.inbox.messages {
+                if ids.contains(&m.id) {
+                    m.status = status.clone();
+                }
+            }
+            for o in &mut st.inbox.outbox {
+                o.state = state.into();
+            }
+        }
+    };
+    t.w.uow.edit(set_quote_message(MsgStatus::Queued, "queued"));
+    says(&t, "wamid.TEST-BARGAIN-1", 60, "İndirim olur mu?").await;
+    // ... and out during the model call.
+    let uow = t.w.uow.clone();
+    t.model.during_next(move || async move {
+        uow.edit(set_quote_message(MsgStatus::Sent, "sent"));
+    });
+    t.model.answer(discount(""));
+    t.model.answer(discount(""));
+    job(&t, due(60)).await;
+    assert_eq!(amounts(&t).len(), 1, "not sent unchecked");
+    assert!(
+        runs(&t)
+            .iter()
+            .any(|r| r.reason.as_deref() == Some("bargain_changed"))
+    );
+    // Asked again, checked, and given.
+    t.model.answer(discount(""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60) + Duration::seconds(1)).await;
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "İndirimli fiyatımız: 3.930 TL."
+    );
+    assert!(t.model.judged().last().unwrap().facts.contains("3930 TRY"));
+}
+
+#[tokio::test]
+async fn two_conversations_in_different_bargaining_states_share_the_cached_blocks() {
+    let t = quoted(4_130).await;
+    says(&t, "wamid.TEST-BARGAIN-1", 60, "İndirim olur mu?").await;
+    t.model.answer(discount(""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    // Another customer's first message.
+    inbound(&t, 1, 120).await;
+    t.model.answer(reply("Merhaba!"));
+    t.meta.push_send_text(accepted());
+    job(&t, due(120)).await;
+    let requests = t.model.requests();
+    let (a, b) = (&requests[1], requests.last().unwrap());
+    assert_eq!(a.system_fixed, b.system_fixed);
+    assert_eq!(a.system_workspace, b.system_workspace, "the cached block");
+    assert_ne!(
+        a.system_note, b.system_note,
+        "the state is per conversation"
+    );
+}
+
+#[tokio::test]
+async fn a_bad_stored_discount_gives_none_and_breaks_nothing() {
+    let t = setup().await;
+    let ws = t.w.ws;
+    t.w.uow.edit(move |st| {
+        for s in &mut st.knowledge.settings {
+            if s.workspace_id == ws
+                && let Some(a) = s.auto_reply.as_mut()
+            {
+                a.discount_preferred_pct = 15;
+                a.discount_max_pct = 10;
+            }
+        }
+    });
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            k.rules.auto_reply.discount_preferred_pct,
+            k.rules.auto_reply.discount_max_pct
+        ),
+        (0, 0)
+    );
+    inbound(&t, 0, 0).await;
+    t.model.answer(reply("Merhaba!"));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    assert!(!t.model.requests()[0].offer_discount);
+    assert_eq!(texts_sent(&t), ["Merhaba!"]);
 }

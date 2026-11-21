@@ -175,6 +175,9 @@ pub struct ModelRequest {
     /// A note from the server for this call alone (the repair of a refused reply): sent after the
     /// cached system blocks, never cached, never in a customer's turn.
     pub system_note: Option<String>,
+    /// The `discount` tool is offered: the workspace allows a bargaining discount. Off, the
+    /// request is what it was before the discount existed.
+    pub offer_discount: bool,
     pub history: Vec<Turn>,
     pub max_tokens: u32,
 }
@@ -198,6 +201,11 @@ pub enum ModelTool {
         summary: String,
         text: Option<String>,
     },
+    /// The customer bargains over the automatic quote: the server gives the business's next
+    /// discount step, at the price it computes. `text` is a short line before the server's own
+    /// line stating the new price; it may state no amount. The model names no amount, step or
+    /// percent.
+    Discount { text: String },
 }
 
 /// The model's hand-over reasons, as its tool lists them.
