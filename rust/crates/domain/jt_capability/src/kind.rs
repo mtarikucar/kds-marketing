@@ -60,6 +60,9 @@ pub enum KindGroup {
     AgentConnection,
     ComputerAccess,
     ThirdParty,
+    /// The workspace's own shop, reached through a connector (an order draft for an automatic
+    /// reply's accepted quote).
+    Commerce,
 }
 
 const ALL_GROUPS: &[KindGroup] = &[
@@ -73,6 +76,7 @@ const ALL_GROUPS: &[KindGroup] = &[
     KindGroup::AgentConnection,
     KindGroup::ComputerAccess,
     KindGroup::ThirdParty,
+    KindGroup::Commerce,
 ];
 
 impl KindGroup {
@@ -89,6 +93,7 @@ impl KindGroup {
             KindGroup::AgentConnection => "agent_connection",
             KindGroup::ComputerAccess => "computer_access",
             KindGroup::ThirdParty => "third_party",
+            KindGroup::Commerce => "commerce",
         }
     }
 
@@ -103,9 +108,9 @@ impl KindGroup {
     }
 
     /// How a capability of this group is reached unless said otherwise: accounts (social,
-    /// messaging, telephony, community, ads, calendar) through a connector, devices
-    /// as devices, and agent connections, computer access and third-party tools through the
-    /// agent.
+    /// messaging, telephony, community, ads, calendar) and the shop (commerce) through a
+    /// connector, devices as devices, and agent connections, computer access and third-party tools
+    /// through the agent.
     pub fn default_reach(&self) -> Reach {
         match self {
             KindGroup::SocialAccount
@@ -113,7 +118,8 @@ impl KindGroup {
             | KindGroup::Telephony
             | KindGroup::Community
             | KindGroup::Ads
-            | KindGroup::Calendar => Reach::Connector,
+            | KindGroup::Calendar
+            | KindGroup::Commerce => Reach::Connector,
             KindGroup::Device => Reach::Device,
             KindGroup::AgentConnection | KindGroup::ComputerAccess | KindGroup::ThirdParty => {
                 Reach::Agent
@@ -242,6 +248,9 @@ pub const KINDS: &[CapabilityKind] = &[
     k(KindGroup::ThirdParty, "apify"),
     k(KindGroup::ThirdParty, "firecrawl"),
     k(KindGroup::ThirdParty, OTHER_THIRD_PARTY),
+    // The workspace's own shop over MCP (streamable HTTP, a bearer token): the inbox's automatic
+    // replies create an order draft in it for an accepted quote (`usecases::inbox::autoreply`).
+    k(KindGroup::Commerce, "shop_mcp"),
 ];
 
 impl CapabilityKind {

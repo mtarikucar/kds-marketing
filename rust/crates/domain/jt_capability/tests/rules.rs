@@ -87,6 +87,7 @@ const EXPECTED_KINDS: &[(KindGroup, &[&str])] = &[
         KindGroup::ThirdParty,
         &["notion", "slack", "gmail", "apify", "firecrawl", "other"],
     ),
+    (KindGroup::Commerce, &["shop_mcp"]),
 ];
 
 fn fields(gaps: &[Gap]) -> Vec<&str> {
@@ -125,7 +126,7 @@ fn every_kind_key_is_unique_and_parses() {
         .collect();
     let actual: Vec<(KindGroup, &str)> = KINDS.iter().map(|k| (k.group, k.key)).collect();
     assert_eq!(actual, expected);
-    assert_eq!(KINDS.len(), 52);
+    assert_eq!(KINDS.len(), 53);
 
     let keys: BTreeSet<&str> = KINDS.iter().map(|k| k.key).collect();
     assert_eq!(keys.len(), KINDS.len(), "kind keys must be unique");
@@ -179,6 +180,7 @@ fn every_kind_key_is_unique_and_parses() {
             "agent_connection",
             "computer_access",
             "third_party",
+            "commerce",
         ]
     );
     for g in KindGroup::all() {
@@ -206,7 +208,8 @@ fn default_reach_per_group() {
             | KindGroup::Telephony
             | KindGroup::Community
             | KindGroup::Ads
-            | KindGroup::Calendar => Reach::Connector,
+            | KindGroup::Calendar
+            | KindGroup::Commerce => Reach::Connector,
             KindGroup::Device => Reach::Device,
             KindGroup::AgentConnection | KindGroup::ComputerAccess | KindGroup::ThirdParty => {
                 Reach::Agent
@@ -221,7 +224,7 @@ fn default_reach_per_group() {
     }
     assert_eq!(kind("voice_bridge").default_reach(), Reach::Device);
     let count = |r: Reach| KINDS.iter().filter(|k| k.default_reach() == r).count();
-    assert_eq!(count(Reach::Connector), 27);
+    assert_eq!(count(Reach::Connector), 28);
     assert_eq!(count(Reach::Device), 10);
     assert_eq!(count(Reach::Agent), 15);
 
@@ -609,7 +612,7 @@ fn budget_link_rules() {
 
     // Across the whole list: how many kinds each budget kind can feed.
     let feeds = |b: BudgetKind| -> usize { KINDS.iter().filter(|k| can_link_budget(k, b)).count() };
-    assert_eq!(feeds(Cash), 48, "every kind but the agent connections");
+    assert_eq!(feeds(Cash), 49, "every kind but the agent connections");
     assert_eq!(feeds(AdBudget), 5);
     assert_eq!(feeds(SmsBudget), 1);
     assert_eq!(feeds(AgentQuota), 4);
@@ -1464,9 +1467,11 @@ fn reserved_public_keys_are_the_ones_connectors_write() {
             "business_app",
             "call_mode",
             "device",
+            "endpoint",
             "facts",
             "health",
             "iys",
+            "order",
             "provider",
             "reconnect_required",
             "recording_allowed"
