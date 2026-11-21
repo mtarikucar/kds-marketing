@@ -454,7 +454,9 @@ pub fn check(
     own_phone: Option<&str>,
     year: i32,
 ) -> Result<CheckedOrder, Vec<Field>> {
-    let t = |s: &str| s.trim().to_owned();
+    // Trimmed, whitespace collapsed, nothing else changed: the exact text the summary shows and
+    // the shop receives.
+    let t = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut bad = Vec::new();
     let said: std::collections::HashSet<String> = customer.iter().flat_map(|m| tokens(m)).collect();
     let emails: Vec<String> = customer.iter().flat_map(|m| emails_in(m)).collect();
@@ -545,67 +547,62 @@ pub fn check(
     })
 }
 
-/// The words that say yes to the summary.
-const YES: &[&str] = &[
+/// The whole messages that say yes to the summary, as [`explicit_yes`] reads a message.
+pub const YES_MESSAGES: &[&str] = &[
     "evet",
+    "evet doğru",
+    "evet onaylıyorum",
+    "evet onay",
     "onaylıyorum",
-    "onaylarım",
-    "onay",
-    "onaylı",
+    "onay veriyorum",
+    "kabul ediyorum",
+    "evet kabul ediyorum",
+    "doğru",
+    "doğrudur",
+    "evet tamam",
     "tamam",
     "tamamdır",
     "olur",
-    "kabul",
+    "evet olur",
+    "evet lütfen",
     "yes",
+    "yes please",
     "ok",
     "okay",
+    "okey",
 ];
-/// What makes a message no yes, whatever else it says: a word starting so.
-const NOT_YES: &[&str] = &[
-    "hayır",
-    "değil",
-    "yok",
-    "istemiyor",
-    "istemem",
-    "vazgeç",
-    "bekle",
-    "dur",
-    "düşün",
-    "sonra",
-    "iptal",
-    "emin",
-    "ama",
-    "no",
-    "not",
-    "wait",
-    "later",
-    "cancel",
-];
-/// The longest explicit yes, in words.
-pub const MAX_YES_WORDS: usize = 4;
 
-/// Whether `text` (the customer's first message after the summary) is an explicit yes: at most
-/// [`MAX_YES_WORDS`] words, one of them a yes word (or a thumbs-up), none of them a negation or a
-/// hesitation. Decided by the server alone.
+/// Whether `c` is decoration around a message: an emoji, a variation selector, a skin tone or a
+/// joiner.
+fn decoration(c: char) -> bool {
+    let cp = c as u32;
+    matches!(cp, 0x200D | 0xFE0E | 0xFE0F | 0x20E3)
+        || (0x1F000..=0x1FAFF).contains(&cp)
+        || (0x2600..=0x27BF).contains(&cp)
+        || (0x1F3FB..=0x1F3FF).contains(&cp)
+}
+
+/// Whether `text` (a customer's message after the summary) is an explicit yes: the whole message,
+/// in Turkish lower case with only the surrounding whitespace and emoji and the trailing `.`, `!`
+/// and `,` taken off (whitespace inside collapsed), is one of [`YES_MESSAGES`]. A message with a
+/// `?` anywhere is never a yes, and nothing else is. Decided by the server alone.
 pub fn explicit_yes(text: &str) -> bool {
-    let words: Vec<String> = normalise_text(text)
-        .split_whitespace()
-        .map(|w| {
-            w.trim_matches(|c: char| c.is_ascii_punctuation() || "…“”‘’«»".contains(c))
-                .to_owned()
-        })
-        .filter(|w| !w.is_empty())
-        .collect();
-    if words.is_empty() || words.len() > MAX_YES_WORDS {
+    if text.contains('?') || text.contains('？') {
         return false;
     }
-    let no = words
-        .iter()
-        .any(|w| NOT_YES.iter().any(|n| w.starts_with(n)));
-    let yes = words
-        .iter()
-        .any(|w| YES.contains(&w.as_str()) || w.contains('\u{1F44D}'));
-    yes && !no
+    let lower = normalise_text(text);
+    let mut core = lower.trim_matches(|c: char| c.is_whitespace() || decoration(c));
+    loop {
+        let next = core
+            .trim_end_matches(['.', '!', ','])
+            .trim_matches(|c: char| c.is_whitespace() || decoration(c));
+        if next == core {
+            break;
+        }
+        core = next;
+    }
+    let core = core.split_whitespace().collect::<Vec<_>>().join(" ");
+    YES_MESSAGES.contains(&core.as_str())
 }
 
 /// `minor` as whole units with `.` between thousands (`3.500`, `3.500,50`).
@@ -627,9 +624,10 @@ fn money(minor: i64) -> String {
 /// The line that asks the customer to confirm the summary.
 pub const CONFIRM_LINE: &str = "Bilgiler doğruysa siparişi onaylamak için “Evet” yazın.";
 
-/// The fixed summary the customer confirms before the order is created: their details, the
-/// payment method in words and the amount, then [`CONFIRM_LINE`].
-pub fn summary(order: &CheckedOrder, amount_minor: i64, currency: &str) -> String {
+/// The fixed summary the customer confirms before the order is created: their details, the item
+/// and its quantity, the payment method in words and the amount, then [`CONFIRM_LINE`]. Built
+/// from the same strings the shop receives.
+pub fn summary(order: &CheckedOrder, quantity: i64, amount_minor: i64, currency: &str) -> String {
     let mut address: Vec<&str> = vec![order.street.as_str()];
     if !order.neighbourhood.is_empty() {
         address.push(&order.neighbourhood);
@@ -643,38 +641,35 @@ pub fn summary(order: &CheckedOrder, amount_minor: i64, currency: &str) -> Strin
         "bank_transfer" => "Havale / EFT",
         _ => "Kart",
     };
-    format!(
-        "Siparişinizi oluşturmadan önce bilgilerinizi kontrol eder misiniz?\n\
-         Ad soyad: {}\nE-posta: {}\nTelefon: {}\nAdres: {}\nÖdeme: {}\nTutar: {} {}\n\n{}",
-        order.name,
-        order.email,
-        order.phone,
-        address.join(", "),
-        payment,
-        money(amount_minor),
-        currency,
-        CONFIRM_LINE
-    )
-}
-
-/// The canonical form of an order the customer confirms: its details (normalised), the amount
-/// and the currency, each JSON-quoted, one per line. The caller keeps only a keyed hash of it.
-pub fn canonical(order: &CheckedOrder, amount_minor: i64, currency: &str) -> String {
-    let n = |s: &str| serde_json::Value::String(tokens(s).join(" ")).to_string();
     [
-        n(&order.name),
-        serde_json::Value::String(order.email.clone()).to_string(),
-        serde_json::Value::String(order.phone.clone()).to_string(),
-        n(&order.street),
-        n(&order.neighbourhood),
-        n(&order.district),
-        n(&order.province),
-        n(&order.postcode),
-        serde_json::Value::String(order.payment_method.clone()).to_string(),
-        amount_minor.to_string(),
-        serde_json::Value::String(currency.to_owned()).to_string(),
+        "Siparişinizi oluşturmadan önce bilgilerinizi kontrol eder misiniz?".to_owned(),
+        format!("Ad soyad: {}", order.name),
+        format!("E-posta: {}", order.email),
+        format!("Telefon: {}", order.phone),
+        format!("Adres: {}", address.join(", ")),
+        format!("Ürün: {} x{quantity}", order.item),
+        format!("Ödeme: {payment}"),
+        format!("Tutar: {} {currency}", money(amount_minor)),
+        String::new(),
+        CONFIRM_LINE.to_owned(),
     ]
     .join("\n")
+}
+
+/// The quantity the rendered arguments `arguments` order: the first integer under a key named
+/// `quantity` (at any depth), else 1.
+pub fn quantity_of(arguments: &Value) -> i64 {
+    fn find(v: &Value) -> Option<i64> {
+        match v {
+            Value::Object(map) => map
+                .get("quantity")
+                .and_then(Value::as_i64)
+                .or_else(|| map.values().find_map(find)),
+            Value::Array(items) => items.iter().find_map(find),
+            _ => None,
+        }
+    }
+    find(arguments).unwrap_or(1)
 }
 
 /// The longest shop reference that is kept and shown.
@@ -1069,50 +1064,69 @@ mod tests {
     }
 
     #[test]
-    fn only_an_explicit_yes_confirms() {
-        for yes in [
-            "Evet",
-            "evet.",
-            "Onaylıyorum",
-            "tamam",
-            "Tamamdır!",
-            "olur",
-            "kabul",
-            "OK",
-            "👍",
-            "👍🏽",
-            "evet onaylıyorum",
-        ] {
+    fn only_a_whole_yes_message_confirms() {
+        for yes in YES_MESSAGES {
             assert!(explicit_yes(yes), "{yes}");
         }
+        for yes in [
+            "Evet",
+            "EVET",
+            "TAMAM",
+            "DOĞRU",
+            "ONAYLIYORUM",
+            "KABUL EDİYORUM",
+            "evet.",
+            "Evet!",
+            "evet,",
+            "Evet 👍",
+            "👍 evet",
+            "  tamam  ",
+            "evet   doğru",
+            "Evet, onaylıyorum.",
+            "OK",
+            "Okey",
+        ] {
+            // "Evet, onaylıyorum." is no yes: the comma inside stays.
+            let expected = yes != "Evet, onaylıyorum.";
+            assert_eq!(explicit_yes(yes), expected, "{yes}");
+        }
         for not in [
+            "kabul etmiyorum",
+            "onay vermiyorum",
+            "kabul edilemez",
+            "tamam olmaz",
+            "olur mu?",
+            "tamam mı?",
+            "ok?",
+            "evet?",
+            "yes but",
+            "evet ama",
+            "evet değil",
             "tamam, düşüneyim",
-            "Hayır",
-            "evet ama adres yanlış",
-            "bekleyin",
-            "olur sonra",
-            "Evet, ama önce bir sorum var",
-            "adres yanlış",
+            "hayır",
+            "👍",
             "",
-            "tamam tamam tamam tamam tamam",
-            "değil",
-            "vazgeçtim",
+            "evet ama önce adresi değiştirmek istiyorum, sonra onaylarım",
+            "Siparişi verirken evet demek istiyorum ama kargo ücreti ne kadar acaba",
+            "evet evet",
+            "evettt",
         ] {
             assert!(!explicit_yes(not), "{not}");
         }
     }
 
     #[test]
-    fn the_summary_names_the_details_and_the_amount() {
+    fn the_summary_names_the_details_the_item_and_the_amount() {
         let order = check(&fields(), SAID, Some("+905550000000"), 2026).unwrap();
         assert_eq!(
-            summary(&order, 350_000, "TRY"),
+            summary(&order, 1, 350_000, "TRY"),
             [
                 "Siparişinizi oluşturmadan önce bilgilerinizi kontrol eder misiniz?",
                 "Ad soyad: Deneme Kişi",
                 "E-posta: deneme@example.com",
                 "Telefon: +905550000000",
                 "Adres: Örnek Mah. Deneme Sk. No 1, Merkez / Örnekil",
+                "Ürün: Kişiye özel figür x1",
                 "Ödeme: Kart",
                 "Tutar: 3.500 TRY",
                 "",
@@ -1121,16 +1135,20 @@ mod tests {
             .join("\n")
         );
         assert_eq!(money(125_050), "1.250,50");
-        // The canonical form changes with any detail or the amount, not with spelling.
-        let base = canonical(&order, 350_000, "TRY");
+        // The details are kept as written, whitespace collapsed only.
+        let mut f = fields();
+        f.street = "  Örnek   Mah. Deneme Sk.  No 1 ".into();
+        let spaced = check(&f, SAID, Some("+905550000000"), 2026).unwrap();
+        assert_eq!(spaced.street, "Örnek Mah. Deneme Sk. No 1");
         let mut f = fields();
         f.street = "örnek mah deneme sk no 1".into();
-        let same = check(&f, SAID, Some("+905550000000"), 2026).unwrap();
-        assert_eq!(canonical(&same, 350_000, "TRY"), base);
-        assert_ne!(canonical(&order, 350_100, "TRY"), base);
-        let mut other = order.clone();
-        other.district = "Örnekil".into();
-        assert_ne!(canonical(&other, 350_000, "TRY"), base);
+        let lower = check(&f, SAID, Some("+905550000000"), 2026).unwrap();
+        assert_eq!(lower.street, "örnek mah deneme sk no 1", "not rewritten");
+        assert_eq!(
+            quantity_of(&json!({"body": {"lineItems": [{"quantity": 2}]}})),
+            2
+        );
+        assert_eq!(quantity_of(&json!({"body": {}})), 1);
     }
 
     #[test]

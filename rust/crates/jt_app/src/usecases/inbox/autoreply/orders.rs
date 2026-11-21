@@ -17,18 +17,22 @@
 //!   for once with a fixed message, `order_incomplete`, then `order_details`); the shop's day
 //!   ([`ORDERS_DAILY`] unless its daily cap says otherwise, `order_limit`).
 //! - **Confirmed** by the customer, judged by the server: the first call sends a fixed summary of
-//!   the details and the amount and asks for an explicit yes (`jt_inbox::order::summary`); the row
-//!   (`confirming`) keeps only a keyed hash of what was shown. The order goes ahead only when the
-//!   customer's first message after the summary is an explicit yes and the model calls again with
-//!   the same details (the same hash). Other details give a new summary (at most
-//!   [`MAX_SUMMARIES`], then `order_details`); anything but a yes creates nothing.
+//!   the details, the item and the amount and asks for an explicit yes
+//!   (`jt_inbox::order::summary`); the row (`confirming`) keeps only a keyed hash of exactly what
+//!   the shop would receive. The order goes ahead only when the summary's send succeeded, every
+//!   customer message after that send is an explicit yes (`jt_inbox::order::explicit_yes`, a closed
+//!   list of whole messages), no person on the team wrote after the summary
+//!   (`order_person_wrote`), and the model calls again with the same details (the same hash).
+//!   Anything else shows the summary again, at most [`MAX_SUMMARIES`] in all, then
+//!   `order_details`.
 //! - **Called** in three steps: the order row (`calling`) commits with the run; the shop is asked
 //!   with no transaction open; the outcome is stored in a new locked transaction ([`call`]). The
 //!   shop's amount must equal the quote's and its link be a bare `https` URL on the endpoint's own
 //!   host. A created order accepts the quote (the journey becomes `Pending`), queues the owner's
 //!   notice and sends the model's line and the fixed link message ([`ORDER_LINK`], server text,
-//!   outside the reply rules). A take-over meanwhile, or a send fence's refusal, sends nothing: the
-//!   person gets a note with the reference and the link (`order_link_unsent`). A refusal, an outage
+//!   outside the reply rules). A take-over, a new customer message or a person's message meanwhile,
+//!   or a send fence's refusal, sends nothing: the person gets a note with the reference and the
+//!   link (`order_link_unsent`). A refusal, an outage
 //!   or an unknown outcome hands the conversation over with the fixed line [`ORDER_LATER`]; an order
 //!   left `calling` (a crash) is handed over by the sweep ([`interrupted`], `order_interrupted`).
 //! - **Kept**: the order row holds codes, the amount, a keyed hash of the confirmed details, the
@@ -39,6 +43,7 @@
 use hmac::{Hmac, KeyInit, Mac};
 use jt_capability::StoredStatus;
 use jt_inbox::order::{self, OrderTemplate, ResultError, Values};
+use serde_json::Value;
 use sha2::Sha256;
 use url::Url;
 
@@ -59,8 +64,9 @@ const ORDER_HISTORY: u32 = 100;
 const CALL_BOUND: std::time::Duration = std::time::Duration::from_secs(20);
 /// The most interrupted orders one sweep of a workspace hands over.
 const INTERRUPTED_BATCH: u32 = 10;
-/// The most summaries a journey is shown before a person takes it (`order_details`).
-pub const MAX_SUMMARIES: u32 = 2;
+/// The most summaries an order is shown (new or the same again) before a person takes it
+/// (`order_details`).
+pub const MAX_SUMMARIES: u32 = 3;
 /// The purpose of the per-workspace key the confirmed details are hashed with.
 const CONFIRM_KEY: &str = "auto-reply-order-confirm";
 
@@ -312,20 +318,37 @@ async fn own_phone(r: &mut dyn TenantRepos, c: &Conversation) -> Result<Option<S
         .map(|i| i.value_normalized.clone()))
 }
 
-/// The keyed hash of the details and the amount the customer is shown (`order::canonical`), with
-/// the quote it orders: HMAC-SHA256 under the workspace's own key for it, in hex.
+/// The arguments the shop receives for `checked`, the order's reference left empty (it is the
+/// row's id, fixed per order).
+fn shop_arguments(
+    template: &OrderTemplate,
+    checked: &order::CheckedOrder,
+    quote: &QuoteRow,
+) -> Value {
+    order::render(
+        &template.arguments,
+        &Values {
+            reference: "",
+            amount_minor: quote.quote.amount_minor,
+            currency: &quote.quote.currency,
+            order: checked,
+        },
+    )
+}
+
+/// The keyed hash of exactly what the shop receives (`arguments`: every detail as written, the
+/// line items, the amount) and the quote it orders: HMAC-SHA256 under the workspace's own key for
+/// it, in hex.
 fn confirm_hash(
     deps: &Deps,
     ws: WorkspaceId,
-    checked: &order::CheckedOrder,
+    arguments: &Value,
     quote: &QuoteRow,
 ) -> Result<String, AppError> {
     let key = deps.seal.hmac_key(ws, CONFIRM_KEY)?;
     let mut mac = Hmac::<Sha256>::new_from_slice(key.as_ref())
         .map_err(|_| AppError::internal("an HMAC key of the wrong length"))?;
-    mac.update(
-        order::canonical(checked, quote.quote.amount_minor, &quote.quote.currency).as_bytes(),
-    );
+    mac.update(arguments.to_string().as_bytes());
     mac.update(b"\n");
     mac.update(quote.id.to_string().as_bytes());
     Ok(mac
@@ -336,15 +359,44 @@ fn confirm_hash(
         .collect())
 }
 
-/// Whether the customer's first message after the summary queued as outbox row `summary` (in
-/// `messages`) is an explicit yes: the summary went out (its message sent or delivered, or its row
-/// sent), and the next customer message says yes and nothing else.
-async fn confirmed(
-    r: &mut dyn TenantRepos,
-    messages: &[Message],
-    summary: Option<Uuid>,
-) -> Result<bool, AppError> {
-    let Some(summary) = summary else {
+/// What became of the summary queued as outbox row `summary`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Answer {
+    /// Sent, and every customer message since says yes (at least one).
+    Confirmed,
+    /// Not sent (held, refused, still queued), no customer message since, or one that is not a
+    /// yes.
+    NotConfirmed,
+    /// A person on the team wrote in the conversation after it (queued or sent).
+    PersonWrote,
+}
+
+/// When outbox row `row` was handed to the provider: the send time its claim recorded, else its
+/// last update.
+fn sent_at(row: &crate::ports::inbox::OutboxRow) -> OffsetDateTime {
+    row.fence_snapshot
+        .as_ref()
+        .and_then(|s| s.get("send_at"))
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<i128>().ok())
+        .and_then(|n| OffsetDateTime::from_unix_timestamp_nanos(n).ok())
+        .unwrap_or(row.updated_at)
+}
+
+/// Whether a message written by a person on the team (in the panel or the phone's Business app,
+/// queued or sent) is in `messages` after `since`.
+fn person_wrote(messages: &[Message], since: OffsetDateTime) -> bool {
+    messages.iter().any(|m| {
+        m.direction == Direction::Outbound
+            && matches!(m.author, Author::Human(_) | Author::BusinessApp)
+            && m.at > since
+    })
+}
+
+/// Whether a person on the team wrote in order `o`'s conversation (queued or sent) after its
+/// summary was queued.
+async fn person_after_summary(r: &mut dyn TenantRepos, o: &OrderRow) -> Result<bool, AppError> {
+    let Some(summary) = o.summary_outbox_id else {
         return Ok(false);
     };
     let Some(row) = r.outbox().get(summary).await? else {
@@ -353,16 +405,48 @@ async fn confirmed(
     let Some(shown) = r.messages().get(row.message_id).await? else {
         return Ok(false);
     };
-    let sent =
-        matches!(shown.status, MsgStatus::Sent | MsgStatus::Delivered) || row.state == "sent";
-    if !sent {
-        return Ok(false);
+    let messages = r
+        .messages()
+        .recent(o.conversation_id, ORDER_HISTORY)
+        .await?;
+    Ok(person_wrote(&messages, shown.at))
+}
+
+/// What the customer made of the summary queued as outbox row `summary` (see [`Answer`]): it
+/// counts only once its send succeeded; then every customer message after that send must be an
+/// explicit yes, and no person on the team may have written after it was queued.
+async fn answer_to(
+    r: &mut dyn TenantRepos,
+    messages: &[Message],
+    summary: Option<Uuid>,
+) -> Result<Answer, AppError> {
+    let Some(summary) = summary else {
+        return Ok(Answer::NotConfirmed);
+    };
+    let Some(row) = r.outbox().get(summary).await? else {
+        return Ok(Answer::NotConfirmed);
+    };
+    let Some(shown) = r.messages().get(row.message_id).await? else {
+        return Ok(Answer::NotConfirmed);
+    };
+    if person_wrote(messages, shown.at) {
+        return Ok(Answer::PersonWrote);
     }
-    Ok(messages
+    if row.state != "sent" {
+        return Ok(Answer::NotConfirmed);
+    }
+    let since = sent_at(&row);
+    let after: Vec<&Message> = messages
         .iter()
-        .filter(|m| m.direction == Direction::Inbound && m.at > shown.at)
-        .min_by_key(|m| m.at)
-        .is_some_and(|m| order::explicit_yes(&m.body)))
+        .filter(|m| m.direction == Direction::Inbound && m.at > since)
+        .collect();
+    Ok(
+        if !after.is_empty() && after.iter().all(|m| order::explicit_yes(&m.body)) {
+            Answer::Confirmed
+        } else {
+            Answer::NotConfirmed
+        },
+    )
 }
 
 /// `create_order` (see the module docs), in step 3's transaction.
@@ -473,35 +557,35 @@ pub(super) async fn decide(
         }
     };
     drop(fields);
-    let hash = confirm_hash(deps, ctx.workspace_id, &checked, &quote)?;
+    let arguments = shop_arguments(&shop.template, &checked, &quote);
+    let hash = confirm_hash(deps, ctx.workspace_id, &arguments, &quote)?;
     let same = existing
         .as_ref()
         .is_some_and(|o| o.confirm_hash.as_deref() == Some(hash.as_str()));
-    let yes = match &existing {
-        Some(o) if same => confirmed(r, &messages, o.summary_outbox_id).await?,
-        _ => false,
+    let answer = match &existing {
+        Some(o) => answer_to(r, &messages, o.summary_outbox_id).await?,
+        None => Answer::NotConfirmed,
     };
-    if !yes {
+    if answer == Answer::PersonWrote {
+        // A person on the team is in the conversation: nothing is ordered, it is theirs.
+        return server_refused(deps, ctx, r, c, run_id, "order_person_wrote").await;
+    }
+    if !(same && answer == Answer::Confirmed) {
         // The summary (again, or anew): nothing is ordered until the customer confirms it.
-        if let Some(o) = &existing
-            && !same
-            && o.summaries >= MAX_SUMMARIES
+        if existing
+            .as_ref()
+            .is_some_and(|o| o.summaries >= MAX_SUMMARIES)
         {
             return server_refused(deps, ctx, r, c, run_id, "order_details").await;
         }
-        if existing.is_none() {
-            let (day_start, _) = crate::usecases::calls::local_day(&shop.capability, ctx.now);
-            let cap = shop.capability.policy.daily_ops_cap.unwrap_or(ORDERS_DAILY);
-            if r.auto_reply()
-                .orders_since(shop.capability.id, day_start)
-                .await?
-                >= cap
-            {
-                return server_refused(deps, ctx, r, c, run_id, "order_limit").await;
-            }
-        }
-        let text = order::summary(&checked, quote.quote.amount_minor, &quote.quote.currency);
+        let text = order::summary(
+            &checked,
+            order::quantity_of(&arguments),
+            quote.quote.amount_minor,
+            &quote.quote.currency,
+        );
         drop(checked);
+        drop(arguments);
         let mut decided = queue(deps, ctx, r, s, c, run_id, &text, None).await?;
         let Some(outbox) = decided
             .outbox_id
@@ -515,9 +599,7 @@ pub(super) async fn decide(
                 o.confirm_hash = Some(hash);
                 o.summary_outbox_id = Some(outbox);
                 o.run_id = run_id;
-                if !same {
-                    o.summaries += 1;
-                }
+                o.summaries += 1;
                 r.auto_reply().order_save(&o).await?;
             }
             None => {
@@ -549,10 +631,21 @@ pub(super) async fn decide(
         }
         return Ok(decided);
     }
-    // Confirmed: the shop is asked once the run commits.
+    drop(arguments);
+    // Confirmed: the shop's day first (only orders the shop was asked for count), then the shop
+    // is asked once the run commits.
     let Some(mut row) = existing else {
         return Err(AppError::internal("a confirmation without its order"));
     };
+    let (day_start, _) = crate::usecases::calls::local_day(&shop.capability, ctx.now);
+    let cap = shop.capability.policy.daily_ops_cap.unwrap_or(ORDERS_DAILY);
+    if r.auto_reply()
+        .orders_since(shop.capability.id, day_start)
+        .await?
+        >= cap
+    {
+        return server_refused(deps, ctx, r, c, run_id, "order_limit").await;
+    }
     let line = match checked_line(&text, s, verdict, year) {
         Ok(line) => line,
         Err(reason) => return server_refused(deps, ctx, r, c, run_id, reason).await,
@@ -807,23 +900,20 @@ async fn finish_order(
         return Ok(Worked::Skipped);
     };
     let c = r.conversations().lock(row.conversation_id).await?;
-    let human = match &c {
-        Some(c) => {
-            let handed_back = r
-                .auto_reply()
-                .queue_get(c.id)
-                .await?
-                .and_then(|q| q.handed_back_at);
-            human_active(r.as_mut(), c, handed_back, ctx.now).await?
-        }
-        None => false,
-    };
-    // Still the agent's, as when the model was asked: only then does anything go out.
+    let activity = r
+        .conversations()
+        .send_state(row.conversation_id)
+        .await?
+        .activity_revision;
+    let person = person_after_summary(r.as_mut(), &o).await?;
+    // Still the agent's, ours, as when the model was asked (generation and activity), and no person
+    // on the team writing since the summary: only then does anything go out.
     let current = c.filter(|c| {
         c.executor == Executor::Agent
             && c.executor_generation == s.generation
             && c.state == ConvState::Ours
-            && !human
+            && activity == s.activity_revision
+            && !person
     });
     // The conversation as it is, when still the agent's and ours (for a hand-over).
     o.finished_at = Some(ctx.now);
@@ -1013,24 +1103,19 @@ pub(super) async fn interrupted(deps: &Deps, ws: WorkspaceId, now: OffsetDateTim
             o.reason = Some("order_interrupted".into());
             o.finished_at = Some(now);
             r.auto_reply().order_save(&o).await?;
-            // Still the agent's as when the shop was asked, and no person writing: only then
-            // does the line go out.
-            let c = r.conversations().lock(o.conversation_id).await?;
-            let current = match c {
-                Some(c)
-                    if c.executor == Executor::Agent
+            // Still the agent's and ours under the generation the shop was asked under, and no
+            // person on the team writing since the summary: only then does the line go out.
+            let person = person_after_summary(r.as_mut(), &o).await?;
+            let current = r
+                .conversations()
+                .lock(o.conversation_id)
+                .await?
+                .filter(|c| {
+                    c.executor == Executor::Agent
                         && c.state == ConvState::Ours
-                        && Some(c.executor_generation) == o.generation =>
-                {
-                    let handed_back = r
-                        .auto_reply()
-                        .queue_get(c.id)
-                        .await?
-                        .and_then(|q| q.handed_back_at);
-                    (!human_active(r.as_mut(), &c, handed_back, now).await?).then_some(c)
-                }
-                _ => None,
-            };
+                        && Some(c.executor_generation) == o.generation
+                        && !person
+                });
             let outbox = hand_over_failed(deps, &ctx, r.as_mut(), current.as_ref(), &o).await?;
             r.commit().await?;
             if let Some(outbox) = outbox

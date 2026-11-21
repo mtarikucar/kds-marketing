@@ -603,7 +603,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let n: i64 = sqlx::query_scalar(
             "select count(*) from auto_reply_orders where workspace_id = $1 \
-             and shop_capability_id = $2 and created_at >= $3",
+             and shop_capability_id = $2 and state <> 'confirming' \
+             and coalesce(called_at, created_at) >= $3",
         )
         .bind(ws.as_uuid())
         .bind(shop.as_uuid())
@@ -641,7 +642,7 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let ids: Vec<Uuid> = conversations.iter().map(|c| c.as_uuid()).collect();
         sqlx::query(
-            "update auto_reply_orders set pay_url = null where workspace_id = $1 \
+            "update auto_reply_orders set pay_url = null, confirm_hash = null where workspace_id = $1 \
              and conversation_id = any($2)",
         )
         .bind(ws.as_uuid())

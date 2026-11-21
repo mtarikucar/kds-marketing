@@ -31,11 +31,6 @@ use crate::error::AppError;
 
 /// The order's details and payment methods, as the model's tool names them.
 pub use jt_inbox::order::{OrderFields, PAYMENT_METHODS};
-
-/// After a message written by a person (in the panel, or from the phone's Business App), the
-/// automatic replies stay out of the conversation this long, unless a person hands the
-/// conversation back after it; a customer's message in between is answered when it ends.
-pub const HUMAN_QUIET: Duration = Duration::minutes(15);
 /// How long after a customer's last message the business may still answer it (WhatsApp's
 /// customer service window).
 pub const REPLY_WINDOW: Duration = Duration::hours(24);
@@ -617,7 +612,8 @@ pub trait AutoReplyRepo: Send + Sync {
     /// Updates the order's state, reason, reference, link, finish time, run, confirmation fields,
     /// call time and generation; `NOT_FOUND` for an unknown id.
     async fn order_save(&mut self, row: &OrderRow) -> Result<(), AppError>;
-    /// How many orders of shop `shop` were created (asked of it) at `since` or later.
+    /// How many orders shop `shop` was asked for at `since` or later: every row but those still
+    /// `Confirming` (the shop never asked), counted from when the shop was asked.
     async fn orders_since(
         &mut self,
         shop: CapabilityId,
@@ -630,8 +626,8 @@ pub trait AutoReplyRepo: Send + Sync {
         before: OffsetDateTime,
         limit: u32,
     ) -> Result<Vec<Uuid>, AppError>;
-    /// Clears the payment link of every order of conversations `conversations` (erasure: the
-    /// reference and the amount stay, as a financial record's do).
+    /// Clears the payment link and the confirmation hash of every order of conversations
+    /// `conversations` (erasure: the reference and the amount stay, as a financial record's do).
     async fn orders_forget_links(
         &mut self,
         conversations: &[ConversationId],

@@ -361,7 +361,12 @@ impl AutoReplyRepo for MemTenant {
             .auto_reply
             .orders
             .iter()
-            .filter(|(w, o)| *w == ws && o.shop_capability_id == shop && o.created_at >= since)
+            .filter(|(w, o)| {
+                *w == ws
+                    && o.shop_capability_id == shop
+                    && o.state != OrderState::Confirming
+                    && o.called_at.unwrap_or(o.created_at) >= since
+            })
             .count() as u32)
     }
 
@@ -401,6 +406,7 @@ impl AutoReplyRepo for MemTenant {
             for (w, o) in &mut s.auto_reply.orders {
                 if *w == ws && conversations.contains(&o.conversation_id) {
                     o.pay_url = None;
+                    o.confirm_hash = None;
                 }
             }
         });

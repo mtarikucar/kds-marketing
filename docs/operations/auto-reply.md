@@ -85,19 +85,19 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   anything but a clear "allowed" (a refusal, an error, no answer) is not sent and the conversation
   goes to a person (`judge_refused`, `judge_unavailable`). The check is a model call like any
   other: recorded, counted and paid for.
-- It stops when a person takes the conversation over (until it is handed back), or when a newer
-  message arrives (that one is answered instead). A message a person writes in the conversation
-  (in the panel, or from the phone's Business App) keeps it out for 15 minutes from that message.
-  A customer message arriving inside those 15 minutes is answered when they end, if it is then
-  still the last message, unanswered, inside the 24-hour reply window and the conversation is
-  still the agent's; a person writing again moves the end. A hand-back after the person's message
-  lets it in at once.
+- **The assistant answers first; a person is the second factor.** It answers every customer
+  message that is the latest one of a conversation it serves, whatever a person wrote before (in
+  the panel or from the phone's Business App), unless a person has taken the conversation over:
+  then it stays out until the conversation is handed back, and a customer message still waiting
+  inside the 24-hour reply window is answered at once on the hand-back. A run whose message a
+  person answers meanwhile (the conversation turns `theirs`, or a newer message moves its
+  activity) drops its answer, at the run's end, at the send and at the approval of a held reply
+  (`stale`), so the customer never gets two answers to one message; a take-over during a run
+  refuses the send too. While it answers a conversation, agents are not offered it.
 - When a person on the team stated money in the current journey (an amount, a currency, a
-  discount or payment word), it never quotes in that journey: a quote becomes a hand-over
-  (`human_quoted`), and the model is told so. Replies that are not about price still go out. While the
-  replies stay out of a conversation, agents are offered it as usual. The hand-back's mark commits
-  with the hand-back itself, so no agent is offered the conversation in between. A held or queued
-  automatic reply whose conversation moved on is refused (`stale`).
+  discount or payment word, or a bare number such as "3500 olur"), it never quotes in that
+  journey: a quote becomes a hand-over (`human_quoted`), and the model is told so. Replies that
+  are not about price still go out, continuing from what the team said, never contradicting it.
 - The capability's policy applies: approval (the reply waits in the approvals list and in the
   conversation, where it can be approved or discarded; automatic messages carry an "otomatik"
   mark there), working hours
@@ -208,9 +208,10 @@ optional. Kurallar then shows "Sipariş: {host} üzerinden ödeme bağlantısı"
   ("Siparişi oluşturmak için şunlar eksik ya da net değil: e-posta adresiniz, ilçe. Yazar
   mısınız?"); the second time the conversation goes to a person (`order_details`). At most 10
   orders per shop per local day unless the shop capability's daily cap says otherwise
-  (`order_limit`).
+  (`order_limit`, counted when the shop is asked: a summary never confirmed does not count).
 - **The customer confirms.** The first call sends the server's own summary and creates nothing at
-  the shop; the row (`confirming`) keeps only an HMAC of the details and the amount:
+  the shop; the row (`confirming`) keeps only an HMAC of exactly what the shop would receive
+  (every detail as written, whitespace collapsed; the line items; the amount):
 
   ```text
   Siparişinizi oluşturmadan önce bilgilerinizi kontrol eder misiniz?
@@ -218,22 +219,27 @@ optional. Kurallar then shows "Sipariş: {host} üzerinden ödeme bağlantısı"
   E-posta: {email}
   Telefon: {phone}
   Adres: {street}, {neighbourhood}, {district} / {province}, {postcode}
+  Ürün: {item} x{quantity}
   Ödeme: Kart | Havale / EFT
   Tutar: 1.500 TRY
 
   Bilgiler doğruysa siparişi onaylamak için “Evet” yazın.
   ```
 
-  (In English: "Could you check your details before I create your order? Name: … Email: … Phone:
-  … Address: … Payment: Card | Bank transfer. Amount: 1,500 TRY. If the details are right, write
-  “Evet” (yes) to confirm the order." The customer-facing text is Turkish, like every fixed line.)
-  The order goes ahead only when the customer's first message after the summary is an explicit
-  yes (at most four words, one of evet, onaylıyorum, onay, tamam, tamamdır, olur, kabul, yes, ok or
-  a thumbs-up, and none of hayır, değil, yok, istemiyorum, vazgeç, bekle, dur, düşün…, sonra,
-  iptal, emin, ama, no, wait, later, cancel) and the model calls `create_order` again with the same
-  details (the same HMAC). Other details give a new summary; after two summaries the conversation
-  goes to a person (`order_details`). Anything that is not an explicit yes ("tamam, düşüneyim") is
-  an ordinary turn and creates nothing.
+  (In English: "Could you check your details before I create your order? Name … Email … Phone …
+  Address … Item: … x1. Payment: Card | Bank transfer. Amount: 1,500 TRY. If the details are right,
+  write “Evet” (yes) to confirm the order." The customer-facing text is Turkish, like every fixed
+  line.) The order goes ahead only when: the summary's send succeeded (one held for approval,
+  refused or still in the outbox confirms nothing); every customer message after that send is an
+  explicit yes; no person on the team wrote in the conversation after the summary, queued or sent
+  (`order_person_wrote`: the conversation goes to them); and the model calls `create_order` again
+  with exactly the same details (the same HMAC). An explicit yes is a whole message, in lower case
+  with only surrounding whitespace and emoji and a trailing `.`, `!` or `,` removed, equal to one of:
+  evet, evet doğru, evet onaylıyorum, evet onay, onaylıyorum, onay veriyorum, kabul ediyorum, evet
+  kabul ediyorum, doğru, doğrudur, evet tamam, tamam, tamamdır, olur, evet olur, evet lütfen, yes,
+  yes please, ok, okay, okey; a message with `?` is never one. Anything else (a no, a question, a
+  correction, other details) shows the summary again; after three summaries in all the
+  conversation goes to a person (`order_details`).
 - The order row (`calling`) then commits; the shop is asked with no lock held (15 s, never
   retried); the answer is stored in a new transaction. The amount must be the quote's
   (`order_amount_mismatch`), and the link a bare `https` URL (no whitespace or control character,

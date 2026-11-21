@@ -10,9 +10,9 @@ use jt_app::ports::UnitOfWork;
 use jt_app::ports::connectors::{InboundEventDraft, Media, SendReceipt};
 use jt_app::ports::reply_model::{
     AUTOREPLY_BATCH, AUTOREPLY_MAX_ATTEMPTS, AUTOREPLY_SETTLE, AUTOREPLY_SETTLE_MAX,
-    FAILED_CALL_ESTIMATE_MICRO_USD, HUMAN_QUIET, ImageType, JudgeAnswer, MAX_IMAGE_BYTES,
-    MAX_IMAGES_BYTES, ModelAnswer, ModelError, ModelStop, ModelTool, PER_CONVERSATION_DAILY, Part,
-    RunOutcome, RunRow, Speaker, Usage, WORKSPACE_DAILY_SPEND_MICRO_USD,
+    FAILED_CALL_ESTIMATE_MICRO_USD, ImageType, JudgeAnswer, MAX_IMAGE_BYTES, MAX_IMAGES_BYTES,
+    ModelAnswer, ModelError, ModelStop, ModelTool, PER_CONVERSATION_DAILY, Part, RunOutcome,
+    RunRow, Speaker, Usage, WORKSPACE_DAILY_SPEND_MICRO_USD,
 };
 use jt_app::usecases::inbox::{context, conversations, public, replies};
 use jt_app::usecases::jobs::{self, JobReport};
@@ -934,10 +934,11 @@ fn require_approval(t: &T) {
 }
 
 #[tokio::test]
-async fn a_persons_reply_in_the_panel_keeps_the_replies_out_until_handed_back() {
+async fn a_persons_panel_reply_answers_the_message_and_the_next_one_is_the_assistants() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
-    // The owner answers in the panel before the reply is due, without taking it over.
+    // The owner answers in the panel before the reply is due, without taking it over: that
+    // message is answered, so the assistant drops its own.
     t.meta.push_send_text(accepted());
     replies::reply(
         &t.w.deps,
@@ -947,34 +948,16 @@ async fn a_persons_reply_in_the_panel_keeps_the_replies_out_until_handed_back() 
     )
     .await
     .unwrap();
-    // The person's answer made the conversation theirs.
     job(&t, due(0)).await;
     assert!(t.model.requests().is_empty());
-    // The customer writes again: ours again, but the person's answer keeps the automatic
-    // replies out for its quiet window; the message is answered when the window ends.
-    inbound(&t, 2, 60).await;
+    // The customer writes again one second later: the assistant answers it at the settle time.
+    inbound(&t, 2, 3).await;
     assert_eq!(conversation(&t).state, ConvState::Ours);
-    let queued = t.w.uow.snapshot().auto_reply.queue[0].1.clone();
-    assert_eq!(queued.due_at, Some(consumed_at(2) + HUMAN_QUIET));
-    job(&t, due(60)).await;
-    assert!(t.model.requests().is_empty());
-    assert_eq!(reasons(&t, "inbox.autoreply.skipped"), ["not_ours"]);
-    // Meanwhile the conversation is an agent's work: the replies stay out of it.
-    let agent = t.w.agent(&["inbox.work"]).await;
-    let pending = context::pending(&t.w.deps, &agent).await.unwrap();
-    assert_eq!(pending.ours.len(), 1);
-    // Handed back to the agent: the customer's waiting message is answered right then.
-    conversations::hand_to_agent(
-        &t.w.deps,
-        &at(&t.w.owner_ctx, consumed_at(90)),
-        conversation(&t).id,
-    )
-    .await
-    .unwrap();
     t.model.answer(reply("Merhaba!"));
     t.meta.push_send_text(accepted());
-    job(&t, consumed_at(90) + AUTOREPLY_SETTLE).await;
+    job(&t, due(3)).await;
     assert_eq!(t.model.requests().len(), 1);
+    assert_eq!(reasons(&t, "inbox.autoreply.skipped"), ["not_ours"]);
 }
 
 /// A message `wamid` the business sent from the phone's Business App at `tick`, saying `body`.
@@ -993,42 +976,48 @@ async fn from_the_phone(t: &T, wamid: &str, tick: i64, body: &str) {
 }
 
 #[tokio::test]
-async fn a_message_33_seconds_after_one_from_the_phone_is_answered_when_the_quiet_ends() {
+async fn a_message_a_second_after_one_from_the_phone_is_answered_at_the_settle_time() {
     let t = setup().await;
     from_the_phone(&t, "wamid.TEST-PHONE-1", 0, "Ürün sayfası: bakabilirsiniz.").await;
-    inbound(&t, 0, 33).await;
-    job(&t, due(33)).await;
-    let end = FIXED_NOW_T + HUMAN_QUIET;
-    job(&t, end - Duration::seconds(1)).await;
-    assert!(t.model.requests().is_empty(), "not inside the quiet window");
+    inbound(&t, 0, 1).await;
     t.model.answer(reply("Merhaba, nasıl yardımcı olabilirim?"));
     t.meta.push_send_text(accepted());
-    job(&t, end).await;
-    job(&t, end + Duration::minutes(5)).await;
+    assert_eq!(job(&t, due(1) - Duration::seconds(1)).await.touched, 0);
+    job(&t, due(1)).await;
+    job(&t, due(1) + Duration::minutes(30)).await;
     assert_eq!(t.model.requests().len(), 1, "one model call");
     assert_eq!(texts_sent(&t), ["Merhaba, nasıl yardımcı olabilirim?"]);
 }
 
 #[tokio::test]
-async fn a_second_message_from_the_phone_moves_the_quiet_window() {
+async fn a_persons_reply_during_the_run_drops_the_assistants_answer() {
     let t = setup().await;
-    from_the_phone(&t, "wamid.TEST-PHONE-1", 0, "Ürün sayfası: bakabilirsiniz.").await;
-    inbound(&t, 0, 33).await;
-    from_the_phone(&t, "wamid.TEST-PHONE-2", 300, "Bir dakika bakıyorum.").await;
-    inbound_as(&t, "wamid.TEST-AFTER-1", 330).await;
-    // The first window's end: nothing yet.
-    job(&t, FIXED_NOW_T + HUMAN_QUIET).await;
-    assert!(t.model.requests().is_empty());
-    let moved = FIXED_NOW_T + Duration::seconds(300) + HUMAN_QUIET;
-    assert_eq!(t.w.uow.snapshot().auto_reply.queue[0].1.due_at, Some(moved));
-    t.model.answer(reply("Merhaba!"));
+    inbound(&t, 0, 0).await;
+    let (deps, owner) = (t.w.deps.clone(), t.w.owner_ctx.clone());
+    let id = conversation(&t).id;
     t.meta.push_send_text(accepted());
-    job(&t, moved).await;
-    assert_eq!(t.model.requests().len(), 1);
+    t.model.during_next(move || async move {
+        replies::reply(
+            &deps,
+            &owner,
+            id,
+            serde_json::from_value(json!({"text": "Ben bakıyorum.", "intent": "reply"})).unwrap(),
+        )
+        .await
+        .unwrap();
+    });
+    t.model.answer(reply("Merhaba!"));
+    job(&t, due(0)).await;
+    assert_eq!(
+        texts_sent(&t),
+        ["Ben bakıyorum."],
+        "one answer to the message"
+    );
+    assert_eq!(runs(&t)[0].outcome, RunOutcome::Skipped);
 }
 
 #[tokio::test]
-async fn a_take_over_keeps_the_replies_out_past_the_quiet_window() {
+async fn a_take_over_keeps_the_replies_out_until_a_hand_back() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
     conversations::take_over(
@@ -1040,8 +1029,21 @@ async fn a_take_over_keeps_the_replies_out_past_the_quiet_window() {
     .unwrap();
     inbound_as(&t, "wamid.TEST-AFTER-1", 60).await;
     job(&t, due(60)).await;
-    job(&t, FIXED_NOW_T + HUMAN_QUIET + Duration::minutes(5)).await;
+    job(&t, due(60) + Duration::hours(2)).await;
     assert!(t.model.requests().is_empty());
+    // Handed back: the customer's waiting message is answered right then.
+    let back = 60 + Duration::hours(2).whole_seconds();
+    conversations::hand_to_agent(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(back)),
+        conversation(&t).id,
+    )
+    .await
+    .unwrap();
+    t.model.answer(reply("Merhaba!"));
+    t.meta.push_send_text(accepted());
+    job(&t, consumed_at(back) + AUTOREPLY_SETTLE).await;
+    assert_eq!(t.model.requests().len(), 1);
 }
 
 #[tokio::test]
@@ -1050,9 +1052,8 @@ async fn a_price_from_the_team_turns_a_later_quote_into_a_hand_over() {
     inbound(&t, 0, 0).await;
     from_the_phone(&t, "wamid.TEST-PHONE-1", 30, "Bu figür 2.500 TL olur.").await;
     inbound_as(&t, "wamid.TEST-AFTER-1", 60).await;
-    let end = FIXED_NOW_T + Duration::seconds(30) + HUMAN_QUIET;
     t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
-    job(&t, end).await;
+    job(&t, due(60)).await;
     let request = &t.model.requests()[0];
     assert!(
         request
@@ -1072,7 +1073,7 @@ async fn a_price_from_the_team_still_lets_a_plain_reply_out() {
     inbound_as(&t, "wamid.TEST-AFTER-1", 60).await;
     t.model.answer(reply("Elbette, kargoya yarın verilir."));
     t.meta.push_send_text(accepted());
-    job(&t, FIXED_NOW_T + Duration::seconds(30) + HUMAN_QUIET).await;
+    job(&t, due(60)).await;
     assert_eq!(texts_sent(&t), ["Elbette, kargoya yarın verilir."]);
 }
 
@@ -1080,8 +1081,8 @@ async fn a_price_from_the_team_still_lets_a_plain_reply_out() {
 async fn without_a_model_a_message_after_one_from_the_phone_schedules_nothing() {
     let t = setup_with(false, true).await;
     from_the_phone(&t, "wamid.TEST-PHONE-1", 0, "Ürün sayfası.").await;
-    inbound(&t, 0, 33).await;
-    job(&t, FIXED_NOW_T + HUMAN_QUIET).await;
+    inbound(&t, 0, 1).await;
+    job(&t, due(1)).await;
     assert!(t.w.uow.snapshot().auto_reply.queue.is_empty());
     assert!(t.model.requests().is_empty());
 }
@@ -1453,7 +1454,7 @@ fn break_registry(t: &T) -> impl Fn() + '_ {
 }
 
 #[tokio::test]
-async fn a_persons_message_keeps_the_replies_out_for_its_quiet_window_across_a_journeys_end() {
+async fn after_a_persons_message_and_a_journeys_end_the_assistant_answers_first() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
     t.meta.push_send_text(accepted());
@@ -1477,18 +1478,11 @@ async fn a_persons_message_keeps_the_replies_out_for_its_quiet_window_across_a_j
     )
     .await
     .unwrap();
+    // The customer's next message, in the new journey: the assistant answers first.
     inbound(&t, 2, 60).await;
-    job(&t, due(60)).await;
-    assert!(
-        t.model.requests().is_empty(),
-        "within the quiet window of the person's message"
-    );
-    // After the quiet window: answered.
-    let later = (HUMAN_QUIET + Duration::minutes(5)).whole_seconds();
-    inbound(&t, 3, later).await;
     t.model.answer(reply("Merhaba!"));
     t.meta.push_send_text(accepted());
-    job(&t, due(later)).await;
+    job(&t, due(60)).await;
     assert_eq!(t.model.requests().len(), 1);
 }
 
@@ -1510,21 +1504,18 @@ async fn an_owner_writing_first_from_the_phone_long_before_keeps_nothing_out() {
 }
 
 #[tokio::test]
-async fn a_failed_hand_back_mark_leaves_the_conversation_to_the_agents() {
+async fn a_failed_hand_back_mark_never_undoes_the_hand_back() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
-    t.meta.push_send_text(accepted());
-    replies::reply(
+    conversations::take_over(
         &t.w.deps,
         &at(&t.w.owner_ctx, consumed_at(2)),
         conversation(&t).id,
-        serde_json::from_value(json!({"text": "Ben bakıyorum.", "intent": "reply"})).unwrap(),
     )
     .await
     .unwrap();
     inbound(&t, 2, 60).await;
-    // The hand-back's mark fails (its schedule's checks cannot be read): the hand-back stands,
-    // and an agent is offered the conversation since the replies stay out of it.
+    // The hand-back's schedule fails (its checks cannot be read): the hand-back stands.
     let restore = break_registry(&t);
     conversations::hand_to_agent(
         &t.w.deps,
@@ -1535,9 +1526,6 @@ async fn a_failed_hand_back_mark_leaves_the_conversation_to_the_agents() {
     .unwrap();
     restore();
     assert_eq!(conversation(&t).executor, Executor::Agent);
-    let agent = t.w.agent(&["inbox.work"]).await;
-    let pending = context::pending(&t.w.deps, &agent).await.unwrap();
-    assert_eq!(pending.ours.len(), 1);
 }
 
 #[tokio::test]
@@ -2850,6 +2838,7 @@ async fn an_accepted_quote_is_summarised_then_ordered_once_after_an_explicit_yes
             "E-posta: deneme@example.com",
             "Telefon: +905551111111",
             "Adres: Örnek Mah. Deneme Sk. No 1, Merkez / Örnekil",
+            "Ürün: Kişiye özel figür x1",
             "Ödeme: Kart",
             "Tutar: 1.500 TRY",
             "",
@@ -2960,12 +2949,12 @@ async fn anything_but_an_explicit_yes_creates_nothing() {
     let shop = with_shop(&mut t).await;
     quoted_then_accepted(&t).await;
     summarised(&t).await;
-    // A hesitation: the model calls again, the summary is shown again, nothing is ordered.
+    // A hesitation: the model calls again, the summary is shown again (and counted).
     answered(&t, "tamam, düşüneyim", 120, fields(), "").await;
     assert!(shop.calls().is_empty());
     let order = &orders(&t)[0];
     assert_eq!(order.state, OrderState::Confirming);
-    assert_eq!(order.summaries, 1, "the same details are not a new summary");
+    assert_eq!(order.summaries, 2);
     assert_eq!(texts_sent(&t)[1], texts_sent(&t)[2]);
     // The explicit yes to the summary shown again orders it.
     created(&shop, "SHOP-0009", 150_000);
@@ -2974,7 +2963,37 @@ async fn anything_but_an_explicit_yes_creates_nothing() {
 }
 
 #[tokio::test]
-async fn a_corrected_detail_gives_a_new_summary_and_a_third_goes_to_a_person() {
+async fn a_customer_who_keeps_saying_no_goes_to_a_person_after_three_summaries() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    summarised(&t).await;
+    answered(&t, "hayır", 120, fields(), "").await;
+    answered(&t, "hayır", 180, fields(), "").await;
+    assert_eq!(orders(&t)[0].summaries, 3);
+    assert_eq!(conversation(&t).executor, Executor::Agent);
+    answered(&t, "hayır", 240, fields(), "").await;
+    assert!(shop.calls().is_empty());
+    handed_to_a_person(&t);
+    assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["order_details"]);
+    assert_eq!(texts_sent(&t).len(), 4, "the quote and three summaries");
+}
+
+#[tokio::test]
+async fn a_yes_followed_by_a_correction_confirms_nothing() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    summarised(&t).await;
+    // "Evet", then a correction within the settle time: one run sees both.
+    inbound_text(&t, "wamid.TEST-YES-1", "evet", 120).await;
+    answered(&t, "pardon, adres yanlış", 125, fields(), "").await;
+    assert!(shop.calls().is_empty());
+    assert_eq!(orders(&t)[0].state, OrderState::Confirming);
+}
+
+#[tokio::test]
+async fn a_corrected_detail_is_a_changed_order_with_a_new_summary() {
     let mut t = setup().await;
     let shop = with_shop(&mut t).await;
     quoted_then_accepted(&t).await;
@@ -2986,11 +3005,100 @@ async fn a_corrected_detail_gives_a_new_summary_and_a_third_goes_to_a_person() {
     let order = &orders(&t)[0];
     assert_eq!(order.summaries, 2);
     assert!(texts_sent(&t)[2].contains("Yenimahalle / Örnekil"));
-    // A yes to an older summary with other details orders nothing: a third summary is a person's.
+    // A yes, but the call carries other details than the summary: a new summary, no order.
     answered(&t, "Evet", 180, fields(), "").await;
+    assert!(shop.calls().is_empty());
+    assert_eq!(orders(&t)[0].summaries, 3);
+    // Case and punctuation of the address are what the shop receives: a changed order too.
+    let mut f = fields();
+    f.street = "örnek mah deneme sk no 1".into();
+    answered(&t, "Evet", 240, f, "").await;
     assert!(shop.calls().is_empty());
     handed_to_a_person(&t);
     assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["order_details"]);
+}
+
+#[tokio::test]
+async fn a_yes_before_the_summary_went_out_confirms_nothing() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    // The number's messages wait for approval: the summary is queued but not sent.
+    let number = t.cap;
+    t.w.uow.edit(move |st| {
+        for c in &mut st.capabilities {
+            if c.capability.id == number {
+                c.capability.policy.requires_human_approval = true;
+            }
+        }
+    });
+    inbound(&t, 0, 0).await;
+    t.model
+        .answer(quote(1_500, "Teklifimiz 1.500 TL, 7 gün geçerli."));
+    job(&t, due(0)).await;
+    let quote_row = t.w.uow.snapshot().inbox.outbox[0].id;
+    t.meta.push_send_text(accepted());
+    public::approve(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, due(0)),
+        quote_row,
+        public::ApproveInput { text: None },
+    )
+    .await
+    .unwrap();
+    inbound_text(&t, "wamid.TEST-DETAILS-1", DETAILS, 60).await;
+    t.model.answer(create_order(fields(), ""));
+    job(&t, due(60)).await;
+    assert_eq!(orders(&t)[0].state, OrderState::Confirming);
+    // The customer says yes while the summary still waits: nothing is ordered.
+    answered(&t, "Evet", 120, fields(), "").await;
+    assert!(shop.calls().is_empty());
+    assert_eq!(orders(&t)[0].state, OrderState::Confirming);
+}
+
+#[tokio::test]
+async fn a_persons_reply_queued_after_the_summary_stops_the_order() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    summarised(&t).await;
+    // The owner writes in the panel; the reply is queued, not yet sent.
+    replies::enqueue(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(100)),
+        conversation(&t).id,
+        serde_json::from_value(json!({"text": "Bir saniye, kontrol ediyorum.", "intent": "reply"}))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    created(&shop, "SHOP-0007", 150_000);
+    answered(&t, "Evet", 120, fields(), "").await;
+    assert!(shop.calls().is_empty(), "no order while a person is in it");
+    assert_eq!(orders(&t)[0].state, OrderState::Confirming);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.refused"),
+        ["order_person_wrote"]
+    );
+}
+
+#[tokio::test]
+async fn summaries_never_confirmed_do_not_use_up_the_days_orders() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    summarised(&t).await;
+    // One order a day: the summary alone is no order, so the confirmed one goes ahead.
+    t.w.uow.edit(|st| {
+        for c in &mut st.capabilities {
+            if c.capability.kind_key == "shop_mcp" {
+                c.capability.policy.daily_ops_cap = Some(1);
+            }
+        }
+    });
+    created(&shop, "SHOP-0008", 150_000);
+    answered(&t, "Evet", 120, fields(), "").await;
+    assert_eq!(shop.calls().len(), 1);
+    assert_eq!(orders(&t)[0].state, OrderState::Created);
 }
 
 #[tokio::test]
@@ -3406,6 +3514,7 @@ async fn erasing_the_person_clears_the_orders_link() {
     .unwrap();
     let order = &orders(&t)[0];
     assert_eq!(order.pay_url, None);
+    assert_eq!(order.confirm_hash, None, "the confirmation's hash goes too");
     assert_eq!(
         order.reference.as_deref(),
         Some("SHOP-0005"),
@@ -3504,7 +3613,7 @@ async fn a_bare_number_from_the_team_is_a_price_and_a_date_time_or_phone_is_not(
         inbound_as(&t, "wamid.TEST-AFTER-1", 60).await;
         t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
         t.meta.push_send_text(accepted());
-        job(&t, FIXED_NOW_T + Duration::seconds(30) + HUMAN_QUIET).await;
+        job(&t, due(60)).await;
         let handed = reasons(&t, "inbox.autoreply.handed_over");
         if priced {
             assert_eq!(handed, ["human_quoted"], "{body}");
