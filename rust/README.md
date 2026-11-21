@@ -2339,7 +2339,7 @@ Five compliance operations are included in the 46 inbox tools (106 total); since
 | `inbox.suppressions.remove` | DELETE `/api/inbox/people/{person_id}/suppressions/{channel}/{reason}` | `jeeta.inbox.suppressions_remove` | InboxManage |
 | `inbox.send` | POST `/api/inbox/people/{person_id}/send` | `jeeta.inbox.send` | InboxWork |
 | `inbox.email_settings_get` | GET `/api/inbox/email-settings` | `jeeta.inbox.email_settings_get` | InboxWork |
-| `inbox.email_settings_set` | PUT `/api/inbox/email-settings` | `jeeta.inbox.email_settings_set` | InboxWork; the business basis keys InboxManage, opening it a human owner with `legal_ack` |
+| `inbox.email_settings_set` | PUT `/api/inbox/email-settings` | `jeeta.inbox.email_settings_set` | a person only (an agent: `FORBIDDEN human_only`); InboxWork fills an empty sender field, InboxManage changes or empties one and sets the business basis keys; opening the basis a human owner with `legal_ack` |
 
 The email settings are the sender identity (footer) and the business-recipient basis every
 commercial email needs, the same stored facts `outreach.settings_*` reads and writes, without

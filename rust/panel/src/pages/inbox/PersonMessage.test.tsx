@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { mockFetch, renderAt } from '@/test/render';
+import { mockFetch, renderAt, withStatus } from '@/test/render';
 import { WS_ID } from '@/test/fixtures';
 import { coreModules, legacyModules } from '@/test/modules';
 import { inboxAnswers, person } from '@/test/inbox';
@@ -65,5 +65,49 @@ describe('Mesaj yaz on a person with no conversation yet', () => {
     renderAt('/inbox?person=person-1');
     await screen.findByRole('heading', { level: 2, name: person.display_name }, LOADED);
     expect(screen.queryByRole('button', { name: 'Mesaj yaz' })).not.toBeInTheDocument();
+  });
+});
+
+describe('Mesaj yaz refused for want of consent', () => {
+  it('a person who is no business is told why, and offered no business permission', async () => {
+    const user = userEvent.setup();
+    mockFetch({
+      ...inboxAnswers,
+      'GET /api/workspace/modules': inboxOnly,
+      'GET /api/inbox/people/person-1': { person: { ...person, recipient_kind: 'individual' }, identities: [emailIdentity], open_journey: null, conversations: [] },
+      'GET /api/capabilities': [mailbox],
+      'GET /api/inbox/email-settings': settings,
+      'POST /api/inbox/people/person-1/send': withStatus(403, { code: 'FORBIDDEN', message: 'IZIN_YOK', details: {} }),
+    });
+    renderAt('/inbox?person=person-1');
+    await user.click(await screen.findByRole('button', { name: 'Mesaj yaz' }, LOADED));
+    const dialog = within(await screen.findByRole('dialog'));
+    await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeChecked());
+    await user.type(dialog.getByRole('textbox', { name: 'Konu' }), 'Merhaba');
+    await user.type(dialog.getByRole('textbox', { name: 'Mesaj' }), 'Kısa bir tanışma.');
+    await user.click(dialog.getByRole('button', { name: 'Gönder' }));
+    expect(await dialog.findByText('Bu kişinin ileti izni kayıtlı değil; ona ilk e-postayı gönderemezsin.')).toBeInTheDocument();
+    expect(dialog.queryByRole('button', { name: 'İzni aç' })).not.toBeInTheDocument();
+    expect(dialog.queryByText(/İzni hesap sahibi açar/)).not.toBeInTheDocument();
+  });
+
+  it('a business person refused is offered the business permission, as a prospect is', async () => {
+    const user = userEvent.setup();
+    mockFetch({
+      ...inboxAnswers,
+      'GET /api/workspace/modules': inboxOnly,
+      'GET /api/inbox/people/person-1': { person: { ...person, recipient_kind: 'business' }, identities: [emailIdentity], open_journey: null, conversations: [] },
+      'GET /api/capabilities': [mailbox],
+      'GET /api/inbox/email-settings': settings,
+      'POST /api/inbox/people/person-1/send': withStatus(403, { code: 'FORBIDDEN', message: 'IZIN_YOK', details: {} }),
+    });
+    renderAt('/inbox?person=person-1');
+    await user.click(await screen.findByRole('button', { name: 'Mesaj yaz' }, LOADED));
+    const dialog = within(await screen.findByRole('dialog'));
+    await waitFor(() => expect(dialog.getByRole('radio', { name: 'E-posta' })).toBeChecked());
+    await user.type(dialog.getByRole('textbox', { name: 'Konu' }), 'Merhaba');
+    await user.type(dialog.getByRole('textbox', { name: 'Mesaj' }), 'Kısa bir tanışma.');
+    await user.click(dialog.getByRole('button', { name: 'Gönder' }));
+    expect(await dialog.findByText(/Bu alıcıya bu kanaldan ticari mesaj izni yok/)).toBeInTheDocument();
   });
 });

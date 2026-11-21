@@ -136,7 +136,7 @@ async fn the_business_basis_stays_the_owners_act_with_the_counsels_confirmation(
     assert_eq!(e.details["reason"], "owner_required");
     let agent = w.agent(&["inbox.work", "inbox.manage"]).await;
     let e = err(email_settings_set(&w.deps, &agent, input(open.clone())).await);
-    assert_eq!(e.details["reason"], "owner_required");
+    assert_eq!(e.details["reason"], "human_only");
     // The owner without the counsel's confirmation is refused.
     let e = err(email_settings_set(
         &w.deps,
@@ -195,4 +195,65 @@ async fn the_email_settings_take_no_campaign_keys() {
     )
     .await);
     assert_invalid(&e, "privacy_notice_url");
+}
+
+#[tokio::test]
+async fn only_a_person_changes_the_sender_details_and_replacing_a_value_is_a_managers() {
+    use jt_app::usecases::outreach;
+    let o = outreach_world().await;
+    let w = &o.w;
+    let rep = w.member("rep").await;
+    // An agent reads them, never writes them, whatever its key holds.
+    let agent = w.agent(&["inbox.work", "inbox.manage"]).await;
+    assert!(
+        email_settings_get(&w.deps, &agent)
+            .await
+            .unwrap()
+            .sender_identity_complete
+    );
+    for change in [
+        json!({"sender_company": "Başka A.Ş."}),
+        json!({"sender_address": ""}),
+        json!({"privacy_notice_url": "https://acme.example.invalid/yeni"}),
+    ] {
+        let e = err(email_settings_set(&w.deps, &agent, input(change.clone())).await);
+        assert_eq!(e.code, ErrorCode::Forbidden, "{change}");
+        assert_eq!(e.details["reason"], "human_only", "{change}");
+        // A member who writes to people may not replace or empty a value.
+        assert_forbidden(
+            &err(email_settings_set(&w.deps, &rep, input(change.clone())).await),
+            "inbox.manage",
+        );
+    }
+    let kept = outreach::settings_get(&w.deps, &w.owner_ctx).await.unwrap();
+    assert_eq!(kept.policy.sender_company, "Acme Yazılım A.Ş.");
+    assert!(kept.sender_identity_complete);
+    // The same value again changes nothing anyone may not change.
+    email_settings_set(
+        &w.deps,
+        &rep,
+        input(json!({"sender_company": "Acme Yazılım A.Ş."})),
+    )
+    .await
+    .unwrap();
+    // An empty field is filled in by the member; a manager replaces a value.
+    email_settings_set(&w.deps, &w.owner_ctx, input(json!({"sender_address": ""})))
+        .await
+        .unwrap();
+    email_settings_set(
+        &w.deps,
+        &rep,
+        input(json!({"sender_address": "Deneme Sk. 2, İzmir"})),
+    )
+    .await
+    .unwrap();
+    let manager = w.member("manager").await;
+    let out = email_settings_set(
+        &w.deps,
+        &manager,
+        input(json!({"sender_address": "Deneme Sk. 3, İzmir"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.sender_address, "Deneme Sk. 3, İzmir");
 }

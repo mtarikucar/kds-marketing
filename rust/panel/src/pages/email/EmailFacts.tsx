@@ -80,6 +80,9 @@ export function SenderForm({
     sender_address: settings.sender_address,
     privacy_notice_url: settings.privacy_notice_url,
   }));
+  // Filling an empty field is anyone's who writes to people; a value is changed by a manager.
+  const session = useSession();
+  const manage = can(session.data, 'inbox.manage');
   const save = useSaveEmailSettings((out) => {
     if (!missingOnly) toast.success(t('leads.settings.saved'));
     onSaved?.(out);
@@ -101,6 +104,7 @@ export function SenderForm({
             <Input
               type={f === 'privacy_notice_url' ? 'url' : 'text'}
               value={values[f]}
+              readOnly={!manage && settings[f].trim() !== ''}
               maxLength={SENDER_MAX[f]}
               onChange={(e) => setValues((v) => ({ ...v, [f]: e.target.value }))}
             />

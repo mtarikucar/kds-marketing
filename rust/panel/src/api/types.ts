@@ -1108,6 +1108,8 @@ export interface InboxPerson {
   first_touch: { source: InboxSource; capability_id: Uuid | null; at: Rfc3339 };
   merged_into: Uuid | null;
   erased_at: Rfc3339 | null;
+  /** Whom a commercial message reaches (`jt_inbox::RecipientKind`); missing reads as unknown. */
+  recipient_kind?: RecipientKind;
   created_at: Rfc3339;
   updated_at: Rfc3339;
 }

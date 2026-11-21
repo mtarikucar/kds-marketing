@@ -115,14 +115,24 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "inbox.email_settings_get",
-            description: "Read the email facts every commercial email needs: sender_company,                           sender_address, privacy_notice_url (the footer), b2b_basis,                           require_iys_lookup and legal_ack (the business-recipient basis), and                           what counts now: sender_identity_complete, platform_enabled and                           b2b_channels_in_force. The same facts campaigns read; no outreach                           permission or campaigns module needed. [risk: READ]",
+            description: "Read the email facts every commercial email needs: sender_company, sender_address and \
+                          privacy_notice_url (the footer), b2b_basis, require_iys_lookup and legal_ack (the \
+                          business-recipient basis), and what counts now: sender_identity_complete, platform_enabled \
+                          and b2b_channels_in_force. The same facts campaigns read; no outreach permission or \
+                          campaigns module needed. [risk: READ]",
             permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("email_settings_get")).expect("inbox schema"),
             run: email_settings_get,
         },
         ToolDef {
             use_case: "inbox.email_settings_set",
-            description: "Change the email facts: sender_company (up to 200), sender_address (up                           to 300), privacy_notice_url (http(s)); an empty text clears it. Any of                           b2b_basis, require_iys_lookup or legal_ack needs inbox.manage; giving                           b2b_basis channels or turning require_iys_lookup off needs a human                           owner and legal_ack {counsel_confirmed: true, note} in the same call                           (FORBIDDEN owner_required, counsel_confirmation_required); an agent                           never can. [risk: WRITE]",
+            description: "Change the email facts (a person only: an agent is refused with FORBIDDEN human_only). \
+                          sender_company (up to 200), sender_address (up to 300), privacy_notice_url (http(s)); an \
+                          empty text clears it. Filling an empty field needs inbox.work; changing or emptying one that \
+                          has a value needs inbox.manage, as does any of b2b_basis, require_iys_lookup or legal_ack. \
+                          Giving b2b_basis channels or turning require_iys_lookup off needs a human owner and \
+                          legal_ack {counsel_confirmed: true, note} in the same call (FORBIDDEN owner_required, \
+                          counsel_confirmation_required). [risk: WRITE]",
             permissions: &[Permission::InboxWork],
             schema: || Schema::try_from(schema::tool("email_settings_set")).expect("inbox schema"),
             run: email_settings_set,
