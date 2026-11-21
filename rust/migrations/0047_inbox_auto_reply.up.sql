@@ -22,10 +22,18 @@ create table if not exists auto_reply_queue (
     attempts integer not null default 0 check (attempts >= 0),
     -- When a person last handed the conversation back to the agent.
     handed_back_at timestamptz,
+    -- When the customer's messages were last looked at for a schedule.
+    handled_at timestamptz,
     -- No foreign key to `conversations`: the inbox's own downs drop that table, and erasure
     -- removes a person's rows (`inbox/erasure.rs`).
     primary key (workspace_id, conversation_id)
 );
+
+-- The job's sweep for customer messages left without a schedule: the conversations ours and the
+-- agent's, by capability and latest customer message.
+create index if not exists conversations_auto_reply_sweep on conversations
+    (workspace_id, capability_id, last_inbound_at)
+    where state = 'ours' and executor_kind = 'agent';
 
 create index if not exists auto_reply_queue_due on auto_reply_queue (due_at) where due_at is not null;
 create index if not exists auto_reply_queue_lease on auto_reply_queue (lease_until)

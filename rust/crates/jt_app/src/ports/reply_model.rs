@@ -23,6 +23,17 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// After a message written by a person (in the panel, or from the phone's Business App), the
+/// automatic replies stay out of the conversation at least this long (and for the rest of the
+/// journey it was written in), unless a person hands the conversation back after it.
+pub const HUMAN_QUIET: Duration = Duration::hours(24);
+/// The oldest customer message the job's sweep still answers.
+pub const RECONCILE_MAX_AGE: Duration = Duration::minutes(15);
+/// The most conversations one sweep of a workspace schedules.
+pub const RECONCILE_BATCH: u32 = 20;
+/// How many times a hand-over of a row that kept failing is tried before the row rests anyway.
+pub const GIVE_UP_RETRIES: u32 = 3;
+
 /// A reply goes out this long after the customer's last message, so several messages in a row
 /// make one answer.
 pub const AUTOREPLY_SETTLE: Duration = Duration::seconds(12);
@@ -34,20 +45,27 @@ pub const AUTOREPLY_LEASE: Duration = Duration::minutes(2);
 /// How many model calls one queue row may take (a retry after a rate limit or an outage, a run
 /// that died after its call included) before the conversation goes to a person (`failed`).
 pub const AUTOREPLY_MAX_ATTEMPTS: u32 = 3;
-/// After a message written by a person (in the panel, or from the phone's Business App), the
-/// automatic replies stay out of the conversation this long, unless a person hands it back to
-/// the agent after that message.
-pub const HUMAN_QUIET: Duration = Duration::hours(24);
 /// What a model call that brought back no usage is counted as costing, in millionths of a US
 /// dollar: a conservative estimate (a full prompt and a full answer), so failed calls count
 /// towards the day's spend ceiling.
 pub const FAILED_CALL_ESTIMATE_MICRO_USD: i64 = 5_000;
 /// The longest wait before asking again after a rate limit.
 pub const AUTOREPLY_RETRY_MAX: Duration = Duration::seconds(60);
-/// Automatic messages per conversation per local day.
-pub const PER_CONVERSATION_DAILY: u32 = 12;
-/// Automatic messages per workspace per local day.
-pub const PER_WORKSPACE_DAILY: u32 = 300;
+/// Model calls per conversation per local day: an answer and its check are two, so this is 12
+/// automatic messages.
+pub const PER_CONVERSATION_DAILY: u32 = 24;
+/// Model calls per workspace per local day (300 automatic messages, each with its check).
+pub const PER_WORKSPACE_DAILY: u32 = 600;
+/// The most output tokens the check of a text may take (its thinking included).
+pub const JUDGE_MAX_TOKENS: u32 = 1_024;
+/// How often the job looks for customer messages left without a schedule (a crash between the
+/// consumer's commit and the schedule).
+pub const RECONCILE_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+/// A customer message is looked for by that sweep only once it is this old (the consumer's own
+/// schedule comes first).
+pub const RECONCILE_GRACE: Duration = Duration::seconds(30);
+/// How long one workspace may take of one run of the job.
+pub const AUTOREPLY_WORKSPACE_SHARE: std::time::Duration = std::time::Duration::from_secs(8);
 /// The model's cost per workspace per local day, in millionths of a US dollar ($2).
 pub const WORKSPACE_DAILY_SPEND_MICRO_USD: i64 = 2_000_000;
 /// How many of the conversation's latest messages the model reads.
@@ -171,12 +189,38 @@ pub enum ModelError {
     Rejected { status: Option<u16> },
 }
 
+/// A second, independent check of a text the rules let through: whether it states, implies or
+/// promises anything of money, a free item, a payment term or a delivery the cards do not hold.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct JudgeRequest {
+    /// The instructions (a constant of the use case).
+    pub system: String,
+    /// The workspace's cards, the only facts the text may rest on.
+    pub cards: String,
+    /// The server's own facts about this text (the one price a quote may state, or that none
+    /// may be stated).
+    pub facts: String,
+    /// The text to check, alone, between the delimiters the instructions name.
+    pub text: String,
+    pub max_tokens: u32,
+}
+
+/// The check's answer: `allowed` only from a clear tool call (none on a refusal, a cut answer or
+/// no tool call).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JudgeAnswer {
+    pub allowed: Option<bool>,
+    pub usage: Usage,
+}
+
 /// The model the automatic replies ask.
 #[async_trait]
 pub trait ReplyModel: Send + Sync {
     /// The model's id, recorded on each run.
     fn model(&self) -> &str;
     async fn answer(&self, request: &ModelRequest) -> Result<ModelAnswer, ModelError>;
+    /// The check of a text ([`JudgeRequest`]).
+    async fn judge(&self, request: &JudgeRequest) -> Result<JudgeAnswer, ModelError>;
 }
 
 /// A conversation waiting for an automatic reply.
@@ -192,8 +236,11 @@ pub struct QueueRow {
     /// How many model calls it took in its current burst.
     pub attempts: u32,
     /// When a person last handed the conversation back to the agent: a person's message before
-    /// it no longer keeps the automatic replies out ([`HUMAN_QUIET`]).
+    /// it no longer keeps the automatic replies out.
     pub handed_back_at: Option<OffsetDateTime>,
+    /// When the customer's messages were last looked at for a schedule (each customer message
+    /// up to then is handled); the job's sweep schedules a newer one left without.
+    pub handled_at: Option<OffsetDateTime>,
 }
 
 impl QueueRow {
@@ -206,6 +253,7 @@ impl QueueRow {
             lease_until: None,
             attempts: 0,
             handed_back_at: None,
+            handled_at: None,
         }
     }
 
@@ -327,6 +375,18 @@ pub trait AutoReplyRepo: Send + Sync {
     ) -> Result<u32, AppError>;
     /// The cost of every run at `since` or later, in millionths of a US dollar.
     async fn runs_spend_since(&mut self, since: OffsetDateTime) -> Result<i64, AppError>;
+    /// The job's sweep, in one bounded query: the conversations `ours` and the agent's on one of
+    /// `capabilities` (each with the time it was turned on) whose latest customer message is at
+    /// or after both that time and `newer_than`, at or before `older_than`, and newer than their
+    /// queue row's `handled_at`, with nothing due or leased; the oldest message first, at most
+    /// `limit`.
+    async fn queue_unscheduled(
+        &mut self,
+        capabilities: &[(CapabilityId, OffsetDateTime)],
+        newer_than: OffsetDateTime,
+        older_than: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ConversationId>, AppError>;
 }
 
 #[cfg(test)]
@@ -342,6 +402,7 @@ mod tests {
             lease_until: lease.map(at),
             attempts: 0,
             handed_back_at: None,
+            handled_at: None,
         }
     }
 

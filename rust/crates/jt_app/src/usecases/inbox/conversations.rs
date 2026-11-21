@@ -277,12 +277,6 @@ async fn mutate(
     if let Some(executor) = executor {
         r.conversations().update_executor(id, executor).await?;
     }
-    if action == "inbox.conversation.handed_to_agent"
-        && let Some(c) = r.conversations().get(id).await?
-    {
-        // A person's earlier message no longer keeps the automatic replies out.
-        super::autoreply::handed_back(r.as_mut(), &c, ctx.now).await?;
-    }
     let row = r
         .conversations()
         .get(id)
@@ -311,6 +305,11 @@ async fn mutate(
         .await?;
     }
     r.commit().await?;
+    if action == "inbox.conversation.handed_to_agent" {
+        // A person's earlier message no longer keeps the automatic replies out; best effort, in
+        // a transaction of its own, nothing at all while the replies are off.
+        super::autoreply::handed_back_after(deps, ctx.workspace_id, id, ctx.now).await;
+    }
     Ok(row)
 }
 pub async fn take_over(

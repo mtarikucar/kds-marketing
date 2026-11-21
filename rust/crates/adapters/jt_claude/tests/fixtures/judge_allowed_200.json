@@ -1,0 +1,12 @@
+{
+  "id": "msg_01TESTJUDGE",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-haiku-5-5",
+  "content": [
+    { "type": "thinking", "thinking": "", "signature": "TESTSIGNATURE" },
+    { "type": "tool_use", "id": "toolu_01JUDGE", "name": "verdict", "input": { "allowed": true } }
+  ],
+  "stop_reason": "tool_use",
+  "usage": { "input_tokens": 80, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 12 }
+}

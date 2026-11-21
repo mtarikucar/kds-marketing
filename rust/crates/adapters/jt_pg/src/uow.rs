@@ -652,6 +652,10 @@ impl PlatformRepos for PgPlatformRepos {
         agent_connections::workspaces_with_due_wakes(&mut self.tx, now).await
     }
 
+    async fn workspaces_with_auto_reply(&mut self) -> Result<Vec<WorkspaceId>, AppError> {
+        crate::repos::autoreply::workspaces_with_auto_reply(&mut self.tx).await
+    }
+
     async fn workspaces_with_due_auto_replies(
         &mut self,
         now: OffsetDateTime,

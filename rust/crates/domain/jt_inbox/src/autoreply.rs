@@ -1,22 +1,31 @@
 //! The rules the server holds an automatic reply to, whatever the model wrote (the inbox's
 //! automatic replies, `usecases::inbox::autoreply`): what a reply may say, what a quote must say,
-//! which links it may carry and when the day's limits are reached. Pure: no I/O, no clock.
+//! which links it may carry and when the day's limits are reached. Pure: no I/O, no clock (the
+//! calendar year is the caller's).
 //!
 //! The bias is to hand over: a wrong price reaching a customer is the costly error, a needless
-//! hand-over only costs a person a look.
+//! hand-over only costs a person a look. So the rules are inverted where they can be: a text is
+//! first normalised ([`normalise`]: NFKC, format characters removed, every decimal digit as ASCII,
+//! Turkish lower case), then
 //!
-//! - A reply ([`check_reply`]), and a hand-over's line to the customer, name **no money**: no
-//!   currency word or symbol (TL, ₺, TRY, lira and its suffixed forms, dolar, euro, $, €, USD,
-//!   EUR), no "bin" (thousand) after a number, no percent, discount or VAT wording, and no bare
-//!   number of three digits or more unless it is a date, a time, a year (2020 to 2039), a phone
-//!   number or a quantity with its unit (gün, saat, hafta, ay, cm, mm, adet …).
-//! - A quote ([`check_quote`]) is a whole amount within the owner's range, and its text states
-//!   that amount exactly once, and no other amount, percent, discount or VAT.
-//! - A link (any `label.tld`, with or without a scheme or a path) is allowed only when the cards
-//!   hold the same host, and the same path when the reply names one, as a whole token
-//!   ([`links_allowed`]).
+//! - **every digit sequence is refused** unless it is an allowed form: a date, a clock time, a
+//!   phone number, a count followed by an allowed unit (gün, saat, hafta, ay, cm, mm, adet …), or
+//!   the bare current or next calendar year with no separator and no money next to it;
+//! - **number words** that build an amount are refused: "bin" with any suffix, "buçuk" next to
+//!   "bin" or "yüz", a number word before "yüz" (any suffix), "yüz" before a number word, a tens
+//!   word with a case suffix ("elliye"); plain "yüz" (face) and "bir/iki/üç" before a noun stay;
+//! - **the money lexicon** is refused, with any suffix: the currency words and symbols, indirim,
+//!   iskonto, kdv, yüzde, %, bedava, beleş, ücretsiz, yarı fiyat, yarı yarıya, taksit, peşin,
+//!   kapora, hediye çeki.
 //!
-//! What is refused is a [`Refusal`]; the caller hands the conversation to a person with its code.
+//! A reply ([`check_reply`]), and a hand-over's line, may hold none of it. A quote
+//! ([`check_quote`]) states its amount exactly once, next to its currency, and nothing else of it.
+//! What the rules cannot list is left to a second, independent check by the model (the use case's
+//! judge). A link (any `label.tld`, an IP address, an `xn--` name, anything with a scheme) is
+//! allowed only when the cards hold the same host, and the same path when the text names one, as
+//! a whole token ([`links_allowed`]).
+
+use unicode_normalization::UnicodeNormalization;
 
 /// The longest text of one automatic message, in characters.
 pub const MAX_TEXT_CHARS: usize = 1_000;
@@ -28,7 +37,7 @@ pub enum Refusal {
     EmptyText,
     /// The text is over [`MAX_TEXT_CHARS`].
     TextTooLong,
-    /// A reply names money: prices go out only as a quote.
+    /// A reply names money, a number or a term the rules do not allow.
     PriceWithoutQuote,
     /// The quote's amount is outside the owner's range.
     QuoteOutOfRange,
@@ -59,27 +68,42 @@ pub struct Range {
     pub max_minor: i64,
 }
 
-/// A reply the model wrote (or a hand-over's line), checked: its length, no money, only the
-/// cards' links.
-pub fn check_reply(text: &str, cards: &str) -> Result<(), Refusal> {
+/// A reply the model wrote (or a hand-over's line), checked in calendar year `year`: its
+/// length, no money, no number but an allowed form, only the cards' links.
+pub fn check_reply(text: &str, cards: &str, year: i32) -> Result<(), Refusal> {
     check_text(text, cards)?;
-    if scan(text).names_money() {
+    if !scan(text, year).clean() {
         return Err(Refusal::PriceWithoutQuote);
     }
     Ok(())
 }
 
-/// A quote of `amount` whole currency units with its `text`, checked against `range`: answers the
-/// amount in minor units. The amount is within the range; the text states it exactly once, with
-/// no other amount and no percent, discount, VAT or "bin".
-pub fn check_quote(amount: i64, text: &str, range: Range, cards: &str) -> Result<i64, Refusal> {
+/// A quote of `amount` whole currency units with its `text`, checked against `range` in calendar
+/// year `year`: answers the amount in minor units. The amount is within the range; the text
+/// states it exactly once, next to a currency word or symbol, and holds nothing else the reply
+/// rules refuse (a currency word is allowed only beside that amount).
+pub fn check_quote(
+    amount: i64,
+    text: &str,
+    range: Range,
+    cards: &str,
+    year: i32,
+) -> Result<i64, Refusal> {
     let minor = amount
         .checked_mul(100)
         .filter(|m| (range.min_minor..=range.max_minor).contains(m))
         .ok_or(Refusal::QuoteOutOfRange)?;
     check_text(text, cards)?;
-    let s = scan(text);
-    if s.discount || s.thousand_word || s.amounts != [minor] {
+    let s = scan(text, year);
+    let [(at, stated)] = s.amounts.as_slice() else {
+        return Err(Refusal::QuoteTextMismatch);
+    };
+    let beside = |i: &usize| *i == *at || *i + 1 == *at || *i == *at + 1;
+    if *stated != minor
+        || !s.terms.is_empty()
+        || !s.numbers.is_empty()
+        || !s.currency.iter().all(beside)
+    {
         return Err(Refusal::QuoteTextMismatch);
     }
     Ok(minor)
@@ -100,81 +124,232 @@ fn check_text(text: &str, cards: &str) -> Result<(), Refusal> {
     Ok(())
 }
 
-/// What [`scan`] found of money in a text.
+// ---------------------------------------------------------------------------------------------
+// Normalising
+// ---------------------------------------------------------------------------------------------
+
+/// The first code point of each block of ten Unicode decimal digits (general category `Nd`)
+/// beyond what NFKC already maps (full-width digits, mathematical digits).
+const DIGIT_ZEROS: &[u32] = &[
+    0x0660, 0x06F0, 0x07C0, 0x0966, 0x09E6, 0x0A66, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6, 0x0D66,
+    0x0DE6, 0x0E50, 0x0ED0, 0x0F20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90,
+    0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10,
+    0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0, 0x11450, 0x114D0, 0x11650,
+    0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0, 0x16A60, 0x16AC0, 0x16B50,
+    0x1E140, 0x1E2F0, 0x1E950, 0x1FBF0,
+];
+
+/// `c` as an ASCII digit when it is a decimal digit of another script.
+fn ascii_digit(c: char) -> Option<char> {
+    let cp = c as u32;
+    DIGIT_ZEROS
+        .iter()
+        .find(|z| (**z..*z + 10).contains(&cp))
+        .and_then(|z| char::from_digit(cp - z, 10))
+}
+
+/// Whether `c` is a format character (zero-width spaces and joiners, direction marks, the soft
+/// hyphen, the byte-order mark and the like): removed.
+fn format_char(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00AD | 0x061C | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064
+            | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB
+    )
+}
+
+/// `text` as the rules read it: NFKC, format characters removed, every decimal digit as its ASCII
+/// digit, other spaces as a plain space, and Turkish lower case (`I` → `ı`, `İ` → `i`).
+pub fn normalise(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.nfkc() {
+        if format_char(c) {
+            continue;
+        }
+        let c = ascii_digit(c).unwrap_or(c);
+        match c {
+            'I' => out.push('ı'),
+            'İ' => out.push('i'),
+            c if c.is_whitespace() => out.push(' '),
+            c => out.extend(c.to_lowercase()),
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------------------------
+// Scanning
+// ---------------------------------------------------------------------------------------------
+
+/// What [`scan`] found in a text, by word position.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scan {
-    /// A currency word or symbol.
-    pub currency: bool,
-    /// Percent, discount or VAT wording.
-    pub discount: bool,
-    /// "bin" or "milyon" after a number or a number word.
-    pub thousand_word: bool,
-    /// The numbers that read as amounts, in minor units, in order: every number next to a
-    /// currency, and every bare number of three digits or more that is not a date, a time, a
-    /// year, a phone number or a quantity with its unit.
-    pub amounts: Vec<i64>,
+    /// Numbers that read as amounts (next to a currency), in minor units.
+    pub amounts: Vec<(usize, i64)>,
+    /// Where a currency word or symbol stands.
+    pub currency: Vec<usize>,
+    /// Digit sequences in no allowed form.
+    pub numbers: Vec<usize>,
+    /// Number words that build an amount, and the money and discount lexicon.
+    pub terms: Vec<usize>,
 }
 
 impl Scan {
-    /// Whether the text names money in any way.
-    pub fn names_money(&self) -> bool {
-        self.currency || self.discount || self.thousand_word || !self.amounts.is_empty()
+    /// Whether the text holds nothing of money and no number but an allowed form.
+    pub fn clean(&self) -> bool {
+        self.amounts.is_empty()
+            && self.currency.is_empty()
+            && self.numbers.is_empty()
+            && self.terms.is_empty()
     }
 }
 
-/// Number words, for "üç bin" and the like.
-const NUMBER_WORDS: &[&str] = &[
-    "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz", "on", "yirmi",
-    "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan", "yüz",
-];
-
-/// Currency words, matched as a word's stem with any Turkish suffix (`liraya`, `dolarlık`).
-const CURRENCY_STEMS: &[&str] = &["lira", "dolar", "euro", "avro", "sterlin"];
-/// Currency codes and abbreviations, matched as a whole word (an apostrophe suffix allowed).
-const CURRENCY_CODES: &[&str] = &["tl", "try", "usd", "eur", "gbp", "ytl"];
-/// Discount and VAT words, matched as a stem.
-const DISCOUNT_STEMS: &[&str] = &["indirim", "iskonto", "kdv", "yüzde", "kampanya"];
-/// Units a quantity is read with: exact words.
-const UNITS_EXACT: &[&str] = &[
-    "cm", "mm", "m", "km", "kg", "gr", "g", "ml", "lt", "dk", "sn", "ay", "ayda", "aylık", "ayı",
-    "mt", "metre", "x",
-];
-/// Units a quantity is read with: stems with any suffix.
-const UNIT_STEMS: &[&str] = &[
-    "gün", "saat", "hafta", "adet", "dakika", "yıl", "santim", "parça", "kişi", "sayfa", "kat",
-];
-/// What may be glued after a number as its unit (`1200mm`, `15cm`).
-const GLUED_UNITS: &[&str] = &["cm", "mm", "m", "km", "kg", "gr", "g", "ml", "lt"];
-/// Glued currency suffixes (`950tl`, `150$`).
-const GLUED_CURRENCY: &[&str] = &["tl", "try", "usd", "eur", "₺", "$", "€"];
-
-/// One word of a text: its lower-cased text without surrounding punctuation, and its stem (the
-/// part before an apostrophe suffix: `2750'ye` → `2750`, `tl'dir` → `tl`).
+/// One word: its text without surrounding punctuation, its stem (before an apostrophe suffix:
+/// `2750'ye` → `2750`, `tl'dir` → `tl`), and whether it had such a suffix.
 #[derive(Clone, Debug)]
 struct Word {
     text: String,
     stem: String,
+    suffixed: bool,
 }
 
 fn words_of(text: &str) -> Vec<Word> {
-    text.split_whitespace()
+    normalise(text)
+        .split(' ')
         .filter_map(|raw| {
             let t = raw
-                .trim_matches(|c: char| "()[]{}<>\"«»“”‘,;:!?…".contains(c))
+                .trim_matches(|c: char| "()[]{}<>\"«»“”‘,;:!?…*_".contains(c))
                 .trim_end_matches('.')
-                .to_lowercase();
+                .to_owned();
             if t.is_empty() {
                 return None;
             }
-            let stem = t
-                .split(['\'', '’'])
-                .next()
-                .unwrap_or_default()
-                .trim_end_matches('.')
-                .to_owned();
-            Some(Word { text: t, stem })
+            let mut parts = t.splitn(2, ['\'', '’']);
+            let stem = parts.next().unwrap_or_default().to_owned();
+            let suffixed = parts.next().is_some();
+            Some(Word {
+                text: t,
+                stem,
+                suffixed,
+            })
         })
         .collect()
+}
+
+const NUMBER_WORDS: &[&str] = &[
+    "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz", "on", "yirmi",
+    "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan",
+];
+/// Tens words: with a case suffix (`elliye`, `otuza`) they are an amount on their own.
+const TENS: &[&str] = &[
+    "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan",
+];
+/// What may follow "bin", "yüz" or a tens word to make it an amount (`bine`, `binlik`, `yüze`).
+const NUMBER_SUFFIXES: &[&str] = &[
+    "", "e", "i", "ı", "in", "ın", "de", "da", "den", "dan", "le", "la", "lik", "lık", "lük",
+    "luk", "ler", "lar", "lerce", "ye", "ya", "a", "ü", "ün", "ü", "te", "ta", "ten", "tan",
+    "likler", "lıklar", "dir", "dır",
+];
+/// Currency codes, as a whole stem.
+const CURRENCY_CODES: &[&str] = &["tl", "try", "usd", "eur", "gbp", "ytl"];
+/// Currency words, with any suffix.
+const CURRENCY_STEMS: &[&str] = &["lira", "dolar", "euro", "avro", "sterlin", "kuruş"];
+/// Money and discount words, with any suffix (English ones too).
+const TERM_STEMS: &[&str] = &[
+    "indirim",
+    "iskonto",
+    "kdv",
+    "yüzde",
+    "bedava",
+    "beleş",
+    "ücretsiz",
+    "taksit",
+    "peşin",
+    "kapora",
+    "free",
+    "discount",
+    "percent",
+];
+/// Words after which "hediye" (a gift) is a free item.
+const GIFT_AFTER: &[&str] = &["ikincisi", "ikinci", "üçüncü", "üçüncüsü", "yanında"];
+/// Units a count is allowed with: a stem the next word starts with.
+const UNITS: &[&str] = &[
+    "gün", "saat", "hafta", "dakika", "adet", "kişi", "parça", "santim", "metre",
+];
+/// Units a count is allowed with: the next word exactly (with an apostrophe suffix at most).
+const UNITS_EXACT: &[&str] = &[
+    "ay", "aylık", "ayda", "cm", "mm", "m", "dk", "sn", "kg", "gr",
+];
+/// Units that may be glued to a count (`15cm`).
+const GLUED_UNITS: &[&str] = &["cm", "mm", "m", "kg", "gr", "dk"];
+
+/// `stem` is `base` followed by one of [`NUMBER_SUFFIXES`].
+fn with_suffix(stem: &str, base: &str) -> bool {
+    stem.strip_prefix(base)
+        .is_some_and(|rest| NUMBER_SUFFIXES.contains(&rest))
+}
+
+/// "bin" (a thousand) in any form (`bine`, `binliğe`, `biner`): every word starting so but
+/// "bina" (a building) and its forms. "milyon" likewise.
+fn is_bin(w: &Word) -> bool {
+    (w.stem.starts_with("bin") && !w.stem.starts_with("bina")) || w.stem.starts_with("milyon")
+}
+
+fn is_yuz(w: &Word) -> bool {
+    with_suffix(&w.stem, "yüz") || w.stem.starts_with("yüzlü") || w.stem.starts_with("yüzlük")
+}
+
+/// The distributive forms of the numbers (`kırkar`, `beşer`, `yüzer`): an amount each.
+const DISTRIBUTIVE: &[&str] = &[
+    "birer",
+    "ikişer",
+    "üçer",
+    "dörder",
+    "beşer",
+    "altışar",
+    "yedişer",
+    "sekizer",
+    "dokuzar",
+    "onar",
+    "yirmişer",
+    "otuzar",
+    "kırkar",
+    "ellişer",
+    "altmışar",
+    "yetmişer",
+    "seksener",
+    "doksanar",
+    "yüzer",
+    "biner",
+];
+
+/// Whether `stem` is two or more number words glued together (`üçbin`, `dokuzyüzelli`),
+/// optionally with a case suffix (`dokuzyüzelliye`).
+fn glued_number_words(stem: &str) -> bool {
+    const PARTS: &[&str] = &[
+        "sıfır", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz", "on",
+        "yirmi", "otuz", "kırk", "elli", "altmış", "yetmiş", "seksen", "doksan", "yüz", "bin",
+        "milyon",
+    ];
+    fn go(rest: &str, parts: usize) -> bool {
+        if parts >= 2 && NUMBER_SUFFIXES.contains(&rest) {
+            return true;
+        }
+        PARTS
+            .iter()
+            .any(|p| rest.strip_prefix(p).is_some_and(|r| go(r, parts + 1)))
+    }
+    go(stem, 0)
+}
+
+/// Whether `c` is a letter of the Latin script (the Turkish letters included).
+fn latin(c: char) -> bool {
+    c.is_ascii_alphabetic() || matches!(c as u32, 0x00C0..=0x024F | 0x1E00..=0x1EFF)
+}
+
+/// A word mixing Latin letters with letters of another script (a disguise: `ТL`, `lіra`).
+fn mixed_script(w: &Word) -> bool {
+    w.text.chars().any(latin) && w.text.chars().any(|c| c.is_alphabetic() && !latin(c))
 }
 
 fn is_number_word(w: &Word) -> bool {
@@ -182,60 +357,62 @@ fn is_number_word(w: &Word) -> bool {
 }
 
 fn is_currency(w: &Word) -> bool {
-    w.text.contains(['₺', '$', '€'])
+    w.text.contains(['₺', '$', '€', '£'])
         || CURRENCY_CODES.contains(&w.stem.as_str())
         || CURRENCY_STEMS.iter().any(|s| w.stem.starts_with(s))
 }
 
-fn is_discount(w: &Word) -> bool {
-    w.text.contains('%') || DISCOUNT_STEMS.iter().any(|s| w.stem.starts_with(s))
+fn is_term(w: &Word) -> bool {
+    w.text.contains('%') || TERM_STEMS.iter().any(|s| w.stem.starts_with(s))
 }
 
 fn is_unit(w: &Word) -> bool {
-    UNITS_EXACT.contains(&w.stem.as_str()) || UNIT_STEMS.iter().any(|s| w.stem.starts_with(s))
+    UNITS.iter().any(|u| w.stem.starts_with(u)) || UNITS_EXACT.contains(&w.stem.as_str())
 }
 
-/// A number word's digits and separators only: `1.250,50`, `21.11.2026`, `+90`.
-fn numeric(s: &str) -> bool {
-    !s.is_empty()
-        && s.chars().any(|c| c.is_ascii_digit())
-        && s.chars()
-            .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '/' | ':' | '+' | '-'))
-}
-
-/// `s` as a date (`21.11.2026`, `21/11`, `21.11`) or a time (`14.30`, `14:30`).
+/// `s` as a date (`21.11.2026`, `21/11/26`, `21.11`, `21/11`) or a clock time (`14.30`, `14:30`).
 fn date_or_time(s: &str) -> bool {
     let parts: Vec<&str> = s.split(['.', '/', ':']).collect();
-    let n = |p: &str| p.parse::<u32>().ok();
-    let all_digits = parts
-        .iter()
-        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
-    if !all_digits || parts.len() < 2 {
+    if parts.len() < 2
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()))
+    {
         return false;
     }
+    let n = |p: &str| p.parse::<u32>().ok();
     match parts.as_slice() {
         [d, m, y] => {
-            matches!((n(d), n(m)), (Some(1..=31), Some(1..=12))) && (y.len() == 2 || y.len() == 4)
+            d.len() <= 2
+                && m.len() <= 2
+                && matches!((n(d), n(m)), (Some(1..=31), Some(1..=12)))
+                && (y.len() == 2 || y.len() == 4)
         }
-        [a, b] if b.len() == 2 => {
-            let date = matches!((n(a), n(b)), (Some(1..=31), Some(1..=12))) && a.len() <= 2;
-            let time = matches!((n(a), n(b)), (Some(0..=23), Some(0..=59))) && a.len() <= 2;
-            date || time
+        [a, b] if a.len() <= 2 && b.len() == 2 => {
+            matches!((n(a), n(b)), (Some(1..=31), Some(1..=12)))
+                || matches!((n(a), n(b)), (Some(0..=23), Some(0..=59)))
         }
-        [a, b] if s.contains('/') => matches!((n(a), n(b)), (Some(1..=31), Some(1..=12))),
+        [a, b] if a.len() <= 2 && b.len() == 1 && s.contains('/') => {
+            matches!((n(a), n(b)), (Some(1..=31), Some(1..=9)))
+        }
         _ => false,
     }
 }
 
-/// `s` (digits, an optional leading `+`) as the start of a phone number: `+90…`, or a number of
-/// four digits or more beginning with `0` (prices never do).
+/// The fewest digits a phone number has in all, its groups together.
+const PHONE_DIGITS: usize = 10;
+
+/// `s` (digits, an optional leading `+`) as the start of a phone number: `+` and a country code,
+/// or a number of four digits or more beginning with `0` (prices never do); it is one only when
+/// its groups reach [`PHONE_DIGITS`] digits.
 fn phone_start(s: &str) -> bool {
-    let digits: String = s.chars().filter(char::is_ascii_digit).collect();
-    s.starts_with('+') && digits.len() >= 2 || s.starts_with('0') && digits.len() >= 4
+    let digits = s.chars().filter(char::is_ascii_digit).count();
+    s.chars().all(|c| c.is_ascii_digit() || c == '+')
+        && ((s.starts_with('+') && digits >= 2) || (s.starts_with('0') && digits >= 4))
 }
 
-/// `token` (digits and separators) as (whole units, kuruş, digits of the whole part).
-fn parse_amount(token: &str) -> Option<(i64, i64, usize)> {
+/// `token` (digits and `.` `,` separators) as (whole units, kuruş).
+fn parse_amount(token: &str) -> Option<(i64, i64)> {
     let groups: Vec<&str> = token.split(['.', ',']).collect();
     if groups
         .iter()
@@ -251,84 +428,146 @@ fn parse_amount(token: &str) -> Option<(i64, i64, usize)> {
         }
         _ => (&groups[..], 0),
     };
-    let whole: String = whole_groups.concat();
-    let digits = whole.trim_start_matches('0').len().max(1);
-    let value: i64 = whole.parse().ok()?;
-    Some((value, kurus, digits))
+    let value: i64 = whole_groups.concat().parse().ok()?;
+    Some((value, kurus))
 }
 
-/// What `text` says of money (see [`Scan`]).
-pub fn scan(text: &str) -> Scan {
+/// What `text` says, read in calendar year `year` (see the module docs and [`Scan`]).
+pub fn scan(text: &str, year: i32) -> Scan {
     let words = words_of(text);
     let mut out = Scan::default();
-    let mut in_phone = false;
+    // The phone number being read: its words and its digits so far.
+    let mut phone: Vec<usize> = Vec::new();
+    let mut phone_digits = 0;
+    let end_phone = |out: &mut Scan, phone: &mut Vec<usize>, digits: &mut usize| {
+        if !phone.is_empty() && *digits < PHONE_DIGITS {
+            out.numbers.append(phone);
+        }
+        phone.clear();
+        *digits = 0;
+    };
     for (i, w) in words.iter().enumerate() {
         let prev = i.checked_sub(1).map(|p| &words[p]);
         let next = words.get(i + 1);
+        let after_next = words.get(i + 2);
+        // The lexicon.
         if is_currency(w) {
-            out.currency = true;
+            out.currency.push(i);
         }
-        if is_discount(w) {
-            out.discount = true;
-        }
-        if matches!(w.stem.as_str(), "bin" | "milyon")
-            && prev.is_some_and(|p| numeric(&p.stem) || is_number_word(p))
+        if is_term(w)
+            || mixed_script(w)
+            || (w.stem == "yarı"
+                && next.is_some_and(|n| n.stem.starts_with("fiyat") || n.stem.starts_with("yarı")))
+            || w.stem.starts_with("yarısı")
+            || w.stem == "yarıya"
+            || (w.stem.starts_with("hediye")
+                && (next.is_some_and(|n| n.stem.starts_with("çek"))
+                    || prev.is_some_and(|p| GIFT_AFTER.contains(&p.stem.as_str()))))
+            || (w.stem == "bizden"
+                && prev.is_some_and(|p| p.stem.starts_with("kargo") || p.stem == "ikincisi"))
+            || (w.stem == "half" && next.is_some_and(|n| n.stem.starts_with("price")))
         {
-            out.thousand_word = true;
+            out.terms.push(i);
         }
-        // A number: a currency symbol before it (`₺950`), its digits, and what may be glued after
-        // them (`950tl`, `1200mm`).
-        let stem = w.stem.trim_start_matches(['₺', '$', '€']);
-        let symbol_before = stem.len() != w.stem.len();
+        // Number words.
+        let tens_suffixed = TENS.iter().any(|t| w.stem != *t && with_suffix(&w.stem, t));
+        if is_bin(w)
+            || tens_suffixed
+            || DISTRIBUTIVE.contains(&w.stem.as_str())
+            || w.stem.starts_with("yüzlü")
+            || w.stem.starts_with("yüzlük")
+            || glued_number_words(&w.stem)
+            || (w.stem == "buçuk"
+                && (prev.is_some_and(|p| is_bin(p) || is_yuz(p))
+                    || next.is_some_and(|n| is_bin(n) || is_yuz(n))))
+            || (is_number_word(w) && next.is_some_and(is_yuz))
+            || (is_yuz(w) && next.is_some_and(|n| is_number_word(n) || is_bin(n)))
+        {
+            out.terms.push(i);
+        }
+        // Digits: refused unless an allowed form.
+        if !w.text.chars().any(|c| c.is_ascii_digit() || c.is_numeric()) {
+            end_phone(&mut out, &mut phone, &mut phone_digits);
+            continue;
+        }
+        let symbol_before = w.stem.starts_with(['₺', '$', '€', '£']);
+        let stem = w.stem.trim_start_matches(['₺', '$', '€', '£']);
         let split = stem
             .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | ',' | '/' | ':' | '+' | '-')))
             .unwrap_or(stem.len());
         let (num, glued) = stem.split_at(split);
-        let glued = glued.trim();
-        if !numeric(num) || (!glued.is_empty() && num.chars().all(|c| !c.is_ascii_digit())) {
-            in_phone = false;
-            continue;
-        }
-        let num = num.trim_matches(|c| c == '-' || c == '.' || c == ',');
-        if phone_start(num) {
-            in_phone = true;
+        let num = num.trim_end_matches(['.', ',', '-']);
+        if num.is_empty() || !num.is_ascii() {
+            out.numbers.push(i);
+            end_phone(&mut out, &mut phone, &mut phone_digits);
             continue;
         }
         let digits_only = num.chars().all(|c| c.is_ascii_digit());
-        if in_phone && digits_only && (2..=4).contains(&num.len()) {
+        let digits = num.chars().filter(char::is_ascii_digit).count();
+        if !phone.is_empty() && glued.is_empty() && digits_only && (2..=4).contains(&num.len()) {
+            phone.push(i);
+            phone_digits += digits;
             continue;
         }
-        in_phone = false;
-        if date_or_time(num) {
+        end_phone(&mut out, &mut phone, &mut phone_digits);
+        if glued.is_empty() && phone_start(num) {
+            phone.push(i);
+            phone_digits = digits;
             continue;
         }
-        // A range (`3-5`) or a span of numbers: each part on its own.
-        for part in num.split('-').filter(|p| !p.is_empty()) {
-            let Some((whole, kurus, digits)) = parse_amount(part) else {
-                continue;
-            };
-            let money_next =
-                symbol_before || GLUED_CURRENCY.contains(&glued) || next.is_some_and(is_currency);
-            if money_next {
-                out.amounts
-                    .push(whole.saturating_mul(100).saturating_add(kurus));
-                continue;
+        let glued_currency = matches!(glued, "tl" | "try" | "₺" | "$" | "€");
+        let money = symbol_before || glued_currency || next.is_some_and(is_currency);
+        if money {
+            match parse_amount(num) {
+                Some((whole, kurus)) => out
+                    .amounts
+                    .push((i, whole.saturating_mul(100).saturating_add(kurus))),
+                None => out.numbers.push(i),
             }
-            let unit = GLUED_UNITS.contains(&glued) || next.is_some_and(is_unit);
-            let year = digits == 4 && (2020..=2039).contains(&whole) && kurus == 0;
-            if digits >= 3 && !unit && !year {
-                out.amounts
-                    .push(whole.saturating_mul(100).saturating_add(kurus));
-            }
+            continue;
         }
+        if glued.is_empty() && date_or_time(num) {
+            continue;
+        }
+        // A count, or a range of counts (`3-5`), each at most four digits with at most one
+        // decimal separator (`2.5 cm`).
+        let range = num.split('-').all(|p| {
+            let digits = p.chars().filter(char::is_ascii_digit).count();
+            let separators = p.chars().filter(|c| matches!(c, '.' | ',')).count();
+            (1..=4).contains(&digits)
+                && separators <= 1
+                && !p.starts_with(['.', ','])
+                && p.chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
+        });
+        // A count of months is a count only up to 24 (`36 ay` is a price's instalments).
+        let months = next.is_some_and(|n| n.stem.starts_with("ay"))
+            && !num.parse::<u32>().is_ok_and(|n| n <= 24);
+        let unit_next = (next.is_some_and(is_unit) && !months)
+            || (next.is_some_and(|n| n.stem == "iş")
+                && after_next.is_some_and(|n| n.stem.starts_with("gün")));
+        if range && ((glued.is_empty() && unit_next) || GLUED_UNITS.contains(&glued)) {
+            continue;
+        }
+        let bare_year = glued.is_empty()
+            && !w.suffixed
+            && digits_only
+            && num.len() == 4
+            && num.parse::<i32>().is_ok_and(|y| y == year || y == year + 1)
+            && !prev.is_some_and(|p| is_currency(p) || is_term(p))
+            && !next.is_some_and(|n| is_currency(n) || is_term(n) || is_bin(n));
+        if bare_year {
+            continue;
+        }
+        out.numbers.push(i);
     }
+    end_phone(&mut out, &mut phone, &mut phone_digits);
     out
 }
 
-/// The money amounts `text` names, in minor units, in order (see [`Scan::amounts`]).
-pub fn money_amounts(text: &str) -> Vec<i64> {
-    scan(text).amounts
-}
+// ---------------------------------------------------------------------------------------------
+// Links
+// ---------------------------------------------------------------------------------------------
 
 /// A link of a text, normalised: its host (lower case, without `www.`) and its path (without a
 /// trailing `/`; empty for none).
@@ -338,33 +577,43 @@ pub struct Link {
     pub path: String,
 }
 
-/// The links in `text`: every token of the form `label.tld` (at least two letters after the last
-/// dot), with or without a scheme and a path, and an email address's domain.
+/// The links in `text`: every token with a scheme, every `label.tld` (at least two letters after
+/// the last dot, an `xn--` ending included), every IPv4 address, with or without a path, and an
+/// email address's domain.
 pub fn links_in(text: &str) -> Vec<Link> {
-    text.split_whitespace().filter_map(link_of).collect()
+    normalise(text).split(' ').filter_map(link_of).collect()
 }
 
 fn link_of(token: &str) -> Option<Link> {
-    let t = token
-        .trim_matches(|c: char| "()[]<>{}\"'.,;:!?«»“”‘’".contains(c))
-        .to_lowercase();
-    let t = t.rsplit_once('@').map_or(t.as_str(), |(_, domain)| domain);
-    let rest = t.split_once("://").map_or(t, |(_, rest)| rest);
+    let t = token.trim_matches(|c: char| "()[]<>{}\"'.,;:!?«»“”‘’".contains(c));
+    let t = t.rsplit_once('@').map_or(t, |(_, domain)| domain);
+    let (scheme, rest) = match t.split_once("://") {
+        Some((_, rest)) => (true, rest),
+        None => (false, t),
+    };
     let (host, path) = match rest.find(['/', '?', '#']) {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, ""),
     };
-    let host = host.split(':').next().unwrap_or_default();
+    let host = host.trim_start_matches('[');
+    let host = host.split([':', ']']).next().unwrap_or_default();
     let host = host.strip_prefix("www.").unwrap_or(host);
     let labels: Vec<&str> = host.split('.').collect();
-    let ok = labels.len() >= 2
+    let labels_ok = labels.len() >= 2
         && labels
             .iter()
-            .all(|l| !l.is_empty() && l.chars().all(|c| c.is_alphanumeric() || c == '-'))
+            .all(|l| !l.is_empty() && l.chars().all(|c| c.is_alphanumeric() || c == '-'));
+    let ipv4 = labels.len() == 4
         && labels
-            .last()
-            .is_some_and(|tld| tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic));
-    ok.then(|| Link {
+            .iter()
+            .all(|l| !l.is_empty() && l.len() <= 3 && l.parse::<u16>().is_ok_and(|n| n <= 255));
+    let name = labels_ok
+        && labels.last().is_some_and(|tld| {
+            tld.starts_with("xn--")
+                || (tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic))
+        });
+    let link = (scheme && !host.is_empty()) || ipv4 || name;
+    link.then(|| Link {
         host: host.to_owned(),
         path: path.trim_end_matches('/').to_owned(),
     })
@@ -380,6 +629,10 @@ pub fn links_allowed(text: &str, cards: &str) -> bool {
             .any(|k| k.host == l.host && (l.path.is_empty() || k.path == l.path))
     })
 }
+
+// ---------------------------------------------------------------------------------------------
+// Limits
+// ---------------------------------------------------------------------------------------------
 
 /// The day's limits an automatic reply is held to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -418,37 +671,53 @@ pub fn limit_reached(limits: Limits, today: Today) -> Option<&'static str> {
 mod tests {
     use super::*;
 
+    const YEAR: i32 = 2026;
     const RANGE: Range = Range {
         min_minor: 100_000,
         max_minor: 500_000,
     };
 
+    fn reply(text: &str) -> Result<(), Refusal> {
+        check_reply(text, "", YEAR)
+    }
+
     #[test]
     fn replies_that_name_no_money_pass() {
         for text in [
             "2026 yılbaşı siparişleri",
+            "2027 için de alıyoruz",
             "21.11.2026",
             "21/11 teslim",
+            "Saat 14.30'da",
+            "14:30",
             "+90 532 123 4567",
             "05321234567",
             "0532 123 45 67",
             "1200 mm",
             "1200mm",
+            "15 cm",
             "7 gün",
+            "3-5 iş günü",
+            "2 adet",
             "14.30",
-            "15 cm, 3-5 iş günü, 2 figür",
             "Merhaba, nasıl yardımcı olabilirim?",
             "Siparişinizi bir binaya teslim ederiz.",
-            "A4 kâğıt",
-            "250 adet",
+            "Yüz yüze görüşebiliriz.",
+            "Bir figür mü, iki figür mü?",
+            "Boyu 2.5 cm",
+            "12 ay garanti",
+            "Binanıza teslim",
+            "Hediye paketi isterseniz söyleyin.",
+            "Yarın kargoda.",
         ] {
-            assert_eq!(check_reply(text, ""), Ok(()), "{text}");
+            assert_eq!(reply(text), Ok(()), "{text}");
         }
     }
 
     #[test]
     fn replies_that_name_money_are_refused() {
         for text in [
+            // The first review's table.
             "950 liraya yaparız",
             "3 bin civarı",
             "2 bin 500",
@@ -471,41 +740,80 @@ mod tests {
             "450 olur",
             "1250",
             "liralık bir iş",
+            // The second review's.
+            "2 bine yaparız",
+            "3 binlik",
+            "5 binden",
+            "2bin olur",
+            "iki buçuk bin",
+            "dokuz yüz elliye yaparız",
+            "sekiz yüze olur",
+            "ikincisi bedava",
+            "yarı fiyatına",
+            "ücretsiz kargo",
+            "2.025'e yaparız",
+            "２７５０ olur",
+            "٢٧٥٠ olur",
+            "2\u{200B}750",
+            "İNDİRİM VAR",
+            "elliye olur",
+            "beleş",
+            "taksit yapılır",
+            "peşine",
+            "kapora alınır",
+            "hediye çeki",
+            "yarı yarıya",
+            "2 figür",
+            "2028 olur",
+            "2026 TL",
+            // The third review's.
+            "binliğe yaparız",
+            "biner tane",
+            "yüzlüğe",
+            "kırkar",
+            "üçbin",
+            "dokuzyüzelli",
+            "dokuzyüzelliye",
+            "ikincisi hediye",
+            "yanında hediye",
+            "hediye çekimiz var",
+            "yarısına",
+            "kargo bizden",
+            "ikincisi bizden",
+            "free shipping",
+            "20 percent discount",
+            "half price",
+            "ТL",
+            "lіra",
+            "0532 123",
+            "36 ay",
+            "+90 532",
         ] {
-            assert_eq!(
-                check_reply(text, ""),
-                Err(Refusal::PriceWithoutQuote),
-                "{text}"
-            );
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
         }
-        assert_eq!(check_reply("  ", ""), Err(Refusal::EmptyText));
+        assert_eq!(reply("  "), Err(Refusal::EmptyText));
         assert_eq!(
-            check_reply(&"a".repeat(MAX_TEXT_CHARS + 1), ""),
+            reply(&"a".repeat(MAX_TEXT_CHARS + 1)),
             Err(Refusal::TextTooLong)
         );
     }
 
     #[test]
     fn a_quote_states_its_amount_once_and_nothing_else_of_money() {
+        let quote = |amount, text| check_quote(amount, text, RANGE, "", YEAR);
+        assert_eq!(quote(1_250, "Teklifimiz 1.250 TL, 15 cm."), Ok(125_000));
+        assert_eq!(quote(1_250, "₺1.250 olur."), Ok(125_000));
         assert_eq!(
-            check_quote(1_250, "Teklifimiz 1.250 TL, 15 cm.", RANGE, ""),
+            quote(1_250, "1.250 TL, 30.11.2026 tarihine kadar geçerli."),
             Ok(125_000)
         );
-        assert_eq!(check_quote(1_250, "₺1.250 olur.", RANGE, ""), Ok(125_000));
-        assert_eq!(
-            check_quote(
-                1_250,
-                "1.250 TL, 30.11.2026 tarihine kadar geçerli.",
-                RANGE,
-                ""
-            ),
-            Ok(125_000)
-        );
+        assert_eq!(quote(1_250, "1.250 TL, 7 gün geçerli."), Ok(125_000));
         for (amount, text, refusal) in [
             (6_000, "6.000 TL", Refusal::QuoteOutOfRange),
             (999, "999 TL", Refusal::QuoteOutOfRange),
             (i64::MAX, "x", Refusal::QuoteOutOfRange),
             (1_250, "Teklifimiz hazır.", Refusal::QuoteTextMismatch),
+            (1_250, "1250 olur", Refusal::QuoteTextMismatch),
             (1_250, "1.250 TL ya da 1.500 TL", Refusal::QuoteTextMismatch),
             (1_250, "1.250 TL, yani 1.250 TL", Refusal::QuoteTextMismatch),
             (
@@ -515,9 +823,28 @@ mod tests {
             ),
             (1_250, "1.250 TL + KDV", Refusal::QuoteTextMismatch),
             (1_250, "1 bin 250 TL", Refusal::QuoteTextMismatch),
+            (
+                1_250,
+                "1.250 TL, ikincisi bedava",
+                Refusal::QuoteTextMismatch,
+            ),
+            (
+                1_250,
+                "1.250 TL, ikinci figür sekiz yüz",
+                Refusal::QuoteTextMismatch,
+            ),
+            (1_250, "1.250 TL, kargo 2 lira", Refusal::QuoteTextMismatch),
+            (1_250, "1.250 TL, 3 taksit", Refusal::QuoteTextMismatch),
         ] {
-            assert_eq!(check_quote(amount, text, RANGE, ""), Err(refusal), "{text}");
+            assert_eq!(quote(amount, text), Err(refusal), "{text}");
         }
+    }
+
+    #[test]
+    fn text_is_normalised_before_it_is_read() {
+        assert_eq!(normalise("２٧\u{200B}5０"), "2750");
+        assert_eq!(normalise("İNDİRİM IŞIK"), "indirim ışık");
+        assert_eq!(normalise("a\u{00A0}b"), "a b");
     }
 
     #[test]
@@ -534,10 +861,18 @@ mod tests {
         assert!(!links_allowed("baska.shop", cards), "any ending is a link");
         assert!(!links_allowed("example.com", cards), "never by substring");
         assert!(!links_allowed("kisa.link/abc", cards));
+        assert!(!links_allowed("http://192.168.1.5/x", cards), "an address");
+        assert!(!links_allowed("10.0.0.1", cards), "a bare address");
+        assert!(!links_allowed("ornek.xn--p1ai", cards), "an IDN ending");
+        assert!(
+            !links_allowed("https://localhost/a", cards),
+            "anything with a scheme"
+        );
         assert!(links_allowed("Teşekkürler. Görüşürüz!", cards));
         assert!(links_allowed("Ölçü 2.5 cm, 3.5cm", cards));
+        assert!(links_allowed("ornek.xn--p1ai", "ornek.xn--p1ai"));
         assert_eq!(
-            check_reply("Detay: https://baska.com", cards),
+            check_reply("Detay: https://baska.com", cards, YEAR),
             Err(Refusal::LinkInReply)
         );
     }

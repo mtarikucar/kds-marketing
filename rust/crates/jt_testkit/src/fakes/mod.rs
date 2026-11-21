@@ -79,9 +79,9 @@ mod tenant;
 mod user;
 
 pub use providers::{
-    ConnectorCall, FakeAppConfig, ModelResult, OAuthCall, PollCall, PublicCall, ScriptedConnector,
-    ScriptedModel, ScriptedOAuth, ScriptedPoller, ScriptedPublic, ScriptedRegistry, ScriptedWaker,
-    TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL, WakeCall,
+    ConnectorCall, FakeAppConfig, JudgeResult, ModelResult, OAuthCall, PollCall, PublicCall,
+    ScriptedConnector, ScriptedModel, ScriptedOAuth, ScriptedPoller, ScriptedPublic,
+    ScriptedRegistry, ScriptedWaker, TEST_OAUTH_HOST, TEST_PUBLIC_BASE_URL, WakeCall,
 };
 pub use services::{
     DEPS_TOKENS, FIXED_NOW, FakeJobLock, FakeOpsSnapshot, FixedChannelCatalog, FixedClock,

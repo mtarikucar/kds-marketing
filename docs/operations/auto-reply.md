@@ -38,25 +38,40 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   the first); the `inbox_auto_reply` job runs every 3 s. The model reads the fixed instructions,
   the workspace's cards, rules, notes and range, and the last 30 messages.
 - It answers through one tool: a reply, a quote, or a hand-over to a person.
-- The server checks every answer: a reply (and a hand-over's line) names no money: no currency word
-  or symbol (TL, ₺, TRY, lira and its suffixed forms, dolar, euro, $, €, USD, EUR), no "bin" after
-  a number, no percent, discount or VAT wording, and no bare number of three digits or more unless
-  it is a date, a time, a year (2020-2039), a phone number or a quantity with its unit. No link
-  the cards lack (any `label.tld`; the same host, and path if given, must appear in the cards). A
-  quote is within the range, states that amount exactly once and nothing else of money, and is
-  the journey's first one that went out; the currency is the workspace's.
+- The server checks every answer. A reply (and a hand-over's line) is first normalised (NFKC,
+  zero-width and other format characters removed, every script's digits as ASCII, Turkish lower
+  case); then every digit sequence is refused unless it is a date, a clock time, a phone number,
+  a count with an allowed unit (gün, saat, hafta, ay, cm, mm, adet …) or the bare current or next
+  year; number words that build an amount ("bin" with any suffix, "dokuz yüz", "elliye", "iki
+  buçuk bin") and the money lexicon (currency words and symbols, indirim, iskonto, kdv, yüzde, %,
+  bedava, beleş, ücretsiz, yarı fiyat, taksit, peşin, kapora, hediye çeki) are refused. No link
+  the cards lack (any `label.tld`, an IP address, an `xn--` name, anything with a scheme). A quote
+  is within the range, states that amount exactly once next to its currency and nothing else of
+  money, and is the journey's first one that went out; the currency is the workspace's.
+- Whatever passes those rules is checked once more by the model (one strict `verdict` tool):
+  anything but a clear "allowed" (a refusal, an error, no answer) is not sent and the conversation
+  goes to a person (`judge_refused`, `judge_unavailable`). The check is a model call like any
+  other: recorded, counted and paid for.
 - It stops when a person takes the conversation over, or when a newer message arrives (that one is
-  answered instead). After a person writes in the conversation (in the panel, or from the phone's
-  Business App) it stays out for 24 hours, unless a person hands the conversation back to the
-  agent. A held or queued automatic reply whose conversation moved on is refused (`stale`).
+  answered instead). Once a person writes in the conversation (in the panel, or from the phone's
+  Business App) it stays out for the rest of that customer journey and for at least 24 hours
+  after the person's last message, unless a person hands the conversation back to the agent;
+  then a customer message still waiting inside the reply window is answered at once. While the
+  replies stay out of a conversation, agents are offered it as usual. A held or queued automatic reply
+  whose conversation moved on is refused (`stale`).
 - The capability's policy applies: approval (the reply waits in the approvals list), working hours
   (outside them the conversation goes to a person) and the daily cap.
-- Limits per local day: 12 model calls per conversation, 300 per workspace, $2 of model cost
-  per workspace. Reaching one hands the conversation over.
+- Limits per local day: 24 model calls per conversation and 600 per workspace (each automatic
+  message takes two: the answer and its check), $2 of model cost per workspace. Reaching one
+  hands the conversation over.
 - Every model call is recorded at once and counts towards the day's limits and spend (a failed
   call at a conservative estimate). A rate limit or an outage is asked again; after three calls on
-  one burst the conversation goes to a person (`failed`). One tick works at most five
-  conversations per workspace and stops starting new ones after 20 s.
+  one burst (counted before any step that could fail) the conversation goes to a person
+  (`failed`). One tick works at most five conversations and 8 s per workspace, starts after the
+  workspace it served last, and stops starting new ones after 20 s. Once a minute, inside that
+  budget, the job also schedules a customer message left without a schedule (a crash between the
+  consumer and the schedule), only when it is at most 15 minutes old and came after the number
+  was turned on.
 - A hand-over: the conversation goes to the journey's owner (or the unassigned queue), the model's
   summary becomes a journey note, and its short line to the customer is sent when it passes the
   same rules. The conversation then shows in the owner's home list and in the inbox queue. No email

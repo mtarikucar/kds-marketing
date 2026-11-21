@@ -281,6 +281,10 @@ pub struct AutoReply {
     pub price: Option<PriceRange>,
     #[serde(default = "default_valid_days")]
     pub quote_valid_days: u32,
+    /// When each listed capability was last turned on: the job's sweep never answers a message
+    /// from before.
+    #[serde(default)]
+    pub enabled_at: std::collections::BTreeMap<Uuid, OffsetDateTime>,
 }
 
 fn default_valid_days() -> u32 {

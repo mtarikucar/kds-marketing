@@ -2016,6 +2016,10 @@ pub trait PlatformRepos: Send + Sync {
         &mut self,
         now: OffsetDateTime,
     ) -> Result<Vec<WorkspaceId>, AppError>;
+    /// The workspaces, in id order, whose automatic replies are on for at least one capability
+    /// (`knowledge_settings.auto_reply.capability_ids` not empty): those the job's sweep for
+    /// unscheduled customer messages looks in.
+    async fn workspaces_with_auto_reply(&mut self) -> Result<Vec<WorkspaceId>, AppError>;
     /// Appends a ledger entry to `entry.workspace_id` on behalf of the platform.
     async fn ledger_append(&mut self, entry: LedgerEntry) -> Result<i64, AppError>;
     async fn commit(self: Box<Self>) -> Result<(), AppError>;

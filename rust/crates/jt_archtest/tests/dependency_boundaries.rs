@@ -25,7 +25,13 @@ const CONNECTOR_EXTRA_ALLOW: &[&str] = &["jt_capability", "hmac", "sha2", "base6
 
 // Inbox records refer to capabilities and may speak connector domain types. SHA-256 produces
 // pure erasure replay keys; no I/O. The shared domain/application allowlists remain unchanged.
-const INBOX_EXTRA_ALLOW: &[&str] = &["jt_capability", "jt_connector", "sha2"];
+// The automatic replies' money rules normalise a text (NFKC) before they read it.
+const INBOX_EXTRA_ALLOW: &[&str] = &[
+    "jt_capability",
+    "jt_connector",
+    "sha2",
+    "unicode-normalization",
+];
 
 /// Every domain crate, with what it may depend on beyond [`DOMAIN_ALLOW`].
 const DOMAIN_CRATES: &[(&str, &[&str])] = &[

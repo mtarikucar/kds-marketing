@@ -171,6 +171,49 @@ impl AutoReplyRepo for MemTenant {
             .count() as u32)
     }
 
+    async fn queue_unscheduled(
+        &mut self,
+        capabilities: &[(CapabilityId, OffsetDateTime)],
+        newer_than: OffsetDateTime,
+        older_than: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ConversationId>, AppError> {
+        let ws = self.ws;
+        let state = self.state();
+        let mut found: Vec<(OffsetDateTime, ConversationId)> = state
+            .inbox
+            .conversations
+            .iter()
+            .filter(|c| {
+                c.workspace_id == ws
+                    && c.state == jt_inbox::ConvState::Ours
+                    && c.executor == jt_inbox::Executor::Agent
+            })
+            .filter_map(|c| {
+                let since = capabilities
+                    .iter()
+                    .find(|(cap, _)| *cap == c.capability_id)
+                    .map(|(_, at)| *at)?;
+                let last = c.last_inbound_at?;
+                let row = state
+                    .auto_reply
+                    .queue
+                    .iter()
+                    .find(|(w, q)| *w == ws && q.conversation_id == c.id)
+                    .map(|(_, q)| q);
+                let open = row.is_none_or(|q| q.is_idle() && q.handled_at.is_none_or(|h| h < last));
+                (last >= since.max(newer_than) && last <= older_than && open)
+                    .then_some((last, c.id))
+            })
+            .collect();
+        found.sort();
+        Ok(found
+            .into_iter()
+            .take(limit as usize)
+            .map(|(_, id)| id)
+            .collect())
+    }
+
     async fn runs_sent_since(
         &mut self,
         conversation: Option<ConversationId>,

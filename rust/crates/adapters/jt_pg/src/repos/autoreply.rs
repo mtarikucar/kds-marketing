@@ -38,6 +38,21 @@ pub(crate) async fn workspaces_with_due_auto_replies(
     Ok(ids.into_iter().map(WorkspaceId).collect())
 }
 
+/// The workspaces whose automatic replies are on, in id order (see
+/// `PlatformRepos::workspaces_with_auto_reply`).
+pub(crate) async fn workspaces_with_auto_reply(
+    tx: &mut PlatformTx<'_>,
+) -> Result<Vec<WorkspaceId>, AppError> {
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        // archtest: platform-wide
+        "select s.workspace_id from knowledge_settings s where s.auto_reply is not null and jsonb_typeof(s.auto_reply -> 'capability_ids') = 'array' and jsonb_array_length(s.auto_reply -> 'capability_ids') > 0 order by s.workspace_id",
+    )
+    .fetch_all(tx.conn())
+    .await
+    .map_err(|e| map_sqlx(e, "list workspaces with automatic replies"))?;
+    Ok(ids.into_iter().map(WorkspaceId).collect())
+}
+
 #[derive(sqlx::FromRow)]
 struct QueueRecord {
     conversation_id: Uuid,
@@ -46,6 +61,7 @@ struct QueueRecord {
     lease_until: Option<OffsetDateTime>,
     attempts: i32,
     handed_back_at: Option<OffsetDateTime>,
+    handled_at: Option<OffsetDateTime>,
 }
 
 impl QueueRecord {
@@ -58,6 +74,7 @@ impl QueueRecord {
             attempts: u32::try_from(self.attempts)
                 .map_err(|_| AppError::internal("stored attempts are negative"))?,
             handed_back_at: self.handed_back_at,
+            handled_at: self.handled_at,
         })
     }
 }
@@ -116,8 +133,8 @@ impl AutoReplyRepo for PgTenantRepos {
     async fn queue_lock(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError> {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
-            "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at from \
-             auto_reply_queue where workspace_id = $1 and conversation_id = $2 for update",
+            "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at, \
+             handled_at from auto_reply_queue where workspace_id = $1 and conversation_id = $2 for update",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
@@ -130,8 +147,8 @@ impl AutoReplyRepo for PgTenantRepos {
     async fn queue_get(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError> {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
-            "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at from \
-             auto_reply_queue where workspace_id = $1 and conversation_id = $2",
+            "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at, \
+             handled_at from auto_reply_queue where workspace_id = $1 and conversation_id = $2",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
@@ -147,10 +164,12 @@ impl AutoReplyRepo for PgTenantRepos {
             .map_err(|_| AppError::internal("attempts are out of range"))?;
         sqlx::query(
             "insert into auto_reply_queue (workspace_id, conversation_id, first_at, due_at, \
-             lease_until, attempts, handed_back_at) values ($1, $2, $3, $4, $5, $6, $7) \
+             lease_until, attempts, handed_back_at, handled_at) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8) \
              on conflict (workspace_id, conversation_id) do update set first_at = excluded.first_at, \
              due_at = excluded.due_at, lease_until = excluded.lease_until, \
-             attempts = excluded.attempts, handed_back_at = excluded.handed_back_at",
+             attempts = excluded.attempts, handed_back_at = excluded.handed_back_at, \
+             handled_at = excluded.handled_at",
         )
         .bind(ws.as_uuid())
         .bind(row.conversation_id.as_uuid())
@@ -159,6 +178,7 @@ impl AutoReplyRepo for PgTenantRepos {
         .bind(row.lease_until)
         .bind(attempts)
         .bind(row.handed_back_at)
+        .bind(row.handled_at)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "save an automatic reply's queue row"))?;
@@ -300,6 +320,38 @@ impl AutoReplyRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "count the automatic replies' model calls"))?;
         u32::try_from(n).map_err(|_| AppError::internal("a count is out of range"))
+    }
+
+    async fn queue_unscheduled(
+        &mut self,
+        capabilities: &[(CapabilityId, OffsetDateTime)],
+        newer_than: OffsetDateTime,
+        older_than: OffsetDateTime,
+        limit: u32,
+    ) -> Result<Vec<ConversationId>, AppError> {
+        let ws = self.workspace_id();
+        let caps: Vec<Uuid> = capabilities.iter().map(|(c, _)| c.as_uuid()).collect();
+        let since: Vec<OffsetDateTime> = capabilities.iter().map(|(_, at)| *at).collect();
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "select c.id from unnest($2::uuid[], $3::timestamptz[]) as s(capability_id, since) \
+             join conversations c on c.workspace_id = $1 and c.capability_id = s.capability_id \
+             and c.state = 'ours' and c.executor_kind = 'agent' \
+             and c.last_inbound_at >= greatest(s.since, $4) and c.last_inbound_at <= $5 \
+             left join auto_reply_queue q on q.workspace_id = $1 and q.conversation_id = c.id \
+             where q.conversation_id is null or (q.due_at is null and q.lease_until is null \
+             and (q.handled_at is null or q.handled_at < c.last_inbound_at)) \
+             order by c.last_inbound_at, c.id limit $6",
+        )
+        .bind(ws.as_uuid())
+        .bind(&caps)
+        .bind(&since)
+        .bind(newer_than)
+        .bind(older_than)
+        .bind(i64::from(limit))
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list the unscheduled customer messages"))?;
+        Ok(ids.into_iter().map(ConversationId::from).collect())
     }
 
     async fn runs_sent_since(

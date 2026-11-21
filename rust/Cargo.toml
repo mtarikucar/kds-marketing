@@ -118,6 +118,8 @@ hmac = { version = "0.13", features = ["zeroize"] }
 rand = "0.10"
 base64 = "0.23"
 subtle = "2"
+# NFKC for the automatic replies' money rules (`jt_inbox::autoreply`); already in the lock.
+unicode-normalization = "0.1.26"
 schemars = "1"
 # `serde`: the connector ports carry URLs in their plain serde structs (`jt_app::ports::connectors`).
 url = { version = "2", features = ["serde"] }
