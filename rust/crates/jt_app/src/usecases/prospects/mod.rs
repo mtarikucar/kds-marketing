@@ -20,6 +20,7 @@
 
 pub(crate) mod blocklist;
 pub(crate) mod dedupe;
+pub mod draft;
 pub mod playbook;
 pub mod pool;
 pub mod promote;

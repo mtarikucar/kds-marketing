@@ -58,6 +58,15 @@ export const scoreProspect = (id: string, input: Record<string, unknown>) =>
 export const decideProspect = (id: string, input: DecideInput) =>
   request<ProspectOut>('POST', `${one(id)}/decision`, { body: input });
 
+/** A draft of the first message (`prospects.message_draft`); `draft: null` when none could be made. */
+export interface MessageDraftOut {
+  draft: { subject: string | null; body: string } | null;
+  reason: 'no_model' | 'daily_limit' | 'failed' | null;
+}
+/** `POST /api/prospects/{id}/draft`: only text for the person; the server never sends it. */
+export const draftFirstMessage = (id: string, channel: 'email' | 'sms' | 'whatsapp' | 'instagram') =>
+  request<MessageDraftOut>('POST', `${one(id)}/draft`, { body: { channel } });
+
 /** `POST /api/prospects/promote`: one outcome per prospect. */
 export const promoteProspects = (input: PromoteInput) =>
   request<PromoteOut>('POST', `${root}/promote`, { body: input });

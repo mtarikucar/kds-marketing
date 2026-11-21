@@ -585,6 +585,8 @@ pub static CATALOG: &[UseCase] = &[
     twin("prospects.settings_set", GateMode::Gated, "jeeta.prospects.settings_set", ("PUT", "/api/prospects/settings"), Write),
     twin("prospects.promote", GateMode::Gated, "jeeta.prospects.promote", ("POST", "/api/prospects/promote"), Write),
     twin("prospects.report", GateMode::Gated, "jeeta.prospects.report", ("GET", "/api/prospects/report"), Read),
+    // A draft of the first message, for the person who sends it (panel only: an agent writes its own).
+    panel_only("prospects.message_draft", GateMode::Gated, ("POST", "/api/prospects/{prospect_id}/draft"), Write),
     // Research tasks (leads spec §3.7): the briefs agents fill the pool from, for `prospects.work`.
     twin("research.tasks_list", GateMode::Gated, "jeeta.research.tasks_list", ("GET", "/api/research/tasks"), Read),
     twin("research.tasks_get", GateMode::Gated, "jeeta.research.tasks_get", ("GET", "/api/research/tasks/{task_id}"), Read),

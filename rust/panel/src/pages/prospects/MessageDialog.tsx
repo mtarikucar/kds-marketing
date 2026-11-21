@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
@@ -6,7 +6,7 @@ import { Instagram, Mail, MessageCircle, MessageSquareText, type LucideIcon } fr
 import { listCapabilities } from '@/api/capabilities';
 import { isApiError } from '@/api/client';
 import { addNote, sendCommercial } from '@/api/inbox';
-import { decideProspect, promoteProspects } from '@/api/prospects';
+import { decideProspect, draftFirstMessage, promoteProspects } from '@/api/prospects';
 import type { ContactChannel, ProspectGetOut } from '@/api/types';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import {
@@ -89,6 +89,8 @@ export interface ComposeTarget {
   afterSend: string | null;
   noWay: string;
   refresh: () => Promise<unknown>;
+  /** A draft written for this target and way, put in the message field; none leaves it empty. */
+  draft?: (way: Way) => Promise<{ subject: string | null; body: string } | null>;
 }
 
 const sameStep = (a: Step, b: Step) => a.kind === b.kind && (a.kind !== 'basis' || (b.kind === 'basis' && a.channel === b.channel));
@@ -124,6 +126,9 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
     afterSend: copy('afterSend'),
     noWay: copy('noWay'),
     refresh,
+    // The first message comes ready in the field (owner request 2026-11-21): a draft only, sent
+    // when the person presses send, through the same path and checks as a written one.
+    draft: async (way) => (await draftFirstMessage(p.id, way)).draft,
     contact: async () => {
       if (p.promoted) return { person_id: p.promoted.person_id, journey_id: p.promoted.journey_id };
       // A person who writes to a new prospect has judged it worth contacting.
@@ -191,6 +196,22 @@ export function ComposeDialog({ target, onClose, onSent }: { target: ComposeTarg
   const chosen = options.find((o) => o.way === way) ?? null;
   const [subject, setSubject] = useState('');
   const [text, setText] = useState('');
+  // Once the person writes in a field, no draft replaces what they wrote.
+  const [touched, setTouched] = useState(false);
+  const drafted = useQuery({
+    queryKey: ['message-draft', target.draftId, way],
+    queryFn: () => target.draft!(way!),
+    enabled: !!target.draft && !!way && !touched,
+    staleTime: Infinity,
+    gcTime: 10 * 60_000,
+    retry: false,
+  });
+  useEffect(() => {
+    if (touched || !drafted.isSuccess) return;
+    setText(drafted.data?.body ?? '');
+    setSubject(way === 'email' ? drafted.data?.subject ?? '' : '');
+  }, [drafted.isSuccess, drafted.data, touched, way]);
+  const drafting = !touched && drafted.isFetching;
   // The chat a hand-off could not open itself (a blocked pop-up): offered as a link.
   const [fallback, setFallback] = useState<{ way: Way; url: string } | null>(null);
 
@@ -355,13 +376,31 @@ export function ComposeDialog({ target, onClose, onSent }: { target: ComposeTarg
             {way === 'email' && (
               <label className="flex flex-col gap-1 text-sm font-medium">
                 {copy('subject')}
-                <Input value={subject} maxLength={200} autoComplete="off" onChange={(e) => setSubject(e.target.value)} />
+                <Input
+                  value={subject}
+                  maxLength={200}
+                  autoComplete="off"
+                  placeholder={drafting ? copy('drafting') : undefined}
+                  onChange={(e) => {
+                    setTouched(true);
+                    setSubject(e.target.value);
+                  }}
+                />
               </label>
             )}
             <div className="flex flex-col gap-1">
               <label className="flex flex-col gap-1 text-sm font-medium">
                 {copy('message')}
-                <Textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} />
+                <Textarea
+                  rows={5}
+                  value={text}
+                  aria-busy={drafting}
+                  placeholder={drafting ? copy('drafting') : undefined}
+                  onChange={(e) => {
+                    setTouched(true);
+                    setText(e.target.value);
+                  }}
+                />
               </label>
               <span className="self-end text-xs text-muted-foreground">{copy('chars', { n: [...text].length })}</span>
             </div>

@@ -90,6 +90,19 @@ pub async fn decide(
     Ok(Json(prospects::decide(&state.deps, &ctx, id, body).await?))
 }
 
+/// `200` with a draft of the first message on the channel asked for, or none and why (the
+/// server never sends it).
+pub async fn message_draft(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<ProspectId>,
+    ApiJson(body): ApiJson<prospects::draft::DraftInput>,
+) -> Result<Json<prospects::draft::DraftOut>, ApiError> {
+    Ok(Json(
+        prospects::draft::message_draft(&state.deps, &ctx, id, body).await?,
+    ))
+}
+
 /// `200` with the kinds of key now on the do-not-contact list.
 pub async fn do_not_contact(
     State(state): State<AppState>,
