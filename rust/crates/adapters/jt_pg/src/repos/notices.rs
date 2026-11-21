@@ -9,6 +9,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::{map_sqlx, stored};
+use crate::tx::PlatformTx;
 use crate::uow::PgTenantRepos;
 
 const COLUMNS: &str = "id, kind, conversation_id, dedupe_key, reason, created_at, state, attempts, \
@@ -175,7 +176,7 @@ impl NoticeRepo for PgTenantRepos {
 /// The workspaces with an owner's notice to send at `now` (a queued one due, or one left
 /// `sending`), in id order (see `PlatformRepos::workspaces_with_due_notices`).
 pub(crate) async fn workspaces_with_due_notices(
-    tx: &mut crate::tx::PlatformTx<'_>,
+    tx: &mut PlatformTx<'_>,
     now: OffsetDateTime,
 ) -> Result<Vec<jt_tenancy::WorkspaceId>, AppError> {
     let ids: Vec<Uuid> = sqlx::query_scalar(
