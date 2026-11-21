@@ -2646,18 +2646,16 @@ async fn a_reply_refused_for_a_number_is_asked_once_more_and_the_second_goes_out
     job(&t, due(0)).await;
     let requests = t.model.requests();
     assert_eq!(requests.len(), 2, "one repair");
-    let last = requests[1]
-        .history
-        .last()
-        .unwrap()
-        .parts
-        .last()
-        .unwrap()
-        .clone();
-    let Part::Text { text } = last else {
-        panic!("the repair line");
-    };
-    assert!(text.contains("previous answer was not sent"));
+    // The note is the server's, in the system part; the customer's turns are as they were.
+    assert_eq!(requests[0].system_note, None);
+    assert!(
+        requests[1]
+            .system_note
+            .as_deref()
+            .is_some_and(|n| n.contains("previous answer was not sent"))
+    );
+    assert_eq!(requests[1].history, requests[0].history);
+    assert_eq!(requests[1].system_workspace, requests[0].system_workspace);
     assert_eq!(texts_sent(&t), ["Birkaç fotoğraf yeterli olur."]);
     // Both calls are stored and counted.
     let reasons_of: Vec<Option<String>> = runs(&t).into_iter().map(|r| r.reason).collect();
@@ -2690,4 +2688,33 @@ async fn a_quote_is_never_repaired() {
     t.model.answer(quote(9_999, "Teklifimiz 9.999 TL."));
     job(&t, due(0)).await;
     assert_eq!(t.model.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn a_bare_number_from_the_team_is_a_price_and_a_date_time_or_phone_is_not() {
+    for (body, priced) in [
+        ("3500 olur", true),
+        ("3.500", true),
+        ("3500'e yaparım", true),
+        ("2750 olsun", true),
+        ("iki buçuk olur", true),
+        ("Yarın 14:30'da hazır.", false),
+        ("21.11 teslim edilir.", false),
+        ("Bizi 0532 123 45 67 numarasından arayın.", false),
+    ] {
+        let t = setup().await;
+        inbound(&t, 0, 0).await;
+        from_the_phone(&t, "wamid.TEST-PHONE-1", 30, body).await;
+        inbound_as(&t, "wamid.TEST-AFTER-1", 60).await;
+        t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
+        t.meta.push_send_text(accepted());
+        job(&t, FIXED_NOW_T + Duration::seconds(30) + HUMAN_QUIET).await;
+        let handed = reasons(&t, "inbox.autoreply.handed_over");
+        if priced {
+            assert_eq!(handed, ["human_quoted"], "{body}");
+        } else {
+            assert!(handed.is_empty(), "{body}: {handed:?}");
+            assert_eq!(texts_sent(&t), ["Teklifimiz 1.250 TL."], "{body}");
+        }
+    }
 }

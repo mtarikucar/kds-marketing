@@ -176,6 +176,9 @@ pub struct ModelRequest {
     pub system_fixed: String,
     /// The workspace's part: its name and identity, its cards, its rules, its notes, its range.
     pub system_workspace: String,
+    /// A note from the server for this call alone (the repair of a refused reply): sent after the
+    /// cached system blocks, never cached, never in a customer's turn.
+    pub system_note: Option<String>,
     pub history: Vec<Turn>,
     pub max_tokens: u32,
 }

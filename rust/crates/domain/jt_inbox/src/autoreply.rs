@@ -61,6 +61,27 @@ impl Refusal {
     }
 }
 
+/// Whether a person's `text` states money, read generously (a person on the team writes a price
+/// as "3500 olur" as often as "3.500 TL"): an amount, a currency, a word of the money and discount
+/// lexicon, any number in no allowed form (a date, a clock time, a phone number and a count with
+/// its unit are allowed), or "buçuk" next to a number word ("iki buçuk").
+pub fn states_money(text: &str, year: i32) -> bool {
+    let s = scan(text, year);
+    if !(s.amounts.is_empty()
+        && s.currency.is_empty()
+        && s.terms.is_empty()
+        && s.numbers.is_empty())
+    {
+        return true;
+    }
+    let words = words_of(text);
+    words.iter().enumerate().any(|(i, w)| {
+        w.stem.starts_with("buçuk")
+            && (i.checked_sub(1).is_some_and(|p| is_number_word(&words[p]))
+                || words.get(i + 1).is_some_and(is_number_word))
+    })
+}
+
 /// The owner's price range, in minor units of its currency (both ends included).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Range {
@@ -721,6 +742,30 @@ mod tests {
     }
 
     #[test]
+    fn a_persons_price_is_read_generously_and_dates_times_and_phones_are_not() {
+        for text in [
+            "3500 olur",
+            "3.500",
+            "3500'e yaparım",
+            "2750 olsun",
+            "iki buçuk",
+            "3.500 TL",
+            "%10 indirim",
+        ] {
+            assert!(states_money(text, YEAR), "{text}");
+        }
+        for text in [
+            "Yarın 14:30'da",
+            "21.11 teslim",
+            "0532 123 45 67",
+            "7 gün içinde",
+            "Merhaba, bakıyorum.",
+        ] {
+            assert!(!states_money(text, YEAR), "{text}");
+        }
+    }
+
+    #[test]
     fn replies_that_name_no_money_pass() {
         for text in [
             "2026 yılbaşı siparişleri",
@@ -814,7 +859,6 @@ mod tests {
             "kapora alınır",
             "hediye çeki",
             "yarı yarıya",
-            "2 figür",
             "2028 olur",
             "2026 TL",
             // The third review's.

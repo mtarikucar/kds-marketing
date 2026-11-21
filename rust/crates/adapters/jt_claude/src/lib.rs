@@ -227,6 +227,19 @@ pub fn tools() -> Value {
 
 /// The request body for `request` to `model` (see the crate docs).
 pub fn request_body(model: &str, request: &ModelRequest) -> Value {
+    // The fixed instructions, the workspace's part (the cache breakpoint), then a server's note
+    // for this call alone, after the cached prefix.
+    let mut system = vec![
+        json!({ "type": "text", "text": request.system_fixed }),
+        json!({
+            "type": "text",
+            "text": request.system_workspace,
+            "cache_control": { "type": "ephemeral" }
+        }),
+    ];
+    if let Some(note) = &request.system_note {
+        system.push(json!({ "type": "text", "text": note }));
+    }
     let mut messages: Vec<Value> = request
         .history
         .iter()
@@ -264,14 +277,7 @@ pub fn request_body(model: &str, request: &ModelRequest) -> Value {
         "model": model,
         "max_tokens": request.max_tokens,
         "output_config": { "effort": EFFORT },
-        "system": [
-            { "type": "text", "text": request.system_fixed },
-            {
-                "type": "text",
-                "text": request.system_workspace,
-                "cache_control": { "type": "ephemeral" }
-            }
-        ],
+        "system": system,
         "tools": tools(),
         "tool_choice": tool_choice(),
         "messages": messages,
