@@ -260,7 +260,9 @@ const POST_M4_REMOVED: [(&str, &str); 5] = [
     ("studio.policy_set", "jeeta.studio.policy_set"),
 ];
 
-const POST_M4_PANEL_ONLY: [&str; 57] = [
+const POST_M4_PANEL_ONLY: [&str; 58] = [
+    // The first-message draft (owner request 2026-11-21).
+    "prospects.message_draft",
     "studio.project_production",
     "studio.tiktok_posting",
     "studio.tiktok_post",

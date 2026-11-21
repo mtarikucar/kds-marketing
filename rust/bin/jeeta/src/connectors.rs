@@ -30,6 +30,7 @@ use jt_app::ports::connectors::{
     InsightsReader, LeadGenFetcher, MailSender, MailboxPoller, MessagingSender, OAuthProvider,
     PlatformAppConfig, PublicPoller, PublicSurface, Publisher, SmsSender, Telephony,
 };
+use jt_app::ports::draft_model::DraftModel;
 use jt_app::ports::reply_model::ReplyModel;
 use jt_app::ports::wake::AgentWaker;
 use jt_claude::{ClaudeBases, ClaudeModel};
@@ -224,6 +225,11 @@ impl ConnectorRegistry for ProviderRegistry {
     fn reply_model(&self) -> Option<Arc<dyn ReplyModel>> {
         self.reply_model.clone().map(|m| m as Arc<dyn ReplyModel>)
     }
+
+    /// The first-message drafts ask the same model, with the same key: none without it.
+    fn draft_model(&self) -> Option<Arc<dyn DraftModel>> {
+        self.reply_model.clone().map(|m| m as Arc<dyn DraftModel>)
+    }
 }
 
 #[cfg(test)]
@@ -290,6 +296,12 @@ mod tests {
             Some("claude-haiku-5-5".to_owned())
         );
         assert!(ScriptedRegistry::new().reply_model().is_none());
+        // The drafts come with the same key, and only with it.
+        assert!(production().draft_model().is_none());
+        assert_eq!(
+            with_key.draft_model().map(|m| m.model().to_owned()),
+            Some("claude-haiku-5-5".to_owned())
+        );
     }
 
     #[test]

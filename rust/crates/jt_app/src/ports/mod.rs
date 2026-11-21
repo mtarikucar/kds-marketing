@@ -29,6 +29,7 @@ pub mod compliance;
 pub mod connectors;
 pub mod devices;
 pub mod distribution;
+pub mod draft_model;
 pub mod files;
 pub mod inbox;
 pub mod knowledge;

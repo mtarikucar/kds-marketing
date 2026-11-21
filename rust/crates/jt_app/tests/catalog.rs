@@ -460,6 +460,7 @@ fn catalog_is_the_release_table() {
         ("prospects.settings_set", Some("jeeta.prospects.settings_set"), Some(("PUT", "/api/prospects/settings")), false, Risk::Write),
         ("prospects.promote", Some("jeeta.prospects.promote"), Some(("POST", "/api/prospects/promote")), false, Risk::Write),
         ("prospects.report", Some("jeeta.prospects.report"), Some(("GET", "/api/prospects/report")), false, Risk::Read),
+        ("prospects.message_draft", None, Some(("POST", "/api/prospects/{prospect_id}/draft")), true, Risk::Write),
         ("research.tasks_list", Some("jeeta.research.tasks_list"), Some(("GET", "/api/research/tasks")), false, Risk::Read),
         ("research.tasks_get", Some("jeeta.research.tasks_get"), Some(("GET", "/api/research/tasks/{task_id}")), false, Risk::Read),
         ("research.tasks_create", Some("jeeta.research.tasks_create"), Some(("POST", "/api/research/tasks")), false, Risk::Write),
@@ -506,7 +507,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 328);
+    assert_eq!(CATALOG.len(), 329);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export", "studio.posting_policy_set"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && !["calls.policy_get", "calls.end", "calls.transfer"].contains(&uc.id) && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || (uc.id.starts_with("outreach.") && !["outreach.campaigns_control", "outreach.enrollments_stop"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

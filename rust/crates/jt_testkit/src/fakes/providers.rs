@@ -1964,6 +1964,7 @@ pub struct ScriptedRegistry {
     pollers: BTreeMap<Provider, Arc<ScriptedPoller>>,
     waker: Option<Arc<ScriptedWaker>>,
     model: Option<Arc<ScriptedModel>>,
+    drafter: Option<Arc<super::ScriptedDrafter>>,
 }
 
 impl ScriptedRegistry {
@@ -1976,6 +1977,12 @@ impl ScriptedRegistry {
     /// Registers `model` as the automatic replies' model ([`ConnectorRegistry::reply_model`]).
     pub fn with_model(mut self, model: Arc<ScriptedModel>) -> Self {
         self.model = Some(model);
+        self
+    }
+
+    /// Registers `drafter` as the first-message drafts' model ([`ConnectorRegistry::draft_model`]).
+    pub fn with_drafter(mut self, drafter: Arc<super::ScriptedDrafter>) -> Self {
+        self.drafter = Some(drafter);
         self
     }
 
@@ -2118,6 +2125,12 @@ impl ConnectorRegistry for ScriptedRegistry {
         self.model
             .clone()
             .map(|m| m as Arc<dyn jt_app::ports::reply_model::ReplyModel>)
+    }
+
+    fn draft_model(&self) -> Option<Arc<dyn jt_app::ports::draft_model::DraftModel>> {
+        self.drafter
+            .clone()
+            .map(|m| m as Arc<dyn jt_app::ports::draft_model::DraftModel>)
     }
 }
 

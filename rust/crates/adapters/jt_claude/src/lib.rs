@@ -26,6 +26,8 @@
 //! [`ModelError::Rejected`]. Each request is bounded by [`REQUEST_TIMEOUT`]. A log line names
 //! the status and the response's `request-id`, never the key, a body or a customer's text.
 
+pub mod draft;
+
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;

@@ -154,3 +154,23 @@ say that photos are included (KVKK) before the feature is turned on.
 
 Kurallar → the number's switch off (per workspace), or remove `JEETA_ANTHROPIC_API_KEY` and
 restart (everywhere): nothing is scheduled or asked any more, and nothing else changes.
+
+## First-message drafts
+
+With the same key, the "Mesaj gönder" dialog on a prospect opens with a draft of the first
+message in its field (email: subject and body; SMS, WhatsApp, Instagram: two or three
+sentences), written by the same model (`prospects.message_draft`, `POST
+/api/prospects/{id}/draft`, `usecases/prospects/draft.rs`, `jt_claude/src/draft.rs`). It is only
+text for the person: the server never sends it. When the person sends it, it takes the same send
+path and checks as a hand-written message (footer, unsubscribe, basis, consent, suppression,
+caps).
+
+- **Sent to Anthropic.** The prospect's recorded business facts are sent: its name, sector,
+  place, why it fits with its sources, and the notes about the business. No contact person is
+  sent. The workspace's cards, prohibitions and open notes are sent too.
+- **Limits.** At most 100 drafts per workspace per UTC day (`DRAFTS_PER_WORKSPACE_DAILY`).
+  Without a key there is no draft, and the field stays empty.
+- **Kept.** Each call is a ledger entry `drafts.first_message` with the channel, the model, the
+  tokens and the cost. A draft's text is never stored or logged.
+
+Removing the key turns the drafts off as well.

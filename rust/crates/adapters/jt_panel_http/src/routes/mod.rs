@@ -350,6 +350,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/prospects/{prospect_id}"),
     ("POST", "/api/prospects/{prospect_id}/scores"),
     ("POST", "/api/prospects/{prospect_id}/decision"),
+    ("POST", "/api/prospects/{prospect_id}/draft"),
     ("POST", "/api/prospects/do-not-contact"),
     ("POST", "/api/prospects/do-not-contact/lift"),
     ("POST", "/api/prospects/{prospect_id}/erase"),
@@ -1877,6 +1878,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             "/prospects/{prospect_id}/decision",
             "prospects.decide",
             prospects::decide,
+        ),
+        api_route(
+            "POST",
+            "/prospects/{prospect_id}/draft",
+            "prospects.message_draft",
+            prospects::message_draft,
         ),
         api_route(
             "POST",
