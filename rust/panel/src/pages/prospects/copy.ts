@@ -51,6 +51,7 @@ const tr = {
   handedOff: '{way} açıldı; mesajı oradan gönder.',
   popupBlocked: 'Tarayıcı yeni sekmeyi engelledi. Aday iletişime alındı; sohbeti buradan aç:', openLink: '{way} sohbetini aç',
   noPermission: 'Bu alıcıya bu kanaldan ticari mesaj izni yok.',
+  noConsent: 'Bu kişinin ileti izni kayıtlı değil; ona ilk e-postayı gönderemezsin.',
   noWay: 'Bu adaya ulaşılabilecek bir kanal yok.', noWayPerson: 'Bu kişiye ulaşılabilecek bir kanal yok.', writeEmail: 'Mesaj yaz',
   // The person's own form: adding a prospect, editing one's details.
   addProspect: 'Aday ekle', addTitle: 'Yeni aday',
@@ -117,6 +118,7 @@ const en: typeof tr = {
   handedOff: '{way} opened; send the message there.',
   popupBlocked: 'The browser blocked the new tab. The prospect is in contact; open the chat here:', openLink: 'Open the {way} chat',
   noPermission: 'There is no permission for a commercial message to this recipient on this channel.',
+  noConsent: 'No consent from this person is on record, so you cannot send them a first email.',
   noWay: 'There is no channel to reach this prospect on.', noWayPerson: 'There is no channel to reach this person on.', writeEmail: 'Write a message',
   addProspect: 'Add prospect', addTitle: 'New prospect',
   addBody: 'Add a business you know of to the pool. Only its name is required; the rest can follow later.',

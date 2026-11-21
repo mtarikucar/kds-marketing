@@ -82,6 +82,11 @@ export interface ComposeTarget {
    * anyone else the server judges consent at send, and a refusal opens the same step here.
    */
   business: boolean;
+  /**
+   * The business first-message permission can apply to this target (a business); for anyone
+   * else a refusal means no consent, and the dialog offers no permission it cannot use.
+   */
+  basisApplies: boolean;
   /** The person and journey written to, once the target is in contact. */
   contact: () => Promise<{ person_id: string; journey_id: string }>;
   /** The draft's identity for the send's request key. */
@@ -120,6 +125,7 @@ export function MessageDialog({ data, onClose }: { data: ProspectGetOut; onClose
     handle: p.contact.instagram?.value ?? null,
     handoffs: true,
     business: true,
+    basisApplies: true,
     draftId: p.id,
     afterSend: copy('afterSend'),
     noWay: copy('noWay'),
@@ -368,8 +374,8 @@ export function ComposeDialog({ target, onClose, onSent }: { target: ComposeTarg
             {target.afterSend && <p className="text-xs text-muted-foreground">{target.afterSend}</p>}
             {isNoPermission(send.error) ? (
               <Callout tone="warning">
-                {copy('noPermission')}
-                {!step && way && DIRECT[way] && (
+                {target.basisApplies ? copy('noPermission') : copy('noConsent')}
+                {target.basisApplies && !step && way && DIRECT[way] && (
                   <>
                     {' · '}
                     {basisFix(DIRECT[way]!) ? <FixAction fix={basisFix(DIRECT[way]!)!} open={step} onStep={setStep} /> : copy('ownerOnly')}

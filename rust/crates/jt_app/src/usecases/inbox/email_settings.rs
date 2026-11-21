@@ -6,17 +6,21 @@
 //! They are the same stored facts the campaigns read (the workspace's leads policy,
 //! `outreach`): writing one email to a person needs them as much as a campaign does, but it
 //! needs neither the campaigns module nor an outreach permission. Whoever may write to people
-//! (`inbox.work`) reads them and fills in the sender identity; narrowing the basis needs
-//! `inbox.manage`; opening it, or turning the İYS lookup off, stays a human owner's act with the
-//! counsel's confirmation in the same call, exactly as through `outreach.settings_set`.
+//! (`inbox.work`) reads them. **Only a person changes them**, never an agent: the sender identity
+//! is the legal footer of every commercial email and of the campaigns. A member with
+//! `inbox.work` fills in a field that is empty; changing or emptying one that has a value needs
+//! `inbox.manage`. Narrowing the basis needs `inbox.manage`; opening it, or turning the İYS lookup
+//! off, stays a human owner's act with the counsel's confirmation in the same call, exactly as
+//! through `outreach.settings_set`.
 
 use jt_inbox::Channel;
+use jt_ledger::Actor;
 use jt_outreach::LegalAck;
 use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 
 use crate::ctx::Ctx;
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCode};
 use crate::usecases::Deps;
 use crate::usecases::outreach::settings::{self, LegalAckInput, SettingsInput};
 
@@ -81,16 +85,42 @@ pub async fn email_settings_get(deps: &Deps, ctx: &Ctx) -> Result<EmailSettingsO
 }
 
 /// `jeeta.inbox.email_settings_set`: stores the keys given (the same store and ledger entries
-/// as `outreach.settings_set`). The sender identity needs `inbox.work`; any key of the
-/// business-recipient basis needs `inbox.manage`, and opening it a human owner with
-/// `legal_ack {counsel_confirmed: true, note}` in the same call.
+/// as `outreach.settings_set`). A person only (`FORBIDDEN human_only` for an agent). Filling an
+/// empty sender field needs `inbox.work`, changing or emptying one with a value `inbox.manage`;
+/// any key of the business-recipient basis needs `inbox.manage`, and opening it a human owner
+/// with `legal_ack {counsel_confirmed: true, note}` in the same call.
 pub async fn email_settings_set(
     deps: &Deps,
     ctx: &Ctx,
     input: EmailSettingsInput,
 ) -> Result<EmailSettingsOut, AppError> {
     ctx.require(Permission::InboxWork)?;
+    if !matches!(ctx.actor, Actor::Human { .. }) {
+        return Err(crate::usecases::outreach::refused(
+            ErrorCode::Forbidden,
+            "human_only",
+            "only a person changes the email settings",
+            serde_json::json!({}),
+        ));
+    }
     if input.b2b_basis.is_some() || input.require_iys_lookup.is_some() || input.legal_ack.is_some()
+    {
+        ctx.require(Permission::InboxManage)?;
+    }
+    // Filling an empty field is anyone's who writes to people; replacing or emptying a value is
+    // a manager's.
+    let current = {
+        let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+        r.workspace_policy().read().await?.leads.outreach
+    };
+    let replaces = |given: &Option<String>, stored: &str| {
+        given
+            .as_deref()
+            .is_some_and(|v| !stored.trim().is_empty() && v.trim() != stored.trim())
+    };
+    if replaces(&input.sender_company, &current.sender_company)
+        || replaces(&input.sender_address, &current.sender_address)
+        || replaces(&input.privacy_notice_url, &current.privacy_notice_url)
     {
         ctx.require(Permission::InboxManage)?;
     }

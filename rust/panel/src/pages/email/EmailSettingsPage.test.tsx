@@ -81,11 +81,16 @@ describe('EmailSettingsPage', () => {
   it('whoever may write to people fills the sender details in, without any outreach permission', async () => {
     const user = userEvent.setup();
     const inboxOnly = { ...leadsRep, memberships: [{ ...leadsRep.memberships[0], permissions: ['workspace.read', 'inbox.work'] as typeof leadsRep.memberships[0]['permissions'] }] };
-    const calls = mockFetch(answers({ 'GET /api/auth/me': inboxOnly }));
+    const calls = mockFetch(answers({
+      'GET /api/auth/me': inboxOnly,
+      'GET /api/inbox/email-settings': { ...settings, sender_address: '', sender_identity_complete: false },
+    }));
     renderAt('/settings/email');
     const sender = within(await screen.findByRole('group', { name: tr.leads.settings.identity }, LOADED));
+    // A value already there is a manager's to change; the empty field is the member's to fill.
+    expect(sender.getByRole('textbox', { name: tr.leads.settings.company })).toHaveAttribute('readonly');
     const address = sender.getByRole('textbox', { name: tr.leads.settings.address });
-    await user.clear(address);
+    expect(address).not.toHaveAttribute('readonly');
     await user.type(address, 'Deneme Sk. 2, İzmir');
     await user.click(sender.getByRole('button', { name: tr.common.save }));
     await waitFor(() => expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1));

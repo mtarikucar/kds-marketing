@@ -28,6 +28,7 @@ export function PersonMessage({ data }: { data: InboxPersonOut }) {
     handle: null,
     handoffs: false,
     business: false,
+    basisApplies: data.person.recipient_kind === 'business',
     draftId: data.person.id,
     afterSend: null,
     noWay: copy('noWayPerson'),
