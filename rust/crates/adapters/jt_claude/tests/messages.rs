@@ -10,7 +10,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use jt_app::ports::reply_model::{
-    JudgeRequest, ModelError, ModelRequest, ModelStop, ModelTool, Part, ReplyModel, Speaker, Turn,
+    Image, ImageType, JudgeRequest, ModelError, ModelRequest, ModelStop, ModelTool, Part,
+    ReplyModel, Speaker, Turn,
 };
 use jt_claude::{ApiKey, ClaudeBases, ClaudeModel, DEFAULT_MODEL};
 use jt_outbound::{Egress, FIXED_HOSTS, Url};
@@ -175,6 +176,41 @@ async fn a_request_sends_the_documented_headers_and_body() {
         messages[2]["content"][0],
         json!({"type": "text", "text": "Tek kişi", "cache_control": {"type": "ephemeral"}})
     );
+}
+
+#[tokio::test]
+async fn an_image_goes_as_a_base64_block_in_the_customers_turn() {
+    let (model, seen) = mock(
+        200,
+        vec![],
+        include_str!("fixtures/messages_tool_use_200.json"),
+    )
+    .await;
+    let mut request = request();
+    let image = Image {
+        kind: ImageType::Webp,
+        data: b"RIFF\x04\x00\x00\x00WEBP".to_vec(),
+    };
+    // Its Debug never shows the bytes.
+    assert_eq!(format!("{image:?}"), "Image { kind: Webp, bytes: 12 }");
+    request.history[2].parts = vec![Part::Image { image }, text("[image] bu olsun")];
+    model.answer(&request).await.unwrap();
+    let requests = seen.requests.lock().unwrap();
+    let body: Value = serde_json::from_str(&requests[0].2).unwrap();
+    let content = &body["messages"][2]["content"];
+    assert_eq!(
+        content[0],
+        json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/webp",
+                "data": "UklGRgQAAABXRUJQ",
+            }
+        })
+    );
+    assert_eq!(content[1]["text"], "[image] bu olsun");
+    assert_eq!(content[1]["cache_control"], json!({"type": "ephemeral"}));
 }
 
 #[tokio::test]

@@ -1372,6 +1372,38 @@ pub trait MessagingSender: Send + Sync {
         let _ = (cred, public, sync);
         Ok(None)
     }
+    /// The media file the provider's id `media_id` names, one a person sent to the capability
+    /// (`public` as [`Connector::probe`] gets it), read in memory: at most `max_bytes`, else an
+    /// error before more is read. `None`, the default, for a provider or a kind that gives none.
+    /// What comes back is never stored, logged or quoted in an error.
+    async fn fetch_media(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        media_id: &str,
+        max_bytes: usize,
+    ) -> Result<Option<Media>, ConnectorError> {
+        let _ = (cred, public, media_id, max_bytes);
+        Ok(None)
+    }
+}
+
+/// A media file a person sent, as its provider gave it ([`MessagingSender::fetch_media`]): held
+/// in memory only, never stored or logged. Its `Debug` shows the type and the size alone.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Media {
+    /// The type the provider names (`image/jpeg`, …); empty when it names none.
+    pub mime: String,
+    pub data: Vec<u8>,
+}
+
+impl std::fmt::Debug for Media {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Media")
+            .field("mime", &self.mime)
+            .field("bytes", &self.data.len())
+            .finish()
+    }
 }
 
 /// Sends typed mail within `ws`, preserving the caller's Message-ID, thread headers and attachments.

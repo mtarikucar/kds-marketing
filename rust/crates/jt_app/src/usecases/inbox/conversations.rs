@@ -56,6 +56,14 @@ pub struct MessageView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item: Option<MessageItem>,
     pub attachments: Vec<super::attachments::AttachmentView>,
+    /// An outbound message the automatic replies wrote (`auto_reply` in its outbox intent),
+    /// whoever approved it; left out otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub automatic: bool,
+    /// For a reply held for approval, its outbox row: what `approve` and `discard` take; left
+    /// out otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<uuid::Uuid>,
 }
 
 /// The public item a message is or answers.
@@ -229,6 +237,14 @@ pub async fn messages(
     let reasons = r.outbox().failure_reasons(&failed).await?;
     let ids: Vec<_> = items.iter().map(|m| m.id).collect();
     let files = r.mail_files().for_messages(&ids).await?;
+    // The page's outbox rows in one read: which messages the automatic replies wrote, and which
+    // of those wait for approval.
+    let outbound: Vec<_> = items
+        .iter()
+        .filter(|m| m.direction == Direction::Outbound)
+        .map(|m| m.id)
+        .collect();
+    let rows = r.outbox().for_messages(&outbound).await?;
     let mut views = Vec::with_capacity(items.len());
     for message in items {
         let item = if public {
@@ -236,7 +252,18 @@ pub async fn messages(
         } else {
             None
         };
+        let row = rows.iter().find(|row| row.message_id == message.id);
+        let automatic = row.is_some_and(|row| row.intent.get("auto_reply").is_some());
+        // Only a held automatic reply of a private conversation is handled in the thread; any
+        // other held reply keeps its own place (the approvals list, the public card).
+        let held = row
+            .filter(|row| {
+                automatic && !public && row.state == "held" && message.status == MsgStatus::Queued
+            })
+            .map(|row| row.id);
         views.push(MessageView {
+            automatic,
+            held,
             failure_reason: reasons
                 .iter()
                 .find(|(id, _)| *id == message.id)
@@ -304,12 +331,12 @@ async fn mutate(
         )
         .await?;
     }
-    r.commit().await?;
     if action == "inbox.conversation.handed_to_agent" {
-        // A person's earlier message no longer keeps the automatic replies out; best effort, in
-        // a transaction of its own, nothing at all while the replies are off.
-        super::autoreply::handed_back_after(deps, ctx.workspace_id, id, ctx.now).await;
+        // A person's earlier message no longer keeps the automatic replies out, from this very
+        // commit on; nothing at all while the replies are off.
+        super::autoreply::handed_back(deps, r.as_mut(), id, ctx.now).await?;
     }
+    r.commit().await?;
     Ok(row)
 }
 pub async fn take_over(

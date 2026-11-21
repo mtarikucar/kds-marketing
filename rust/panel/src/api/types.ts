@@ -1155,6 +1155,10 @@ export interface InboxMessage {
   failure_reason?: string | null;
   /** On a public conversation: the comment the message is, or our reply answers. */
   item?: { item_id: Uuid; kind: PublicKind; answer_state: PublicAnswerKey; visibility: Visibility | null };
+  /** An outbound message the automatic replies wrote, whoever approved it. */
+  automatic?: boolean;
+  /** A reply held for approval: its outbox id, what approve and discard take. */
+  held?: Uuid;
 }
 export type PublicKind = 'comment';
 export type Visibility = 'public' | 'private';

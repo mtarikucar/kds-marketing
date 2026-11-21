@@ -7,12 +7,12 @@ mod support;
 use std::sync::Arc;
 
 use jt_app::ports::UnitOfWork;
-use jt_app::ports::connectors::{InboundEventDraft, SendReceipt};
+use jt_app::ports::connectors::{InboundEventDraft, Media, SendReceipt};
 use jt_app::ports::reply_model::{
     AUTOREPLY_BATCH, AUTOREPLY_MAX_ATTEMPTS, AUTOREPLY_SETTLE, FAILED_CALL_ESTIMATE_MICRO_USD,
-    HUMAN_QUIET, JudgeAnswer, ModelAnswer, ModelError, ModelStop, ModelTool,
-    PER_CONVERSATION_DAILY, Part, RunOutcome, RunRow, Speaker, Usage,
-    WORKSPACE_DAILY_SPEND_MICRO_USD,
+    HUMAN_QUIET, ImageType, JudgeAnswer, MAX_IMAGE_BYTES, MAX_IMAGES_BYTES, ModelAnswer,
+    ModelError, ModelStop, ModelTool, PER_CONVERSATION_DAILY, Part, RunOutcome, RunRow, Speaker,
+    Usage, WORKSPACE_DAILY_SPEND_MICRO_USD,
 };
 use jt_app::usecases::inbox::{context, conversations, public, replies};
 use jt_app::usecases::jobs::{self, JobReport};
@@ -354,7 +354,9 @@ async fn the_model_reads_the_conversation_as_alternating_turns_ending_with_the_c
         [Speaker::Customer, Speaker::Business, Speaker::Customer]
     );
     assert_eq!(second.history[2].parts.len(), 2, "two messages, one turn");
-    let Part::Text { text } = &second.history[1].parts[0];
+    let Part::Text { text } = &second.history[1].parts[0] else {
+        panic!("a text part");
+    };
     assert_eq!(text, "Merhaba, buyurun.");
     // The workspace's part names the range and holds the standard card.
     assert!(second.system_workspace.contains("1000–5000 TRY"));
@@ -1077,7 +1079,10 @@ async fn a_newer_run_supersedes_a_held_reply_and_never_reads_it() {
         .history
         .iter()
         .flat_map(|turn| turn.parts.iter())
-        .map(|Part::Text { text }| text.clone())
+        .filter_map(|p| match p {
+            Part::Text { text } => Some(text.clone()),
+            Part::Image { .. } => None,
+        })
         .collect();
     assert!(
         !read.iter().any(|t| t.contains("İlk taslak")),
@@ -1556,4 +1561,356 @@ async fn a_give_up_is_tried_again_and_then_the_row_rests() {
     assert_eq!(reasons(&t, "inbox.autoreply.handed_over"), ["failed"]);
     let pending = context::pending(&t.w.deps, &t.w.owner_ctx).await.unwrap();
     assert_eq!(pending.ours.len(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The customer's images and files
+// ---------------------------------------------------------------------------------------------
+
+/// The first bytes of a JPEG, enough for the type check; the rest is invented.
+const JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, b'J', b'F', b'I', b'F'];
+
+/// A WhatsApp message `wamid` of the fixture's first customer, of `kind` (`image` or
+/// `document`) with `media` as its body (`id`, `caption`, `filename`, …), received at `tick`.
+async fn inbound_media(t: &T, wamid: &str, kind: &str, media: serde_json::Value, tick: i64) {
+    let mut draft = meta_drafts("whatsapp_messages").remove(0);
+    let received = FIXED_NOW_T + Duration::seconds(tick);
+    let m = &mut draft.payload["message"];
+    m["id"] = json!(wamid);
+    m["type"] = json!(kind);
+    m.as_object_mut().unwrap().remove("text");
+    m[kind] = media;
+    draft.external_id = wamid.to_owned();
+    draft.payload["occurred_at"] = json!(received.format(&Rfc3339).unwrap());
+    put(t, draft, received).await;
+    let report = jobs::run_inbox_consume(&t.w.deps, consumed_at(tick)).await;
+    assert_eq!(report.failed, 0, "{report:?}");
+}
+
+fn image(id: &str, caption: Option<&str>) -> serde_json::Value {
+    let mut image = json!({ "id": id, "mime_type": "image/jpeg", "sha256": "invented" });
+    if let Some(caption) = caption {
+        image["caption"] = json!(caption);
+    }
+    image
+}
+
+fn media(data: &[u8]) -> Media {
+    Media {
+        mime: "image/jpeg".into(),
+        data: data.to_vec(),
+    }
+}
+
+/// The parts of the last customer turn of the model's `n`th request.
+fn last_turn(t: &T, n: usize) -> Vec<Part> {
+    let request = &t.model.requests()[n];
+    let last = request.history.last().unwrap();
+    assert_eq!(last.speaker, Speaker::Customer);
+    last.parts.clone()
+}
+
+fn text_of(part: &Part) -> &str {
+    match part {
+        Part::Text { text } => text,
+        Part::Image { .. } => panic!("an image, not a text"),
+    }
+}
+
+fn stored_bodies(t: &T) -> Vec<String> {
+    t.w.uow
+        .snapshot()
+        .inbox
+        .messages
+        .iter()
+        .map(|m| m.body.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_customers_photo_reaches_the_model_as_an_image_before_its_caption() {
+    let t = setup().await;
+    inbound_media(
+        &t,
+        "wamid.TEST-IMAGE-1",
+        "image",
+        image("1500000000000001", Some("Bu tarzda olsun")),
+        0,
+    )
+    .await;
+    // Stored with the neutral marker and the caption; never the image.
+    assert_eq!(stored_bodies(&t), ["[image]\nBu tarzda olsun"]);
+    t.meta.push_media(Ok(Some(media(JPEG))));
+    t.meta.push_send_text(accepted());
+    t.model.answer(reply("Çok güzel, kaç kişilik olsun?"));
+    job(&t, due(0)).await;
+    assert_eq!(
+        t.meta.media_calls(),
+        [("1500000000000001".to_owned(), MAX_IMAGE_BYTES)]
+    );
+    let parts = last_turn(&t, 0);
+    assert_eq!(parts.len(), 2);
+    let Part::Image { image } = &parts[0] else {
+        panic!("the image comes first");
+    };
+    assert_eq!(image.kind, ImageType::Jpeg);
+    assert_eq!(image.data, JPEG);
+    assert_eq!(text_of(&parts[1]), "[image]\nBu tarzda olsun");
+    assert_eq!(texts_sent(&t), ["Çok güzel, kaç kişilik olsun?"]);
+    // Nothing of the image is kept in the ledger.
+    let ledger = format!("{:?}", t.w.uow.snapshot().ledger);
+    assert!(!ledger.contains("1500000000000001"));
+    assert!(!ledger.contains("Bu tarzda"));
+}
+
+#[tokio::test]
+async fn a_photo_that_cannot_be_fetched_or_read_is_text_the_model_is_told_it_cannot_see() {
+    let t = setup().await;
+    inbound_media(
+        &t,
+        "wamid.TEST-IMAGE-1",
+        "image",
+        image("1500000000000001", None),
+        0,
+    )
+    .await;
+    t.meta
+        .push_media(Err(jt_connector::ConnectorError::transient("down")));
+    t.meta.push_send_text(accepted());
+    t.model
+        .answer(reply("Fotoğrafı göremedim, tekrar gönderir misiniz?"));
+    job(&t, due(0)).await;
+    let parts = last_turn(&t, 0);
+    assert_eq!(parts.len(), 1);
+    assert!(text_of(&parts[0]).starts_with("[image]\n"));
+    assert!(text_of(&parts[0]).contains("could not be loaded"));
+
+    // Too large, or not an image by its bytes: the same.
+    for (n, data) in [
+        [JPEG, &vec![0; MAX_IMAGE_BYTES]].concat(),
+        b"GIF89a-invented".to_vec(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let tick = 600 * (n as i64 + 1);
+        inbound_media(
+            &t,
+            &format!("wamid.TEST-IMAGE-{}", n + 2),
+            "image",
+            image(&format!("150000000000000{}", n + 2), None),
+            tick,
+        )
+        .await;
+        t.meta.push_media(Ok(Some(media(&data))));
+        t.meta.push_send_text(accepted());
+        t.model.answer(reply("Göremedim."));
+        let asked = t.model.requests().len();
+        job(&t, due(tick)).await;
+        let parts = last_turn(&t, asked);
+        assert!(!parts.iter().any(|p| matches!(p, Part::Image { .. })));
+        assert!(text_of(parts.last().unwrap()).contains("could not be loaded"));
+    }
+}
+
+#[tokio::test]
+async fn only_the_latest_four_photos_are_shown() {
+    let t = setup().await;
+    for n in 0..5 {
+        inbound_media(
+            &t,
+            &format!("wamid.TEST-IMAGE-{n}"),
+            "image",
+            image(&format!("150000000000000{n}"), None),
+            n,
+        )
+        .await;
+    }
+    for _ in 0..4 {
+        t.meta.push_media(Ok(Some(media(JPEG))));
+    }
+    t.meta.push_send_text(accepted());
+    t.model.answer(reply("Hepsi çok güzel."));
+    job(&t, due(4)).await;
+    let asked: Vec<String> = t.meta.media_calls().into_iter().map(|(id, _)| id).collect();
+    assert_eq!(
+        asked,
+        [
+            "1500000000000004",
+            "1500000000000003",
+            "1500000000000002",
+            "1500000000000001"
+        ]
+    );
+    let parts = last_turn(&t, 0);
+    assert!(text_of(&parts[0]).contains("An earlier photo, not shown"));
+    let images = parts
+        .iter()
+        .filter(|p| matches!(p, Part::Image { .. }))
+        .count();
+    assert_eq!(images, 4);
+}
+
+#[tokio::test]
+async fn a_document_is_a_marker_the_model_is_told_it_cannot_open() {
+    let t = setup().await;
+    inbound_media(
+        &t,
+        "wamid.TEST-DOC-1",
+        "document",
+        json!({ "id": "1600000000000001", "filename": "figur.stl", "mime_type": "model/stl" }),
+        0,
+    )
+    .await;
+    t.meta.push_send_text(accepted());
+    t.model
+        .answer(reply("Dosyayı açamıyorum, ekibimiz bakacak."));
+    job(&t, due(0)).await;
+    assert!(t.meta.media_calls().is_empty(), "a file is never fetched");
+    let parts = last_turn(&t, 0);
+    assert_eq!(parts.len(), 1);
+    let text = text_of(&parts[0]);
+    assert!(text.starts_with("[document: figur.stl]\n"), "{text}");
+    assert!(text.contains("you cannot open it"));
+}
+
+#[tokio::test]
+async fn without_a_model_a_photo_is_stored_as_its_marker_and_nothing_is_fetched() {
+    let t = setup_with(false, true).await;
+    inbound_media(
+        &t,
+        "wamid.TEST-IMAGE-1",
+        "image",
+        image("1500000000000001", None),
+        0,
+    )
+    .await;
+    job(&t, due(0)).await;
+    assert_eq!(stored_bodies(&t), ["[image]"]);
+    assert!(t.meta.media_calls().is_empty());
+}
+
+#[tokio::test]
+async fn the_images_of_one_request_stay_within_their_total() {
+    let t = setup().await;
+    for n in 0..4 {
+        inbound_media(
+            &t,
+            &format!("wamid.TEST-IMAGE-{n}"),
+            "image",
+            image(&format!("150000000000000{n}"), None),
+            n,
+        )
+        .await;
+    }
+    let full = [JPEG, &vec![0; MAX_IMAGE_BYTES - JPEG.len()]].concat();
+    for _ in 0..4 {
+        t.meta.push_media(Ok(Some(media(&full))));
+    }
+    t.meta.push_send_text(accepted());
+    t.model.answer(reply("Hepsi çok güzel."));
+    job(&t, due(3)).await;
+    // Three full images leave 1.5 MiB: the fourth is asked with that much room, is larger, and
+    // is not shown.
+    let room: Vec<usize> = t.meta.media_calls().into_iter().map(|(_, r)| r).collect();
+    assert_eq!(
+        room,
+        [
+            MAX_IMAGE_BYTES,
+            MAX_IMAGE_BYTES,
+            MAX_IMAGE_BYTES,
+            MAX_IMAGES_BYTES - 3 * MAX_IMAGE_BYTES
+        ]
+    );
+    let parts = last_turn(&t, 0);
+    let images = parts
+        .iter()
+        .filter(|p| matches!(p, Part::Image { .. }))
+        .count();
+    assert_eq!(images, 3);
+    assert!(text_of(&parts[0]).contains("could not be loaded"));
+}
+
+#[tokio::test]
+async fn no_image_is_fetched_once_the_ticks_time_is_nearly_spent() {
+    let t = setup().await;
+    inbound_media(
+        &t,
+        "wamid.TEST-IMAGE-1",
+        "image",
+        image("1500000000000001", None),
+        0,
+    )
+    .await;
+    t.meta.push_media(Ok(Some(media(JPEG))));
+    t.meta.push_send_text(accepted());
+    t.model.answer(reply("Fotoğrafı göremedim."));
+    let model: Arc<dyn jt_app::ports::reply_model::ReplyModel> = t.model.clone();
+    let worked = jt_app::usecases::inbox::autoreply::work(
+        &t.w.deps,
+        &model,
+        t.w.ws,
+        conversation(&t).id,
+        due(0),
+        std::time::Instant::now() + std::time::Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(worked, jt_app::usecases::inbox::autoreply::Worked::Answered);
+    assert!(t.meta.media_calls().is_empty(), "no fetch starts");
+    let parts = last_turn(&t, 0);
+    assert_eq!(parts.len(), 1);
+    assert!(text_of(&parts[0]).contains("could not be loaded"));
+}
+
+/// The thread as the panel reads it, as JSON.
+async fn thread(t: &T) -> serde_json::Value {
+    let page = conversations::messages(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        conversation(t).id,
+        serde_json::from_value(json!({})).unwrap(),
+    )
+    .await
+    .unwrap();
+    serde_json::to_value(&page.items).unwrap()
+}
+
+#[tokio::test]
+async fn only_a_held_automatic_reply_is_marked_and_handled_in_the_thread() {
+    // A held automatic reply: marked, with its outbox row.
+    let t = setup().await;
+    require_approval(&t);
+    inbound(&t, 0, 0).await;
+    t.model.answer(reply("Merhaba!"));
+    job(&t, due(0)).await;
+    let outbox = t.w.uow.snapshot().inbox.outbox[0].id;
+    let items = thread(&t).await;
+    let held = items.as_array().unwrap().last().unwrap();
+    assert_eq!(held["automatic"], true);
+    assert_eq!(held["held"], json!(outbox));
+    assert!(items[0].get("automatic").is_none() && items[0].get("held").is_none());
+
+    // An agent's reply keeps its presentation: neither field. (An agent's direct message is never
+    // held; its held public replies keep their own card, and `held` is never set on a public
+    // conversation.)
+    let t = setup_with(false, true).await;
+    require_approval(&t);
+    inbound(&t, 0, 0).await;
+    let agent = t.w.agent(&["inbox.work"]).await;
+    t.meta.push_send_text(accepted());
+    replies::reply(
+        &t.w.deps,
+        &at(&agent, consumed_at(2)),
+        conversation(&t).id,
+        serde_json::from_value(json!({"text": "Merhaba, ajan.", "intent": "reply"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    let items = thread(&t).await;
+    assert_eq!(items.as_array().unwrap().len(), 2);
+    for item in items.as_array().unwrap() {
+        assert!(item.get("automatic").is_none(), "{item}");
+        assert!(item.get("held").is_none(), "{item}");
+    }
 }

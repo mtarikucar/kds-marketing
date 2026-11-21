@@ -20,8 +20,9 @@ const fn host(connector: &'static str, host: &'static str) -> AllowedHost {
 /// scope reaches only the entries carrying its own name; an entry with a port only that port.
 ///
 /// - `meta`: the Graph API (`graph.facebook.com`), the Instagram Graph API and Instagram login
-///   (`graph.instagram.com`, `api.instagram.com`) and the resumable media upload
-///   (`rupload.facebook.com`);
+///   (`graph.instagram.com`, `api.instagram.com`), the resumable media upload
+///   (`rupload.facebook.com`) and the download of a media file a person sent to a WhatsApp number
+///   (`lookaside.fbsbx.com`, the host of the `url` Graph names for a media id);
 /// - `netgsm`: SMS and the account API (`api.netgsm.com.tr`), WhatsApp
 ///   (`whatsappapi.netgsm.com.tr`), voice files (`sesdosya.netgsm.com.tr`) and the Netsantral
 ///   click-to-call endpoint (`crmsntrl.netgsm.com.tr:9111`, plain http: see the module docs);
@@ -42,6 +43,7 @@ pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("meta", "graph.instagram.com"),
     host("meta", "api.instagram.com"),
     host("meta", "rupload.facebook.com"),
+    host("meta", "lookaside.fbsbx.com"),
     host("netgsm", "api.netgsm.com.tr"),
     host("netgsm", "whatsappapi.netgsm.com.tr"),
     host("netgsm", "sesdosya.netgsm.com.tr"),
@@ -98,6 +100,7 @@ mod tests {
                 ("meta", "graph.instagram.com"),
                 ("meta", "api.instagram.com"),
                 ("meta", "rupload.facebook.com"),
+                ("meta", "lookaside.fbsbx.com"),
                 ("netgsm", "api.netgsm.com.tr"),
                 ("netgsm", "whatsappapi.netgsm.com.tr"),
                 ("netgsm", "sesdosya.netgsm.com.tr"),
@@ -131,6 +134,10 @@ mod tests {
             ("meta", "https://graph.instagram.com/me"),
             ("meta", "https://api.instagram.com/oauth/access_token"),
             ("meta", "https://rupload.facebook.com/ig-api-upload/1"),
+            (
+                "meta",
+                "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1",
+            ),
             ("netgsm", "https://api.netgsm.com.tr/sms/send/get"),
             ("netgsm", "https://whatsappapi.netgsm.com.tr/"),
             ("netgsm", "https://sesdosya.netgsm.com.tr/"),

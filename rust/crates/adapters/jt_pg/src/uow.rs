@@ -332,6 +332,30 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    async fn savepoint(&mut self) -> Result<(), AppError> {
+        sqlx::query("savepoint jt_savepoint")
+            .execute(self.tx.conn())
+            .await
+            .map(|_| ())
+            .map_err(|e| map_sqlx(e, "savepoint"))
+    }
+
+    async fn rollback_to_savepoint(&mut self) -> Result<(), AppError> {
+        sqlx::query("rollback to savepoint jt_savepoint")
+            .execute(self.tx.conn())
+            .await
+            .map(|_| ())
+            .map_err(|e| map_sqlx(e, "roll back to the savepoint"))
+    }
+
+    async fn release_savepoint(&mut self) -> Result<(), AppError> {
+        sqlx::query("release savepoint jt_savepoint")
+            .execute(self.tx.conn())
+            .await
+            .map(|_| ())
+            .map_err(|e| map_sqlx(e, "release the savepoint"))
+    }
+
     async fn commit(self: Box<Self>) -> Result<(), AppError> {
         let mut this = *self;
         ensure_not_aborted(this.tx.conn()).await?;

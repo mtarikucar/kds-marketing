@@ -183,15 +183,26 @@ export function InboxConversation({ id }: { id: string }) {
                         className={`max-w-[92%] rounded-lg border px-3 py-2 ${message.direction === 'outbound' ? 'ml-auto border-primary-100 bg-primary-50/60 dark:border-primary-900 dark:bg-primary-950/40' : 'mr-auto border-border bg-surface'}`}
                       >
                         <div className="flex flex-wrap justify-between gap-2">
-                          <InboxActorLabel actor={message.author} />
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <InboxActorLabel actor={message.author} />
+                            {message.automatic && (
+                              <span className="rounded bg-muted px-1.5 text-caption text-muted-foreground">
+                                {t('inbox.automatic')}
+                              </span>
+                            )}
+                          </span>
                           <InboxTime at={message.at} />
                         </div>
                         <p className="my-1.5 whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere]">
                           {message.body}
                         </p>
-                        <p className={`text-xs ${message.failure_reason ? 'text-danger' : 'text-muted-foreground'}`}>
-                          {deliveryText(t, message)}
-                        </p>
+                        {message.held ? (
+                          <HeldActions outboxId={message.held} />
+                        ) : (
+                          <p className={`text-xs ${message.failure_reason ? 'text-danger' : 'text-muted-foreground'}`}>
+                            {deliveryText(t, message)}
+                          </p>
+                        )}
                       </li>
                     ))}
                 </ol>
@@ -293,5 +304,27 @@ export function InboxConversation({ id }: { id: string }) {
         </section>
       )}
     </>
+  );
+}
+
+/** A held reply in the thread: send it as written, or drop it. */
+function HeldActions({ outboxId }: { outboxId: string }) {
+  const { t } = useTranslation();
+  const approve = useInboxMutation(() => api.approveReply(outboxId));
+  const discard = useInboxMutation(() => api.discardReply(outboxId));
+  const busy = approve.isPending || discard.isPending;
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="held-in-thread">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-warning">{t('inbox.heldReply')}</span>
+        <Button size="sm" variant="secondary" loading={approve.isPending} disabled={busy} onClick={() => approve.mutate()}>
+          {t('inbox.approveHeld')}
+        </Button>
+        <Button size="sm" variant="ghost" loading={discard.isPending} disabled={busy} onClick={() => discard.mutate()}>
+          {t('inbox.discardHeld')}
+        </Button>
+      </div>
+      <ErrorCallout error={approve.error ?? discard.error} />
+    </div>
   );
 }

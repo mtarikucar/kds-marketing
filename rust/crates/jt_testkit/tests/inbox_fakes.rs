@@ -141,3 +141,15 @@ async fn auto_reply_rows() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::auto_reply_rows(uow).await;
 }
+
+#[tokio::test]
+async fn person_last_message_and_page_outbox() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::person_last_message_and_page_outbox(uow).await;
+}
+
+#[tokio::test]
+async fn savepoint_undoes_only_what_follows() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::savepoint_undoes_only_what_follows(uow).await;
+}

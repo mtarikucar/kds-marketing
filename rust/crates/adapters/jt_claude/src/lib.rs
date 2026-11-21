@@ -8,7 +8,9 @@
 //! and the system render first, so the whole stable prefix is cached), the three tools (`reply`,
 //! `quote`, `hand_over`, each `strict` with `additionalProperties: false` and every property
 //! required), [`tool_choice`], and the conversation as alternating `user` / `assistant` turns
-//! ending with the customer's, its last block carrying the second breakpoint. No sampling
+//! ending with the customer's, its last block carrying the second breakpoint. An image a customer
+//! sent is an `image` block with its bytes in base64 (`source.type: base64`), in the customer's
+//! turn; it is never logged. No sampling
 //! parameter (`temperature`, `top_p`, `top_k`), no thinking budget and no assistant prefill is
 //! ever sent.
 //!
@@ -29,6 +31,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use jt_app::ports::reply_model::{
     HAND_OVER_REASONS, JudgeAnswer, JudgeRequest, ModelAnswer, ModelError, ModelRequest, ModelStop,
     ModelTool, Part, ReplyModel, Speaker, Usage,
@@ -234,6 +238,14 @@ pub fn request_body(model: &str, request: &ModelRequest) -> Value {
                 .iter()
                 .map(|p| match p {
                     Part::Text { text } => json!({ "type": "text", "text": text }),
+                    Part::Image { image } => json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image.kind.mime(),
+                            "data": STANDARD.encode(&image.data),
+                        }
+                    }),
                 })
                 .collect();
             json!({ "role": role, "content": content })

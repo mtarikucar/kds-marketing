@@ -152,6 +152,24 @@ impl OutboxRepo for PgTenantRepos {
             OutboxRow
         )
     }
+    async fn for_messages(&mut self, messages: &[MessageId]) -> Result<Vec<OutboxRow>, AppError> {
+        if messages.is_empty() {
+            return Ok(vec![]);
+        }
+        let ids: Vec<Uuid> = messages.iter().map(|m| m.as_uuid()).collect();
+        many!(
+            sqlx::query_scalar(
+                "select to_jsonb(o) from (select distinct on (message_id) * from outbox \
+                 where workspace_id=$1 and message_id=any($2) \
+                 order by message_id, created_at, id) o"
+            )
+            .bind(self.workspace_id().as_uuid())
+            .bind(&ids),
+            self,
+            OutboxRow
+        )
+    }
+
     async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError> {
         one!(
             sqlx::query_scalar(

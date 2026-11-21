@@ -1796,6 +1796,21 @@ pub trait TenantRepos: Send + Sync {
     fn knowledge(&mut self) -> &mut dyn knowledge::KnowledgeRepo;
     /// The inbox's automatic replies: their work list and runs (`0047_inbox_auto_reply`).
     fn auto_reply(&mut self) -> &mut dyn reply_model::AutoReplyRepo;
+    /// Marks a savepoint in the transaction (one level, not nested):
+    /// [`TenantRepos::rollback_to_savepoint`] then undoes every write after it, a failed call
+    /// included, and the bundle stays usable; [`TenantRepos::release_savepoint`] keeps them. A
+    /// bundle without savepoints refuses, and its caller does without the guarded step.
+    async fn savepoint(&mut self) -> Result<(), AppError> {
+        Err(AppError::internal("this bundle takes no savepoint"))
+    }
+    /// Undoes everything since [`TenantRepos::savepoint`]; see there.
+    async fn rollback_to_savepoint(&mut self) -> Result<(), AppError> {
+        Err(AppError::internal("this bundle takes no savepoint"))
+    }
+    /// Keeps everything since [`TenantRepos::savepoint`]; see there.
+    async fn release_savepoint(&mut self) -> Result<(), AppError> {
+        Err(AppError::internal("this bundle takes no savepoint"))
+    }
     async fn commit(self: Box<Self>) -> Result<(), AppError>;
 }
 

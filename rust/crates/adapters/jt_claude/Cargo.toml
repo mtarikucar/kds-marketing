@@ -17,6 +17,8 @@ serde_json.workspace = true
 time.workspace = true
 tracing.workspace = true
 async-trait.workspace = true
+# An image a customer sent goes to the model as a base64 block.
+base64.workspace = true
 # The platform's API key wipes itself from memory when dropped.
 zeroize.workspace = true
 

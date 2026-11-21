@@ -1019,7 +1019,7 @@ birebir sabitlenir; başka hiçbir crate `reqwest` adını anmaz):
 
 | Bağlayıcı | Adresler |
 |---|---|
-| `meta` | `graph.facebook.com`, `graph.instagram.com`, `api.instagram.com`, `rupload.facebook.com` |
+| `meta` | `graph.facebook.com`, `graph.instagram.com`, `api.instagram.com`, `rupload.facebook.com`, `lookaside.fbsbx.com` |
 | `netgsm` | `api.netgsm.com.tr`, `whatsappapi.netgsm.com.tr`, `sesdosya.netgsm.com.tr`, `crmsntrl.netgsm.com.tr:9111` |
 | `x` | `api.twitter.com`, `api.x.com`, `ads-api.x.com` |
 

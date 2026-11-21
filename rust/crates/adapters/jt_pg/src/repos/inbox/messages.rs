@@ -32,6 +32,26 @@ impl MessageRepo for PgTenantRepos {
         many!(sqlx::query_scalar("select to_jsonb(m) from (select * from messages where workspace_id=$1 and conversation_id=$2 order by at desc,id desc limit $3) m order by at,id").bind(self.workspace_id().as_uuid()).bind(id.as_uuid()).bind(i64::from(limit.clamp(1,500))),self,Message)
     }
 
+    async fn person_last_at(
+        &mut self,
+        id: ConversationId,
+    ) -> Result<Option<time::OffsetDateTime>, AppError> {
+        // Walks the partial index `messages_person_latest` (same predicate) newest first; each
+        // step is one lookup of the message's outbox row (`outbox_message_lookup`).
+        sqlx::query_scalar(
+            "select m.at from messages m where m.workspace_id=$1 and m.conversation_id=$2 \
+             and (m.author ? 'human' or m.author = '\"business_app\"'::jsonb) \
+             and not exists (select 1 from outbox o where o.workspace_id=m.workspace_id \
+             and o.message_id=m.id and o.intent ? 'auto_reply') \
+             order by m.at desc, m.id desc limit 1",
+        )
+        .bind(self.workspace_id().as_uuid())
+        .bind(id.as_uuid())
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read a person's latest message"))
+    }
+
     async fn record_inbound_sender(
         &mut self,
         message: MessageId,

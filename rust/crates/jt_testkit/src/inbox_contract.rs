@@ -2799,3 +2799,149 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
     );
     assert_eq!(other.auto_reply().queue_lock(c.id).await.unwrap(), None);
 }
+
+/// A conversation's latest message of a person (`MessageRepo::person_last_at`): authored in the
+/// panel or from the Business App, never an approved automatic reply however many of those
+/// follow; and the outbox rows of a page of messages in one read (`OutboxRepo::for_messages`).
+pub async fn person_last_message_and_page_outbox(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.capability().await;
+    let p = f.insert_person("Customer").await;
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let c = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(p.id, cap))
+        .await
+        .unwrap();
+    assert_eq!(t.messages().person_last_at(c.id).await.unwrap(), None);
+    let at = |s: i64| FIXED_NOW + Duration::seconds(s);
+    let outbound = |author: Author, s: i64| Message {
+        id: MessageId::new_v7(),
+        direction: Direction::Outbound,
+        author,
+        body: "Hello".into(),
+        external_id: None,
+        status: MsgStatus::Sent,
+        at: at(s),
+        ..f.message(c.id)
+    };
+    let person = outbound(Author::Human(f.user), 0);
+    t.messages().insert_if_new(person.clone()).await.unwrap();
+    // Seventy approved automatic replies after it: none counts.
+    let mut automatic = Vec::new();
+    for n in 1..=70 {
+        let m = outbound(Author::Human(f.user), n);
+        t.messages().insert_if_new(m.clone()).await.unwrap();
+        let row = OutboxRow {
+            id: Uuid::now_v7(),
+            workspace_id: f.ws,
+            conversation_id: c.id,
+            message_id: m.id,
+            capability_id: cap,
+            intent: json!({"text": "Hello", "auto_reply": {"run_id": null}}),
+            expected_generation: 0,
+            fence_snapshot: None,
+            conversation_merged: false,
+            state: "sent".into(),
+            attempts: 1,
+            last_error: None,
+            created_at: at(n),
+            updated_at: at(n),
+        };
+        t.outbox().insert(row.clone()).await.unwrap();
+        automatic.push(row);
+    }
+    // Neither the agent's nor the customer's messages count.
+    t.messages()
+        .insert_if_new(outbound(Author::Agent, 80))
+        .await
+        .unwrap();
+    t.messages()
+        .insert_if_new(Message {
+            id: MessageId::new_v7(),
+            external_id: Some("provider-2".into()),
+            at: at(81),
+            ..f.message(c.id)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        t.messages().person_last_at(c.id).await.unwrap(),
+        Some(at(0))
+    );
+    // A message from the phone's Business App is a person's.
+    t.messages()
+        .insert_if_new(outbound(Author::BusinessApp, 90))
+        .await
+        .unwrap();
+    assert_eq!(
+        t.messages().person_last_at(c.id).await.unwrap(),
+        Some(at(90))
+    );
+
+    // The page's outbox rows: one per message that has one, none for the others.
+    let mut asked: Vec<MessageId> = automatic.iter().take(3).map(|r| r.message_id).collect();
+    asked.push(person.id);
+    let mut found = t.outbox().for_messages(&asked).await.unwrap();
+    found.sort_by_key(|r| r.created_at);
+    assert_eq!(found, automatic[..3].to_vec());
+    assert!(t.outbox().for_messages(&[]).await.unwrap().is_empty());
+    t.commit().await.unwrap();
+    let mut other = uow.tenant(f.other).await.unwrap();
+    assert!(
+        other
+            .outbox()
+            .for_messages(&asked)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(other.messages().person_last_at(c.id).await.unwrap(), None);
+}
+
+/// A savepoint (`TenantRepos::savepoint`): rolling back to it undoes only what followed it, a
+/// failed call included, and the transaction still commits what came before.
+pub async fn savepoint_undoes_only_what_follows(uow: Arc<dyn UnitOfWork>) {
+    use jt_app::ports::reply_model::QueueRow;
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.capability().await;
+    let kept = ConversationId::new_v7();
+    let undone = ConversationId::new_v7();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.auto_reply()
+        .queue_save(&QueueRow::idle(kept, FIXED_NOW))
+        .await
+        .unwrap();
+    t.savepoint().await.unwrap();
+    t.auto_reply()
+        .queue_save(&QueueRow::idle(undone, FIXED_NOW))
+        .await
+        .unwrap();
+    // A call that fails: an outbox row for a message and conversation that do not exist.
+    let failed = t
+        .outbox()
+        .insert(OutboxRow {
+            id: Uuid::now_v7(),
+            workspace_id: f.ws,
+            conversation_id: ConversationId::new_v7(),
+            message_id: MessageId::new_v7(),
+            capability_id: cap,
+            intent: json!({}),
+            expected_generation: 0,
+            fence_snapshot: None,
+            conversation_merged: false,
+            state: "queued".into(),
+            attempts: 0,
+            last_error: None,
+            created_at: FIXED_NOW,
+            updated_at: FIXED_NOW,
+        })
+        .await;
+    assert!(failed.is_err());
+    t.rollback_to_savepoint().await.unwrap();
+    t.release_savepoint().await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert!(t.auto_reply().queue_get(kept).await.unwrap().is_some());
+    assert!(t.auto_reply().queue_get(undone).await.unwrap().is_none());
+}

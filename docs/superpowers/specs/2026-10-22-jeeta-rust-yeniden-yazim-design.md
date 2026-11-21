@@ -195,7 +195,7 @@ Zorlanan sınırlar (hepsi otomatik test):
 
 **(M1b uygulamasında kesinleşti) Sabit katmanın listesi ve çıkış istisnaları.** Sabit katman
 bağlayıcı başına şu adlardır, başka hiçbiri değil (`jt_outbound::FIXED_HOSTS`, testte birebir):
-`meta` → `graph.facebook.com`, `graph.instagram.com`, `api.instagram.com`, `rupload.facebook.com`;
+`meta` → `graph.facebook.com`, `graph.instagram.com`, `api.instagram.com`, `rupload.facebook.com`, `lookaside.fbsbx.com`;
 `netgsm` → `api.netgsm.com.tr`, `whatsappapi.netgsm.com.tr`, `sesdosya.netgsm.com.tr`,
 `crmsntrl.netgsm.com.tr:9111`; `x` → `api.twitter.com`, `api.x.com`. Sağlayıcı bağdaştırıcıları
 (`jt_meta`, `jt_netgsm`, `jt_x`) HTTP istemcisi tutmaz, yalnız `Egress::send(EgressScope::Connector(..))`
@@ -1167,5 +1167,10 @@ hiçbir şey değişmez.
   uygulanır. Standart dışı her şey kişiye devredilir.
 - Müşteri metni hiçbir kayıtta ya da günlükte tutulmaz; çalıştırma satırları yalnız kod ve sayı
   taşır, modelin maliyeti `auto_reply_runs` içinde mikro dolar olarak durur.
-- SDK crate'i eklenmez; `deny.toml` içindeki yapay zekâ crate yasağı sürer. Görseller, başka
-  kanallar ve sahibe e-posta sonraki adımlardır. Ayrıntı: `docs/operations/auto-reply.md`.
+- Müşterinin gönderdiği görseller (en son dördü; JPEG, PNG, WebP; her biri en çok 5 MiB) model
+  çağrısı sırasında Meta'dan bellekte okunur ve modele görsel olarak verilir; hiçbir zaman diske,
+  veritabanına, günlüğe ya da deftere yazılmaz. Mesaj gövdesinde yalnız `[image]` (ve varsa
+  açıklaması) durur; belge ve 3B dosyalar `[document: ad]` olarak kalır ve açılmaz. Özelliği açmak
+  müşteri mesajlarının metnini ve görsellerini Anthropic'e gönderir.
+- SDK crate'i eklenmez; `deny.toml` içindeki yapay zekâ crate yasağı sürer. Başka kanallar ve
+  sahibe e-posta sonraki adımlardır. Ayrıntı: `docs/operations/auto-reply.md`.

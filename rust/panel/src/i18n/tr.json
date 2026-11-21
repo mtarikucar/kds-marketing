@@ -1704,6 +1704,10 @@
     "taskNotFound": "Görev bulunamadı.",
     "journey": "Yolculuk",
     "noJourney": "Gösterilecek yolculuk yok.",
+    "automatic": "otomatik",
+    "heldReply": "Onay bekliyor",
+    "approveHeld": "Onayla",
+    "discardHeld": "Vazgeç",
     "agentExecutor": "Yürütücü: Ajan",
     "humanExecutor": "Yürütücü: {{user}}",
     "you": "Siz",
@@ -4502,7 +4506,7 @@
         "autoReplyNoKey": "Sunucuda Claude anahtarı yok, otomatik yanıt kapalı.",
         "autoReplyMin": "En az",
         "autoReplyMax": "En çok",
-        "autoReplyHelp": "Fiyatı nasıl vereceğini “Standart iş ve fiyat” kartına yaz. Standart dışı istekler sana gelir.",
+        "autoReplyHelp": "Fiyatı nasıl vereceğini “Standart iş ve fiyat” kartına yaz. Standart dışı istekler sana gelir. Açıkken müşteri mesajları ve fotoğrafları yanıt için Anthropic’e (Claude) gönderilir.",
         "autoReplyInvalid": "En az ve en çok tutarı yaz; en az, en çoktan büyük olamaz."
       }
     },

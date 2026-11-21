@@ -193,6 +193,14 @@ pub trait MessageRepo: Send + Sync {
 
     /// Latest messages in chronological order.
     async fn recent(&mut self, id: ConversationId, limit: u32) -> Result<Vec<Message>, AppError>;
+    /// When a person last wrote in conversation `id`: the time of its latest message authored
+    /// `Author::Human` (in the panel) or `Author::BusinessApp` (from the phone), an automatic
+    /// reply a person approved (its outbox row's intent holds `auto_reply`) not counted, however
+    /// many follow. One query, walking the partial index `messages_person_latest` newest first.
+    async fn person_last_at(
+        &mut self,
+        id: ConversationId,
+    ) -> Result<Option<OffsetDateTime>, AppError>;
     /// Consumer contract: after a NEW inbound insert, call in the SAME transaction with the
     /// normalized/scoped identity that matched its sender. Stores sender_identity_id on the
     /// message and updates the conversation's last_inbound_identity_id only for its latest
@@ -589,6 +597,9 @@ pub trait OutboxRepo: Send + Sync {
     /// The outbox row that sends outbound message `message`, if any (the oldest, should there be
     /// more than one).
     async fn for_message(&mut self, message: MessageId) -> Result<Option<OutboxRow>, AppError>;
+    /// [`OutboxRepo::for_message`] of each of `messages` that has a row, in one read (a page of a
+    /// conversation's messages).
+    async fn for_messages(&mut self, messages: &[MessageId]) -> Result<Vec<OutboxRow>, AppError>;
     /// Capability `capability`'s uncertain public replies: its outbox rows in state `unknown` whose
     /// intent names a public item (`intent.public.item_id`), the most recently updated first, at
     /// most `limit`. Only that capability's: uncertain rows of other capabilities or channels,
