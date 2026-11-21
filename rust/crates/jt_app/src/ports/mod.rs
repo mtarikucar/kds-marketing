@@ -35,6 +35,7 @@ pub mod knowledge;
 pub mod mail_files;
 pub mod material_productions;
 pub mod materials;
+pub mod notices;
 pub mod outreach;
 pub mod posts;
 pub mod production_projects;
@@ -1796,6 +1797,8 @@ pub trait TenantRepos: Send + Sync {
     fn knowledge(&mut self) -> &mut dyn knowledge::KnowledgeRepo;
     /// The inbox's automatic replies: their work list and runs (`0047_inbox_auto_reply`).
     fn auto_reply(&mut self) -> &mut dyn reply_model::AutoReplyRepo;
+    /// The owner's email notices (`0049_owner_notices`).
+    fn notices(&mut self) -> &mut dyn notices::NoticeRepo;
     /// Marks a savepoint in the transaction (one level, not nested):
     /// [`TenantRepos::rollback_to_savepoint`] then undoes every write after it, a failed call
     /// included, and the bundle stays usable; [`TenantRepos::release_savepoint`] keeps them. A

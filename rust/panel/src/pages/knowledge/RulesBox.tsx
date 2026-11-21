@@ -8,6 +8,7 @@ import { useSession } from '@/auth/useSession';
 import { MoneyInput } from '@/components/forms';
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -27,7 +28,7 @@ import {
 } from '@/components/ui';
 import { can, isOwnerOrManager } from '@/lib/roles';
 import { isStale, useKnowledgeMutation } from './queries';
-import { adLine, approvalLine, autoReplyLine, knowledgeError, listedNames, messageLine } from './words';
+import { adLine, approvalLine, autoReplyLine, knowledgeError, listedNames, messageLine, notifyLine } from './words';
 
 /** How many prohibitions the box shows before "{n} kural daha". */
 const SHOWN = 2;
@@ -194,6 +195,8 @@ function AutoReplyField({
   onIds,
   onMin,
   onMax,
+  notify,
+  onNotify,
   invalid,
 }: {
   auto: AutoReplyView;
@@ -203,6 +206,8 @@ function AutoReplyField({
   onIds: (ids: string[]) => void;
   onMin: (minor: number | null) => void;
   onMax: (minor: number | null) => void;
+  notify: boolean;
+  onNotify: (on: boolean) => void;
   invalid: boolean;
 }) {
   const { t } = useTranslation();
@@ -235,6 +240,12 @@ function AutoReplyField({
         </div>
       )}
       {on && <p className="text-caption text-muted-foreground">{t('knowledge.rules.dialog.autoReplyHelp')}</p>}
+      {on && auto.notify.available && (
+        <label className="flex items-center gap-2 text-sm">
+          <Checkbox checked={notify} onCheckedChange={(v) => onNotify(v === true)} />
+          {t('knowledge.rules.dialog.notify')}
+        </label>
+      )}
       {invalid && <p role="alert" className="text-caption text-danger">{t('knowledge.rules.dialog.autoReplyInvalid')}</p>}
     </section>
   );
@@ -282,6 +293,7 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
   const [autoMin, setAutoMin] = useState<number | null>(null);
   const [autoMax, setAutoMax] = useState<number | null>(null);
   const [autoInvalid, setAutoInvalid] = useState(false);
+  const [notify, setNotify] = useState(true);
   const showMessage = !!base.message_cap || base.metered;
 
   const save = useKnowledgeMutation(
@@ -309,6 +321,7 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     setAutoIds(from.auto_reply.capability_ids);
     setAutoMin(from.auto_reply.price?.min_minor ?? null);
     setAutoMax(from.auto_reply.price?.max_minor ?? null);
+    setNotify(from.auto_reply.notify.on);
   };
 
   // The rules as read each time the dialog opens; a later read leaves the person's edits alone.
@@ -359,6 +372,9 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
         input.auto_reply.min_minor = autoMin;
         input.auto_reply.max_minor = autoMax;
       }
+    }
+    if (notify !== stored.notify.on) {
+      input.auto_reply = { ...(input.auto_reply ?? { capability_ids: autoIds }), notify_email: notify };
     }
     save.mutate(input);
   };
@@ -440,6 +456,8 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
               onIds={setAutoIds}
               onMin={setAutoMin}
               onMax={setAutoMax}
+              notify={notify}
+              onNotify={setNotify}
               invalid={autoInvalid}
             />
           )}
@@ -469,6 +487,7 @@ export function RulesBox({ rules, editable }: { rules: RulesOut; editable: boole
   const [expanded, setExpanded] = useState(false);
   const message = messageLine(t, rules.message_cap, i18n.language);
   const auto = autoReplyLine(t, rules.auto_reply, i18n.language);
+  const notify = notifyLine(t, rules.auto_reply);
   const first = rules.prohibitions.slice(0, SHOWN);
   const rest = rules.prohibitions.slice(SHOWN);
   return (
@@ -490,6 +509,7 @@ export function RulesBox({ rules, editable }: { rules: RulesOut; editable: boole
         {message && <li>{message}</li>}
         <li>{approvalLine(t, rules)}</li>
         {auto && <li>{auto}</li>}
+        {notify && <li>{notify}</li>}
       </ul>
       {rest.length > 0 && (
         <button type="button" className="self-start text-sm text-muted-foreground underline-offset-4 hover:underline" aria-expanded={expanded} onClick={() => setExpanded((x) => !x)}>

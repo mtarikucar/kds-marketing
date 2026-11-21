@@ -332,6 +332,10 @@ impl TenantRepos for PgTenantRepos {
         self
     }
 
+    fn notices(&mut self) -> &mut dyn jt_app::ports::notices::NoticeRepo {
+        self
+    }
+
     async fn savepoint(&mut self) -> Result<(), AppError> {
         sqlx::query("savepoint jt_savepoint")
             .execute(self.tx.conn())

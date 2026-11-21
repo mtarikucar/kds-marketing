@@ -35,6 +35,7 @@ pub(crate) mod inbox;
 mod knowledge;
 pub(crate) mod ledger;
 pub(crate) mod memberships;
+mod notices;
 mod oauth_pending;
 mod operators;
 mod outbound_jobs;

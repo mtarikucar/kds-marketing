@@ -54,6 +54,12 @@ export function autoReplyLine(t: TFunction, auto: AutoReplyView, language: strin
   });
 }
 
+/** "E-posta bildirimi: …": while the automatic replies and their email notices are on. */
+export function notifyLine(t: TFunction, auto: AutoReplyView): string | null {
+  if (auto.capability_ids.length === 0 || !auto.notify.available || !auto.notify.on || !auto.notify.from) return null;
+  return t('knowledge.rules.notifyOn', { from: auto.notify.from });
+}
+
 /**
  * The approval line, built from the effective gates (§4.6.3): the switch, else the accounts of the
  * list, then TikTok's own screen when a TikTok account is connected.

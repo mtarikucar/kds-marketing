@@ -749,6 +749,7 @@ pub(crate) async fn enqueue_in(
                 .or(test.map(|t| t.from_name.clone())),
             list_unsubscribe,
             attachment_files: Vec::new(),
+            auto_submitted: false,
         })?;
     } else if input.subject.is_some() || input.in_reply_to.is_some() || !input.references.is_empty()
     {

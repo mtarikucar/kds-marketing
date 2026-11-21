@@ -149,6 +149,8 @@ pub struct MemState {
     pub knowledge: super::knowledge::MemKnowledge,
     /// The automatic replies' queue and runs (`0047_inbox_auto_reply`).
     pub auto_reply: super::autoreply::MemAutoReply,
+    /// The owner's email notices (`0049_owner_notices`).
+    pub notices: Vec<(jt_tenancy::WorkspaceId, jt_app::ports::notices::NoticeRow)>,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
     pub sessions: Vec<SessionRow>,

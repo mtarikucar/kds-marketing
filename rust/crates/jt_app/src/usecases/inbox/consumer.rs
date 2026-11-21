@@ -224,6 +224,11 @@ async fn route(
     if erased && !(event.provider == Provider::Mail && event.kind == EventKind::Status) {
         return Ok("erased_identity_drop");
     }
+    // The owner's own notices (their inbox and Sent copies, an answer to one) are never a
+    // conversation.
+    if event.provider == Provider::Mail && super::notices::own_notice(r, &event.payload).await? {
+        return Ok("own_notice");
+    }
     let id = match event.capability_id {
         Some(id) => id,
         // Stored while none or several capabilities of its kind were live: attached now that

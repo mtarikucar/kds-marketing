@@ -7,8 +7,8 @@ standard goes to a person. This reverses the "no AI inside Jeeta" rule for inbox
 
 Code: `rust/crates/jt_app/src/usecases/inbox/autoreply.rs` (the use case), `rust/crates/domain/
 jt_inbox/src/autoreply.rs` (the server's rules), `rust/crates/adapters/jt_claude` (the API
-adapter), migrations `0047_inbox_auto_reply` and `0048_inbox_person_latest` (an index for the
-person's-hold lookup).
+adapter), migrations `0047_inbox_auto_reply`, `0048_inbox_person_latest` (an index for the
+person's-hold lookup) and `0049_owner_notices` (the owner's email notices).
 
 ## Configuration
 
@@ -99,9 +99,28 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   was turned on.
 - A hand-over: the conversation goes to the journey's owner (or the unassigned queue), the model's
   summary becomes a journey note, and its short line to the customer is sent when it passes the
-  same rules. The conversation then shows in the owner's home list and in the inbox queue. No email
-  is sent yet.
+  same rules. The conversation then shows in the owner's home list and in the inbox queue, and the
+  team managers are told by email (below).
 - While it answers a number's conversations, agents are not offered them in `work.pending`.
+
+## The owner's email notices
+
+- When the automatic replies hand a conversation to a person, the workspace's team managers
+  (active members whose role has `team.manage`, at most five) are told by email, through the
+  workspace's own oldest verified mailbox: subject "Jeeta: bir konuşma sizi bekliyor", three lines
+  (what happened, the reason in plain words from a fixed table, the conversation's link in the
+  panel) and how to turn them off. Never a customer's name, text or the model's summary.
+- On by default wherever a verified mailbox exists; Kurallar shows "E-posta bildirimi: {address}"
+  and the dialog's checkbox "Devir ve siparişleri e-postayla bildir" turns them off. No mailbox:
+  no line, no checkbox, no email.
+- At most 20 per workspace in a rolling day; past that a notice is kept as `skipped`
+  (`daily_cap`). One per hand-over. A transient send failure is tried again, up to three attempts;
+  a send whose outcome is unknown counts as sent and is never repeated.
+- Each email's `Message-ID` is `<jeeta-notice.{id}.{n}@{mailbox domain}>`, with
+  `Auto-Submitted: auto-generated` and `X-Auto-Response-Suppress: All`. When the mailbox polls the
+  notice back (its inbox copy, its Sent copy, or an answer to it), the consumer drops it
+  (`own_notice`): it never becomes a conversation.
+- `owner_notices` (migration `0049_owner_notices`) holds codes and ids only.
 
 ## What is kept
 

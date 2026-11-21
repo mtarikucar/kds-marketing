@@ -4479,6 +4479,7 @@
       "stopped": "{{n}} ad campaigns stopped as they reached the new limit.",
       "autoReplyOn": "Automatic replies to messages: {{channels}} · {{min}}–{{max}}.",
       "autoReplyWaiting": "Automatic replies to messages start once the “Standart iş ve fiyat” card is filled in.",
+      "notifyOn": "Email notices: {{from}}",
       "autoReplyNoKey": "Automatic replies to messages are off: the server has no Claude key.",
       "dialog": {
         "help": "The system enforces the budget, the message limit and approval; the agents read the prohibitions in every job and follow them.",
@@ -4506,6 +4507,7 @@
         "autoReplyNoKey": "The server has no Claude key, so automatic replies are off.",
         "autoReplyMin": "At least",
         "autoReplyMax": "At most",
+        "notify": "Email me hand-overs and orders",
         "autoReplyHelp": "Write in the “Standart iş ve fiyat” card how you price within the range. Requests outside the standard come to you. While it is on, customer messages and their photos are sent to Anthropic (Claude) to answer them.",
         "autoReplyInvalid": "Enter both amounts; the lower one cannot be above the higher one."
       }

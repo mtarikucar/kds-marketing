@@ -335,6 +335,14 @@ async fn auto_reply_of(
         price,
         quote_valid_days: stored.map_or(AUTO_QUOTE_VALID_DAYS, |a| a.quote_valid_days),
         enabled_at,
+        // Stored only when off: none is on.
+        notify_email: match input
+            .notify_email
+            .or_else(|| stored.and_then(|a| a.notify_email))
+        {
+            Some(false) => Some(false),
+            _ => None,
+        },
     }))
 }
 

@@ -4479,6 +4479,7 @@
       "stopped": "{{n}} reklam kampanyası yeni sınıra ulaştığı için durdu.",
       "autoReplyOn": "Mesajlara otomatik yanıt: {{channels}} · {{min}}–{{max}}.",
       "autoReplyWaiting": "Mesajlara otomatik yanıt, “Standart iş ve fiyat” kartı dolunca başlar.",
+      "notifyOn": "E-posta bildirimi: {{from}}",
       "autoReplyNoKey": "Mesajlara otomatik yanıt kapalı: sunucuda Claude anahtarı yok.",
       "dialog": {
         "help": "Bütçeyi, mesaj sınırını ve onayı sistem uygular; yasakları ajanlar her işte okur ve uyar.",
@@ -4506,6 +4507,7 @@
         "autoReplyNoKey": "Sunucuda Claude anahtarı yok, otomatik yanıt kapalı.",
         "autoReplyMin": "En az",
         "autoReplyMax": "En çok",
+        "notify": "Devir ve siparişleri e-postayla bildir",
         "autoReplyHelp": "Fiyatı nasıl vereceğini “Standart iş ve fiyat” kartına yaz. Standart dışı istekler sana gelir. Açıkken müşteri mesajları ve fotoğrafları yanıt için Anthropic’e (Claude) gönderilir.",
         "autoReplyInvalid": "En az ve en çok tutarı yaz; en az, en çoktan büyük olamaz."
       }

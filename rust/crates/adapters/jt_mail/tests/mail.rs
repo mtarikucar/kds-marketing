@@ -1806,6 +1806,50 @@ fn unsubscribe() -> jt_app::ports::connectors::ListUnsubscribe {
 }
 
 #[tokio::test]
+async fn a_machines_message_says_so_and_asks_for_no_automatic_answer() {
+    use mailparse::MailHeaderMap;
+    let (port, task) = smtp(SmtpMode::default()).await;
+    let mut msg = message();
+    msg.auto_submitted = true;
+    connector()
+        .send(workspace(), &credential(port, 993, MailTls::Implicit), msg)
+        .await
+        .unwrap();
+    let wire = task.await.unwrap();
+    let parsed = mailparse::parse_mail(&wire).unwrap();
+    assert_eq!(
+        parsed.headers.get_first_value("Auto-Submitted").unwrap(),
+        "auto-generated"
+    );
+    assert_eq!(
+        parsed
+            .headers
+            .get_first_value("X-Auto-Response-Suppress")
+            .unwrap(),
+        "All"
+    );
+    // A person's message carries neither.
+    let (port, task) = smtp(SmtpMode::default()).await;
+    connector()
+        .send(
+            workspace(),
+            &credential(port, 993, MailTls::Implicit),
+            message(),
+        )
+        .await
+        .unwrap();
+    let wire = task.await.unwrap();
+    let parsed = mailparse::parse_mail(&wire).unwrap();
+    assert!(parsed.headers.get_first_value("Auto-Submitted").is_none());
+    assert!(
+        parsed
+            .headers
+            .get_first_value("X-Auto-Response-Suppress")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn outreach_headers_are_on_the_wire() {
     use mailparse::MailHeaderMap;
     let (port, task) = smtp(SmtpMode::default()).await;

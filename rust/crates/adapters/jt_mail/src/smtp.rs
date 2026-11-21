@@ -268,6 +268,18 @@ fn wire(cred: &MailCred<'_>, mail: &MailMessage) -> Result<Vec<u8>, ConnectorErr
                 "List-Unsubscribe=One-Click".to_owned(),
             ));
     }
+    if mail.auto_submitted {
+        // RFC 3834: a machine's message; and Exchange's switch for its automatic answers.
+        builder = builder
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("Auto-Submitted"),
+                "auto-generated".to_owned(),
+            ))
+            .raw_header(HeaderValue::new(
+                HeaderName::new_from_ascii_str("X-Auto-Response-Suppress"),
+                "All".to_owned(),
+            ));
+    }
     let text = SinglePart::plain(mail.text.clone());
     let message = if mail.attachments.is_empty() {
         builder.singlepart(text)

@@ -121,6 +121,18 @@ export interface AutoReplyView {
   price: PriceRange | null;
   /** The WhatsApp numbers they can be turned on for. */
   accounts: ApprovalAccount[];
+  /** The owner's email notices of a hand-over or an order. */
+  notify: NotifyView;
+}
+
+/** `read::NotifyView`: the owner's email notices. */
+export interface NotifyView {
+  /** A verified mailbox exists: the notices can go out. */
+  available: boolean;
+  /** They are on (the default). */
+  on: boolean;
+  /** The address they go out from. */
+  from: string | null;
 }
 
 /** `jt_knowledge::AutoReplyInput`: the numbers and the range (left out: the stored one). */
@@ -128,6 +140,8 @@ export interface AutoReplyInput {
   capability_ids: Uuid[];
   min_minor?: number;
   max_minor?: number;
+  /** The owner's email notices on or off; left out: as stored. */
+  notify_email?: boolean;
 }
 
 /** `KnowledgeOut.goals`: "Hedefler". */

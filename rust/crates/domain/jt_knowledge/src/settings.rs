@@ -285,6 +285,10 @@ pub struct AutoReply {
     /// from before.
     #[serde(default)]
     pub enabled_at: std::collections::BTreeMap<Uuid, OffsetDateTime>,
+    /// Whether the owner is told by email of a hand-over or an order (`usecases::inbox::notices`):
+    /// `Some(false)` only when turned off; none is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify_email: Option<bool>,
 }
 
 fn default_valid_days() -> u32 {
@@ -295,6 +299,11 @@ impl AutoReply {
     /// Whether the replies are on for capability `id`.
     pub fn serves(&self, id: Uuid) -> bool {
         self.capability_ids.contains(&id)
+    }
+
+    /// Whether the owner's email notices are on (they are unless turned off).
+    pub fn notifies(&self) -> bool {
+        self.notify_email != Some(false)
     }
 }
 
@@ -308,6 +317,9 @@ pub struct AutoReplyInput {
     pub min_minor: Option<i64>,
     #[serde(default)]
     pub max_minor: Option<i64>,
+    /// The owner's email notices on or off; none keeps the stored setting.
+    #[serde(default)]
+    pub notify_email: Option<bool>,
 }
 
 /// `Ok` with the range `input` gives (none when it gives none): `0 < min <= max <=`
@@ -373,6 +385,7 @@ mod auto_reply_tests {
             capability_ids: (0..ids).map(|_| Uuid::now_v7()).collect(),
             min_minor: min,
             max_minor: max,
+            notify_email: None,
         }
     }
 
@@ -410,6 +423,7 @@ mod auto_reply_tests {
             capability_ids: vec![id, id],
             min_minor: Some(1),
             max_minor: Some(2),
+            notify_email: None,
         };
         assert_eq!(reason(&twice), "duplicate");
         assert_eq!(

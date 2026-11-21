@@ -64,6 +64,7 @@ use crate::ctx::Ctx;
 use crate::error::{AppError, ErrorCode};
 use crate::ports::TenantRepos;
 use crate::ports::compliance::QuoteRow;
+use crate::ports::notices::NoticeKind;
 use crate::ports::reply_model::*;
 use crate::usecases::Deps;
 use crate::usecases::connector::{adapter_public, open_credential};
@@ -634,6 +635,8 @@ pub async fn run(deps: &Deps, now: OffsetDateTime) -> JobReport {
                 }
             }
         }
+        // The owner's notices of this turn's hand-overs.
+        super::notices::send_queued(deps, ws, deps.clock.now().max(now)).await;
     }
     report
 }
@@ -661,6 +664,8 @@ pub async fn reconcile(deps: &Deps, now: OffsetDateTime, deadline: std::time::In
         if std::time::Instant::now() >= deadline {
             return;
         }
+        // The owner's notices left queued (a failed send, a crash after the hand-over).
+        super::notices::send_queued(deps, ws, now).await;
         let found = async {
             let mut r = deps.uow.tenant(ws).await?;
             let Some(auto) = r.knowledge().settings().await?.and_then(|s| s.auto_reply) else {
@@ -1017,7 +1022,8 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 .open_for(c.person_id)
                 .await?
                 .and_then(|j| j.owner);
-            r.conversations()
+            let generation = r
+                .conversations()
                 .update_executor(c.id, Executor::Human { user_id: owner })
                 .await?;
             record(
@@ -1027,6 +1033,16 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 "conversation",
                 c.id,
                 json!({ "run_id": null, "reason": "failed", "by": By::Server.key() }),
+            )
+            .await?;
+            super::notices::queue_in(
+                deps,
+                ctx,
+                r.as_mut(),
+                NoticeKind::HandedOver,
+                c.id,
+                format!("handed_over:{}:{generation}", c.id),
+                Some("failed"),
             )
             .await?;
         }
@@ -1973,6 +1989,17 @@ async fn hand_over(
         "conversation",
         c.id,
         json!({ "run_id": h.run_id, "reason": h.reason, "by": h.by.key() }),
+    )
+    .await?;
+    // The owner is told by email, once for this hand-over.
+    super::notices::queue_in(
+        deps,
+        ctx,
+        r,
+        NoticeKind::HandedOver,
+        c.id,
+        format!("handed_over:{}:{generation}", c.id),
+        Some(h.reason),
     )
     .await?;
     let year = ctx.now.year();

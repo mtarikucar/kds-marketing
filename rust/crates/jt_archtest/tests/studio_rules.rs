@@ -225,8 +225,8 @@ async fn studio_exact_catalog_and_gate_set() {
     // the workspace module registry of 0032, the account snapshots of 0037_social_accounts and
     // the ad campaigns of 0040_ads_campaigns, the agents' wake rows of 0045_agent_wake, and the
     // five knowledge base tables of 0046_knowledge_base, and the automatic replies' queue and runs
-    // of 0047_inbox_auto_reply.
-    assert_eq!(all_tables.len(), 114);
+    // of 0047_inbox_auto_reply, and the owner's notices of 0049_owner_notices.
+    assert_eq!(all_tables.len(), 115);
 
     // All 26 Studio tables are tenant-scoped, including intelligence and productions.
     assert_eq!(

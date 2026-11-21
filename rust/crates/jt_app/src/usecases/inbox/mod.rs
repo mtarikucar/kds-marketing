@@ -12,6 +12,7 @@ pub mod journeys;
 mod leadgen;
 pub mod merge;
 mod moderation;
+pub mod notices;
 pub mod people;
 pub mod public;
 pub mod quotes;

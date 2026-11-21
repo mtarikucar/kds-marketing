@@ -148,6 +148,19 @@ pub struct AutoReplyView {
     pub price: Option<jt_knowledge::PriceRange>,
     /// The live capabilities they can be turned on for (WhatsApp numbers), named.
     pub accounts: Vec<AccountRef>,
+    /// The owner's email notices of a hand-over or an order (`inbox::notices`).
+    pub notify: NotifyView,
+}
+
+/// The owner's email notices as the rules show them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct NotifyView {
+    /// A verified mailbox exists: the notices can go out.
+    pub available: bool,
+    /// They are on (the default).
+    pub on: bool,
+    /// The address they go out from: the mailbox's.
+    pub from: Option<String>,
 }
 
 /// A social account the rules name.
@@ -413,6 +426,14 @@ fn rules_view(
                 kind: c.kind_key.clone(),
             })
             .collect(),
+        notify: {
+            let mailbox = crate::usecases::inbox::notices::mailbox(capabilities);
+            NotifyView {
+                available: mailbox.is_some(),
+                on: s.auto_reply.as_ref().is_none_or(|a| a.notifies()),
+                from: mailbox.and_then(|m| m.external_id.clone()),
+            }
+        },
     };
     let post_approval_accounts = s
         .post_approval_accounts

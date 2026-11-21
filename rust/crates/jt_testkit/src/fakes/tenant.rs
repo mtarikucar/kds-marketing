@@ -285,6 +285,10 @@ impl TenantRepos for MemTenant {
         self
     }
 
+    fn notices(&mut self) -> &mut dyn jt_app::ports::notices::NoticeRepo {
+        self
+    }
+
     async fn savepoint(&mut self) -> Result<(), AppError> {
         self.tx.savepoint();
         Ok(())
