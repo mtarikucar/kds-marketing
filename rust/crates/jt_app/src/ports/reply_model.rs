@@ -610,7 +610,8 @@ pub trait AutoReplyRepo: Send + Sync {
     /// [`AutoReplyRepo::order_get`], locked until the bundle ends.
     async fn order_lock(&mut self, id: Uuid) -> Result<Option<OrderRow>, AppError>;
     /// Updates the order's state, reason, reference, link, finish time, run, confirmation fields,
-    /// call time and generation; `NOT_FOUND` for an unknown id.
+    /// call time, generation and the quote it orders (its id, amount and currency); `NOT_FOUND`
+    /// for an unknown id.
     async fn order_save(&mut self, row: &OrderRow) -> Result<(), AppError>;
     /// How many orders shop `shop` was asked for at `since` or later: every row but those still
     /// `Confirming` (the shop never asked), counted from when the shop was asked.

@@ -572,19 +572,29 @@ pub const YES_MESSAGES: &[&str] = &[
     "okey",
 ];
 
-/// Whether `c` is decoration around a message: an emoji, a variation selector, a skin tone or a
-/// joiner.
+/// The decorations a yes may carry around it: a few affirming or neutral emoji (👍 ✅ ✔ 👌 🙏 🙂
+/// 😊 ❤), their skin tones and variation selectors. Any other emoji or symbol keeps a message from
+/// being a yes.
 fn decoration(c: char) -> bool {
-    let cp = c as u32;
-    matches!(cp, 0x200D | 0xFE0E | 0xFE0F | 0x20E3)
-        || (0x1F000..=0x1FAFF).contains(&cp)
-        || (0x2600..=0x27BF).contains(&cp)
-        || (0x1F3FB..=0x1F3FF).contains(&cp)
+    matches!(
+        c as u32,
+        0x1F44D
+            | 0x2705
+            | 0x2714
+            | 0x1F44C
+            | 0x1F64F
+            | 0x1F642
+            | 0x1F60A
+            | 0x2764
+            | 0xFE0E
+            | 0xFE0F
+    ) || (0x1F3FB..=0x1F3FF).contains(&(c as u32))
 }
 
 /// Whether `text` (a customer's message after the summary) is an explicit yes: the whole message,
-/// in Turkish lower case with only the surrounding whitespace and emoji and the trailing `.`, `!`
-/// and `,` taken off (whitespace inside collapsed), is one of [`YES_MESSAGES`]. A message with a
+/// in Turkish lower case with only the surrounding whitespace, the few decorations a yes may carry
+/// (👍 ✅ ✔ 👌 🙏 🙂 😊 ❤) and the trailing `.`, `!` and `,` taken off (whitespace inside
+/// collapsed), is one of [`YES_MESSAGES`]. A message with a
 /// `?` anywhere is never a yes, and nothing else is. Decided by the server alone.
 pub fn explicit_yes(text: &str) -> bool {
     if text.contains('?') || text.contains('？') {
@@ -1080,6 +1090,11 @@ mod tests {
             "evet,",
             "Evet 👍",
             "👍 evet",
+            "evet ✅",
+            "tamam 👌",
+            "Evet 🙏🏻",
+            "olur 🙂",
+            "evet ❤️",
             "  tamam  ",
             "evet   doğru",
             "Evet, onaylıyorum.",
@@ -1110,6 +1125,12 @@ mod tests {
             "Siparişi verirken evet demek istiyorum ama kargo ücreti ne kadar acaba",
             "evet evet",
             "evettt",
+            "evet 👎",
+            "tamam ❌",
+            "evet 😡",
+            "olur 🤔",
+            "evet ⚠️",
+            "evet 👍 ama",
         ] {
             assert!(!explicit_yes(not), "{not}");
         }

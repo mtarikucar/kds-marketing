@@ -3213,7 +3213,7 @@ async fn without_the_journeys_one_automatic_valid_quote_nothing_is_ordered() {
     assert!(shop.calls().is_empty());
     assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["quote_expired"]);
 
-    // A second quote beside the automatic one.
+    // A quote a person gave beside the automatic one.
     let mut t = setup().await;
     let shop = with_shop(&mut t).await;
     quoted_then_accepted(&t).await;
@@ -3225,7 +3225,11 @@ async fn without_the_journeys_one_automatic_valid_quote_nothing_is_ordered() {
     t.model.answer(create_order(fields(), ""));
     job(&t, due(60)).await;
     assert!(shop.calls().is_empty());
-    assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["quote_ambiguous"]);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.refused"),
+        ["no_auto_quote"],
+        "a quote no automatic run gave is a person's"
+    );
 }
 
 #[tokio::test]
@@ -3622,4 +3626,170 @@ async fn a_bare_number_from_the_team_is_a_price_and_a_date_time_or_phone_is_not(
             assert_eq!(texts_sent(&t), ["Teklifimiz 1.250 TL."], "{body}");
         }
     }
+}
+
+/// Supersedes the journey's quote with a new automatic one of `amount_minor` at `at`, delivered:
+/// the old one becomes `Expired`.
+fn supersede_quote(t: &T, amount_minor: i64, at: OffsetDateTime) -> Uuid {
+    let new = Uuid::now_v7();
+    let ws = t.w.ws;
+    let conversation = conversation(t).id;
+    let capability = t.cap;
+    t.w.uow.edit(move |st| {
+        let mut q = st.inbox.quotes[0].clone();
+        st.inbox.quotes[0].quote.state = QuoteState::Expired;
+        q.id = new;
+        q.created_at = at;
+        q.quote.amount_minor = amount_minor;
+        q.quote.state = QuoteState::Sent;
+        let journey = q.quote.journey_id;
+        st.inbox.quotes.push(q);
+        st.auto_reply.runs.push((
+            ws,
+            RunRow {
+                id: Uuid::now_v7(),
+                conversation_id: conversation,
+                capability_id: capability,
+                at,
+                model: "scripted-model".into(),
+                outcome: RunOutcome::Quoted,
+                reason: None,
+                usage: Usage::default(),
+                outbox_id: None,
+                quote_id: Some(new),
+            },
+        ));
+        st.inbox.events.push(JourneyEvent {
+            id: JourneyEventId::new_v7(),
+            workspace_id: ws,
+            journey_id: journey,
+            source: EventSource::System,
+            idempotency_key: format!("quote:{new}:sent"),
+            kind: JourneyEventKind::QuoteSent,
+            reason_label: None,
+            at,
+        });
+    });
+    new
+}
+
+#[tokio::test]
+async fn a_quote_superseded_during_the_confirmation_is_what_the_order_uses() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    summarised(&t).await;
+    assert!(texts_sent(&t)[1].contains("Tutar: 1.500 TRY"));
+    // The price is lowered (a new automatic quote): a yes to the old summary orders nothing, and
+    // the new summary names the new amount.
+    let new = supersede_quote(&t, 140_000, due(60) + Duration::seconds(30));
+    answered(&t, "Evet", 120, fields(), "").await;
+    assert!(shop.calls().is_empty());
+    let order = &orders(&t)[0];
+    assert_eq!(order.quote_id, new);
+    assert_eq!(order.amount_minor, 140_000);
+    assert!(texts_sent(&t)[2].contains("Tutar: 1.400 TRY"));
+    // The yes to that summary: the shop is asked for the new amount, and checked against it.
+    created(&shop, "SHOP-0010", 140_000);
+    answered(&t, "Evet", 180, fields(), "").await;
+    let calls = shop.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(
+        calls[0].arguments["body"]["lineItems"][0]["unitPrice"],
+        json!(1400)
+    );
+    let order = &orders(&t)[0];
+    assert_eq!(order.state, OrderState::Created);
+    assert_eq!(order.amount_minor, 140_000);
+}
+
+/// A customer's message `body` with the provider's time `occurred` but received by the server at
+/// `received`, consumed at `consumed`.
+async fn inbound_received_at(
+    t: &T,
+    wamid: &str,
+    body: &str,
+    occurred: OffsetDateTime,
+    received: OffsetDateTime,
+    consumed: OffsetDateTime,
+) {
+    let mut draft = meta_drafts("whatsapp_messages").remove(0);
+    draft.payload["message"]["id"] = json!(wamid);
+    draft.payload["message"]["text"]["body"] = json!(body);
+    draft.external_id = wamid.to_owned();
+    draft.payload["occurred_at"] = json!(occurred.format(&Rfc3339).unwrap());
+    put(t, draft, received).await;
+    let report = jobs::run_inbox_consume(&t.w.deps, consumed).await;
+    assert_eq!(report.failed, 0, "{report:?}");
+}
+
+#[tokio::test]
+async fn a_yes_the_server_received_before_the_summary_went_out_is_no_answer() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    summarised(&t).await;
+    // The provider's time says a second after the send; the server had it before the send.
+    let sent = due(60);
+    inbound_received_at(
+        &t,
+        "wamid.TEST-EARLY-1",
+        "tamam",
+        sent + Duration::seconds(1),
+        sent - Duration::seconds(3),
+        consumed_at(90),
+    )
+    .await;
+    t.model.answer(create_order(fields(), ""));
+    t.meta.push_send_text(order_receipt(90));
+    job(&t, consumed_at(90) + AUTOREPLY_SETTLE).await;
+    assert!(shop.calls().is_empty());
+    assert_eq!(orders(&t)[0].state, OrderState::Confirming);
+}
+
+#[tokio::test]
+async fn a_customer_message_during_the_shops_call_does_not_hold_back_the_link() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    summarised(&t).await;
+    // "Teşekkürler" arrives while the shop is asked.
+    let (deps, uow, ws, cap) = (t.w.deps.clone(), t.w.uow.clone(), t.w.ws, t.cap);
+    shop.during_next(move || async move {
+        let mut draft = meta_drafts("whatsapp_messages").remove(0);
+        let at = FIXED_NOW_T + Duration::seconds(130);
+        draft.payload["message"]["id"] = json!("wamid.TEST-THANKS-1");
+        draft.payload["message"]["text"]["body"] = json!("Teşekkürler");
+        draft.external_id = "wamid.TEST-THANKS-1".into();
+        draft.payload["occurred_at"] = json!(at.format(&Rfc3339).unwrap());
+        let mut r = uow.tenant(ws).await.unwrap();
+        r.inbound_events()
+            .insert_if_new(
+                InboundEvent {
+                    id: InboundEventId::new_v7(),
+                    workspace_id: ws,
+                    capability_id: Some(cap),
+                    provider: Provider::Meta,
+                    external_id: draft.external_id,
+                    kind: draft.kind,
+                    payload: draft.payload,
+                    received_at: at,
+                    processed_at: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+        jobs::run_inbox_consume(&deps, at + Duration::seconds(1)).await;
+    });
+    created(&shop, "SHOP-0011", 150_000);
+    answered(&t, "Evet", 120, fields(), "").await;
+    assert_eq!(orders(&t)[0].state, OrderState::Created);
+    let sent = texts_sent(&t);
+    assert!(
+        sent.last().unwrap().ends_with(&pay_url("SHOP-0011")),
+        "the link goes out: {sent:?}"
+    );
+    assert_eq!(conversation(&t).executor, Executor::Agent);
 }

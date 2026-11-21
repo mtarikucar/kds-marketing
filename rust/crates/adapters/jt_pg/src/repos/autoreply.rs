@@ -571,7 +571,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let done = sqlx::query(
             "update auto_reply_orders set state = $3, reason = $4, reference = $5, pay_url = $6, \
              finished_at = $7, run_id = $8, confirm_hash = $9, summary_outbox_id = $10, \
-             summaries = $11, called_at = $12, generation = $13 where workspace_id = $1 and id = $2",
+             summaries = $11, called_at = $12, generation = $13, quote_id = $14, \
+             amount_minor = $15, currency = $16 where workspace_id = $1 and id = $2",
         )
         .bind(ws.as_uuid())
         .bind(row.id)
@@ -586,6 +587,9 @@ impl AutoReplyRepo for PgTenantRepos {
         .bind(summaries)
         .bind(row.called_at)
         .bind(generation)
+        .bind(row.quote_id)
+        .bind(row.amount_minor)
+        .bind(&row.currency)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "update an automatic reply's order"))?;

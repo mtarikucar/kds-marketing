@@ -343,6 +343,9 @@ impl AutoReplyRepo for MemTenant {
                         o.summaries = row.summaries;
                         o.called_at = row.called_at;
                         o.generation = row.generation;
+                        o.quote_id = row.quote_id;
+                        o.amount_minor = row.amount_minor;
+                        o.currency = row.currency.clone();
                     }
                 }
             });

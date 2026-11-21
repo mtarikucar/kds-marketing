@@ -263,22 +263,29 @@ fn checked_line(
     Ok(Some(line.to_owned()))
 }
 
-/// The journey's one automatic, delivered, valid quote in `currency`, or why there is none.
+/// The journey's current quote, or why there is none: every quote of the journey automatic, the
+/// latest one not expired, delivered, still valid and in `currency`.
 async fn order_quote(
     r: &mut dyn TenantRepos,
     journey: JourneyId,
     currency: &str,
     now: OffsetDateTime,
 ) -> Result<Result<QuoteRow, &'static str>, AppError> {
-    let mut quotes = r.quotes().list(journey).await?;
-    let q = match quotes.len() {
-        0 => return Ok(Err("no_auto_quote")),
-        1 => quotes.remove(0),
-        _ => return Ok(Err("quote_ambiguous")),
-    };
-    if r.auto_reply().run_by_quote(q.id).await?.is_none() {
-        return Ok(Err("no_auto_quote"));
+    let quotes = r.quotes().list(journey).await?;
+    // A quote a person gave (no automatic run for it) leaves the price to the person.
+    for q in &quotes {
+        if r.auto_reply().run_by_quote(q.id).await?.is_none() {
+            return Ok(Err("no_auto_quote"));
+        }
     }
+    // The current price: the latest automatic quote not superseded.
+    let Some(q) = quotes
+        .into_iter()
+        .filter(|q| q.quote.state != QuoteState::Expired)
+        .max_by_key(|q| (q.created_at, q.id))
+    else {
+        return Ok(Err("no_auto_quote"));
+    };
     if r.journeys()
         .event_by_key(&format!("quote:{}:sent", q.id))
         .await?
@@ -412,13 +419,35 @@ async fn person_after_summary(r: &mut dyn TenantRepos, o: &OrderRow) -> Result<b
     Ok(person_wrote(&messages, shown.at))
 }
 
+/// Whether anything was written to the customer in order `o`'s conversation (by anyone, queued or
+/// sent) after its summary, the summary itself aside.
+async fn outbound_after_summary(r: &mut dyn TenantRepos, o: &OrderRow) -> Result<bool, AppError> {
+    let Some(summary) = o.summary_outbox_id else {
+        return Ok(true);
+    };
+    let Some(row) = r.outbox().get(summary).await? else {
+        return Ok(true);
+    };
+    let Some(shown) = r.messages().get(row.message_id).await? else {
+        return Ok(true);
+    };
+    let messages = r
+        .messages()
+        .recent(o.conversation_id, ORDER_HISTORY)
+        .await?;
+    Ok(messages
+        .iter()
+        .any(|m| m.direction == Direction::Outbound && m.id != shown.id && m.at > shown.at))
+}
+
 /// What the customer made of the summary queued as outbox row `summary` (see [`Answer`]): it
-/// counts only once its send succeeded; then every customer message after that send must be an
-/// explicit yes, and no person on the team may have written after it was queued.
+/// counts only once its send succeeded; then every customer message the server received after that
+/// send must be an explicit yes, and no person on the team may have written after it was queued.
 async fn answer_to(
     r: &mut dyn TenantRepos,
     messages: &[Message],
     summary: Option<Uuid>,
+    provider: Option<jt_connector::Provider>,
 ) -> Result<Answer, AppError> {
     let Some(summary) = summary else {
         return Ok(Answer::NotConfirmed);
@@ -436,10 +465,25 @@ async fn answer_to(
         return Ok(Answer::NotConfirmed);
     }
     let since = sent_at(&row);
-    let after: Vec<&Message> = messages
+    // Both on the server's clock: when the server received each customer message (its inbound
+    // event), strictly after the send. A message without a known receipt is no answer.
+    let mut after: Vec<&Message> = Vec::new();
+    for m in messages
         .iter()
-        .filter(|m| m.direction == Direction::Inbound && m.at > since)
-        .collect();
+        .filter(|m| m.direction == Direction::Inbound && m.at > since - Duration::days(1))
+    {
+        let received = match (provider, &m.external_id) {
+            (Some(provider), Some(id)) => r
+                .inbound_events()
+                .find_external(provider, id)
+                .await?
+                .map(|e| e.received_at),
+            _ => None,
+        };
+        if received.is_some_and(|at| at > since) {
+            after.push(m);
+        }
+    }
     Ok(
         if !after.is_empty() && after.iter().all(|m| order::explicit_yes(&m.body)) {
             Answer::Confirmed
@@ -559,11 +603,15 @@ pub(super) async fn decide(
     drop(fields);
     let arguments = shop_arguments(&shop.template, &checked, &quote);
     let hash = confirm_hash(deps, ctx.workspace_id, &arguments, &quote)?;
-    let same = existing
-        .as_ref()
-        .is_some_and(|o| o.confirm_hash.as_deref() == Some(hash.as_str()));
+    // The same details for the same current quote (a quote superseded meanwhile is a new order).
+    let same = existing.as_ref().is_some_and(|o| {
+        o.confirm_hash.as_deref() == Some(hash.as_str()) && o.quote_id == quote.id
+    });
     let answer = match &existing {
-        Some(o) => answer_to(r, &messages, o.summary_outbox_id).await?,
+        Some(o) => {
+            let provider = jt_connector::provider_for_kind(&c.kind_key);
+            answer_to(r, &messages, o.summary_outbox_id, provider).await?
+        }
         None => Answer::NotConfirmed,
     };
     if answer == Answer::PersonWrote {
@@ -596,6 +644,10 @@ pub(super) async fn decide(
         decided.reason = Some("order_summary".into());
         match existing {
             Some(mut o) => {
+                // What the customer is shown now is what the shop is asked for.
+                o.quote_id = quote.id;
+                o.amount_minor = quote.quote.amount_minor;
+                o.currency = quote.quote.currency.clone();
                 o.confirm_hash = Some(hash);
                 o.summary_outbox_id = Some(outbox);
                 o.run_id = run_id;
@@ -905,14 +957,15 @@ async fn finish_order(
         .send_state(row.conversation_id)
         .await?
         .activity_revision;
+    // Since the confirmation, only more customer messages (nothing written to the customer by
+    // anyone after the summary): the link still goes; anything else leaves it to a person.
+    let moved = activity != s.activity_revision && outbound_after_summary(r.as_mut(), &o).await?;
     let person = person_after_summary(r.as_mut(), &o).await?;
-    // Still the agent's, ours, as when the model was asked (generation and activity), and no person
-    // on the team writing since the summary: only then does anything go out.
     let current = c.filter(|c| {
         c.executor == Executor::Agent
             && c.executor_generation == s.generation
             && c.state == ConvState::Ours
-            && activity == s.activity_revision
+            && !moved
             && !person
     });
     // The conversation as it is, when still the agent's and ours (for a hand-over).
