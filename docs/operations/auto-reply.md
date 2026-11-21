@@ -54,6 +54,12 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   range, and hands over when a photo is unclear or shows something outside the standard. The
   server's check on the answer stays text-only.
 - It answers through one tool: a reply, a quote, or a hand-over to a person.
+- It never says or implies it is a person. Asked whether the customer is talking to a person, a bot
+  or an AI, it says in one short sentence that it is the business's automatic assistant and that a
+  person from the team can take over whenever the customer wants; it does not say so unprompted. A
+  customer who then asks for a person is handed over (`asks_for_person`). It writes short, everyday
+  messages in the customer's language, with at most one emoji and at most three short questions at
+  a time. The server's check never refuses a message for saying it is the automatic assistant.
 - The server checks every answer. A reply (and a hand-over's line) is first normalised (NFKC,
   zero-width and other format characters removed, every script's digits as ASCII, Turkish lower
   case); then every digit sequence is refused unless it is a date, a clock time, a phone number,
