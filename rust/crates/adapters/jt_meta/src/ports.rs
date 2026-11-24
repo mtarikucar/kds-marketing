@@ -14,7 +14,7 @@ use jt_app::ports::connectors::{
     PrivateReceipt, PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest,
     Publisher, Scheduled, SendReceipt, SubjectFacts,
 };
-use jt_app::ports::connectors::{OwnPostsPage, OwnPostsQuery};
+use jt_app::ports::connectors::{OwnPostsPage, OwnPostsQuery, PostImage};
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
 use serde_json::Value;
@@ -212,7 +212,7 @@ impl InsightsReader for MetaConnector {
         post_id: &str,
         index: u32,
         max_bytes: usize,
-    ) -> Result<Option<Media>, ConnectorError> {
+    ) -> Result<Option<PostImage>, ConnectorError> {
         own_posts::own_post_image(self, cred, public, post_id, index, max_bytes).await
     }
 }

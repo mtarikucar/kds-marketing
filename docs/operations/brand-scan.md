@@ -141,6 +141,7 @@ knowledge page.
 | | `VALIDATION` with `provider_error: auth` | the platform no longer accepts the login: the owner reconnects the account |
 | | `UPSTREAM_UNAVAILABLE` (`retry_after_s`) | the platform is busy: wait and try again later |
 | | `VALIDATION not_a_cursor`, or `VALIDATION` with `provider_error: permanent` on a call with a `cursor` | the cursor is not one the platform takes (it may have expired): list again from the first page, without a cursor |
+| `social.own_post_image` | `CONFLICT post_not_the_accounts` | Jeeta found the post is not the connected account's own (its details say what was compared): use only `post_id`s of `jeeta.social.own_posts` for the same `capability_id`; if it happens with one, tell the owner |
 | | `FORBIDDEN` (`social.work`) | the key lacks `social.work`: the scan cannot run with it; tell the owner |
 | `strategy.proposal_create` | `CONFLICT card_exists` | the card is live: propose a `card_edit` of the card it names |
 | | `CONFLICT proposal_exists` | the same proposal already waits for the owner: stop |

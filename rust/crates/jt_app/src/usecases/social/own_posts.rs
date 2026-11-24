@@ -10,7 +10,9 @@
 //! - `social.own_post_image` (`jeeta.social.own_post_image`): the image of one of those posts
 //!   (a carousel's item by `index`, a video's cover), read from the platform now, so an agent can
 //!   look at it: a platform's own image address expires, so none is handed out to be kept.
-//!   Instagram only; TikTok is `CONFLICT` `own_post_image_not_supported`.
+//!   Instagram only; TikTok is `CONFLICT` `own_post_image_not_supported`. A post the adapter finds
+//!   is not the connected account's (its owner is none of the account's ids, nor its username the
+//!   account's) is `CONFLICT` `post_not_the_accounts`, details saying what was compared, no id.
 //!
 //! Both read on demand and store nothing: no caption, image or counter is kept, ledgered or
 //! logged. The account is checked as every connector read is (`chain::capability_access`): a
@@ -32,8 +34,10 @@ use time::OffsetDateTime;
 use url::Url;
 
 use crate::ctx::Ctx;
-use crate::error::AppError;
-use crate::ports::connectors::{InsightsReader, OwnPost, OwnPostKind, OwnPostsQuery, Unavailable};
+use crate::error::{AppError, ErrorCode};
+use crate::ports::connectors::{
+    InsightsReader, OwnPost, OwnPostKind, OwnPostsQuery, PostImage, Unavailable,
+};
 use crate::ports::{CapabilityFilter, TenantRepos};
 use crate::usecases::Deps;
 use crate::usecases::connector::{adapter_public, open_credential, provider_error};
@@ -321,6 +325,25 @@ pub async fn own_post_image(
             None => AppError::internal("a reader without a provider"),
         })?
         .ok_or_else(|| refuse("own_post_image_not_supported"))?;
+    let media = match media {
+        PostImage::Image(media) => media,
+        // Jeeta's own check refused it, not the platform: say what was compared, never an id.
+        PostImage::NotTheAccounts(check) => {
+            return Err(AppError {
+                code: ErrorCode::Conflict,
+                message: "the post is not the connected account's own".into(),
+                details: json!({
+                    "reason": "post_not_the_accounts",
+                    "matched": "none",
+                    "owner_id_present": check.owner_id_present,
+                    "username_present": check.username_present,
+                    "account_ids_compared": check.account_ids,
+                    "account_username_present": check.account_username_present,
+                    "identity_read": check.identity_read,
+                }),
+            });
+        }
+    };
     if !matches!(
         media.mime.as_str(),
         "image/jpeg" | "image/png" | "image/webp" | "image/gif"
