@@ -608,7 +608,9 @@ async fn pending_as_seen(
             .map(|row| (row.material_id, row))
             .collect();
         for material in repos.studio_materials().list_materials().await? {
+            // A composed material is created analysed (`studio.post_render`): never work.
             if material.erased_at.is_none()
+                && material.composition.is_none()
                 && records
                     .get(&material.id)
                     .is_none_or(|row| row.claimable(ctx.now))

@@ -57,8 +57,36 @@ async fn upload(w: &World, key: &str, seed: u8) -> FileId {
     .id
 }
 
-/// A real, shareable, publishable photo of a confirmed olay, added by the owner.
+/// Marks `id`'s analysis complete, as an agent's completion would.
+async fn analysed(w: &World, id: MaterialId) {
+    use jt_app::ports::{
+        UnitOfWork,
+        materials::{AnalysisStatus, DateSource, MaterialAnalysisRecord},
+    };
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let m = r
+        .studio_materials()
+        .get_material(id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut row = MaterialAnalysisRecord::pending(id, w.ctx.now, DateSource::Unknown);
+    row.intelligence.status = AnalysisStatus::Completed;
+    row.intelligence.analyzed_revision = Some(m.revision);
+    row.intelligence.analyzed_at = Some(w.ctx.now);
+    r.studio_materials().save_intelligence(row).await.unwrap();
+    r.commit().await.unwrap();
+}
+
+/// A real, shareable, publishable photo of a confirmed olay, added by the owner and analysed.
 async fn real_photo(w: &World, key: &str, seed: u8, olay: OlayId) -> Material {
+    let m = unanalysed_photo(w, key, seed, olay).await;
+    analysed(w, m.id).await;
+    m
+}
+
+/// [`real_photo`] before its analysis.
+async fn unanalysed_photo(w: &World, key: &str, seed: u8, olay: OlayId) -> Material {
     let file = upload(w, &format!("f-{key}"), seed).await;
     library::material_add(
         &w.d,
@@ -152,6 +180,7 @@ async fn an_ai_source_makes_the_composition_ai_generated() {
     .await
     .unwrap()
     .material;
+    analysed(&w, ai.id).await;
     let out = render::post_render(
         &w.d,
         &w.ctx,
@@ -519,6 +548,7 @@ async fn share_people_and_the_ai_flag_come_from_the_sources() {
     .await
     .unwrap()
     .material;
+    analysed(&w, b.id).await;
     let pair = render::post_render(
         &w.d,
         &w.ctx,
@@ -549,6 +579,7 @@ async fn share_people_and_the_ai_flag_come_from_the_sources() {
     .await
     .unwrap()
     .material;
+    analysed(&w, logo.id).await;
     render::brand_set(
         &w.d,
         &w.ctx,
@@ -759,6 +790,7 @@ async fn compositions_follow_their_sources() {
     .await
     .unwrap()
     .material;
+    analysed(&w, face.id).await;
     let g1 = render_from(&w, "g1", "cover", "full_top", face.id)
         .await
         .unwrap()
@@ -906,6 +938,13 @@ async fn an_analysis_marker_reaches_the_compositions() {
         .material;
     assert!(c.tags.depicts.is_empty() && c.share.is_some());
     let a = agent_of(&w);
+    library::material_analysis_retry(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":s.id,"expected_revision":material(&w, s.id).revision})),
+    )
+    .await
+    .unwrap();
     let current = material(&w, s.id);
     let claim = library::material_analysis_claim(
         &w.d,
@@ -928,4 +967,170 @@ async fn an_analysis_marker_reaches_the_compositions() {
     let after = material(&w, c.id);
     assert!(after.tags.depicts.contains(&Depicts::Face));
     assert!(after.share.is_none());
+}
+
+/// The materials the agent's work list asks to analyse.
+async fn analysis_items(w: &World) -> Vec<MaterialId> {
+    jt_app::usecases::work::pending(&w.d, &w.ctx)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .filter_map(|i| match i.kind {
+            jt_app::usecases::work::WorkKind::StudioMaterialAnalysis { material_id, .. } => {
+                Some(material_id)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A render is created analysed: it never becomes analysis work, its analysis keeps what it took
+/// from its sources (their group, their labels and markers) as its own, and no agent may claim or
+/// requeue it.
+#[tokio::test]
+async fn a_render_is_created_analysed_and_is_no_analysis_work() {
+    let w = world().await;
+    let o = olay(&w).await;
+    let s = real_photo(&w, "s", 1, o).await;
+    {
+        use jt_app::ports::UnitOfWork;
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        let mut row = r
+            .studio_materials()
+            .get_intelligence(s.id)
+            .await
+            .unwrap()
+            .unwrap();
+        row.intelligence.group_name = Some("Masa düzeni".into());
+        r.studio_materials().save_intelligence(row).await.unwrap();
+        r.commit().await.unwrap();
+    }
+    let c = render_from(&w, "c", "cover", "full_top", s.id)
+        .await
+        .unwrap()
+        .material;
+    assert!(!analysis_items(&w).await.contains(&c.id));
+    let out = library::material_intelligence_get(&w.d, &w.ctx, input(json!({"material_id":c.id})))
+        .await
+        .unwrap();
+    use jt_app::ports::materials::AnalysisStatus;
+    assert_eq!(out.intelligence.status, AnalysisStatus::Completed);
+    assert_eq!(out.intelligence.group_name.as_deref(), Some("Masa düzeni"));
+    assert_eq!(out.intelligence.analyzed_revision, Some(c.revision));
+    for field in ["labels", "quality", "description", "group_name"] {
+        assert!(out.intelligence.manual_fields.contains(field), "{field}");
+    }
+    assert!(out.material.tags.labels.contains("atölye"));
+    assert_eq!(out.material.tags.quality, Some(Quality::Publishable));
+    // No agent analyses it, and no one requeues it for one.
+    let a = agent_of(&w);
+    let e = library::material_analysis_claim(
+        &w.d,
+        &a,
+        input(json!({"material_id":c.id,"expected_revision":c.revision})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "composed_material");
+    let e = library::material_analysis_retry(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":c.id,"expected_revision":c.revision})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "composed_material");
+    assert!(!analysis_items(&w).await.contains(&c.id));
+}
+
+/// A source not analysed yet is refused (retryable): what no one checked for faces, names and
+/// marks is never drawn into a post. Once analysed, the same render goes through.
+#[tokio::test]
+async fn an_unanalysed_source_is_refused_until_its_analysis_is_complete() {
+    let w = world().await;
+    let o = olay(&w).await;
+    let s = unanalysed_photo(&w, "s", 1, o).await;
+    assert!(analysis_items(&w).await.contains(&s.id));
+    let e = render_from(&w, "early", "cover", "full_top", s.id)
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(reason(&e), "source_not_analysed");
+    assert_eq!(e.details["retryable"], json!(true));
+    analysed(&w, s.id).await;
+    render_from(&w, "later", "cover", "full_top", s.id)
+        .await
+        .unwrap();
+}
+
+/// A composition is never more shareable than its sources: it takes the most restrictive
+/// permission, no analysis can widen it (none runs on it), and a source with no permission yet
+/// leaves it with none.
+#[tokio::test]
+async fn a_composition_is_never_more_shareable_than_its_sources() {
+    let w = world().await;
+    let o = olay(&w).await;
+    let a = real_photo(&w, "a", 1, o).await;
+    let file = upload(&w, "f-b", 2).await;
+    let b = library::material_add(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"b","file_id":file,"origin":{"kind":"real"},
+            "olay_id":o,"share":"product_only","quality":"publishable"}),
+        ),
+    )
+    .await
+    .unwrap()
+    .material;
+    analysed(&w, b.id).await;
+    let pair = render::post_render(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"pair","role":"second_cover","variant":"pair_top",
+            "texts":{"heading":"İki görünüm"},
+            "photos":{"photo_1":{"material_id":a.id},"photo_2":{"material_id":b.id}}}),
+        ),
+    )
+    .await
+    .unwrap()
+    .material;
+    assert_eq!(
+        pair.share.as_ref().map(|s| s.permission),
+        Some(SharePermission::ProductOnly)
+    );
+    // An agent's file with no permission yet: the composition has none either.
+    let agent = agent_of(&w);
+    let file = upload(&w, "f-agent", 3).await;
+    let unshared = library::material_add(
+        &w.d,
+        &agent,
+        input(
+            json!({"request_key":"unshared","file_id":file,"origin":{"kind":"real"},
+            "olay_id":o,"quality":"publishable"}),
+        ),
+    )
+    .await
+    .unwrap()
+    .material;
+    assert!(unshared.share.is_none());
+    analysed(&w, unshared.id).await;
+    let c = render_from(&w, "c", "cover", "full_top", unshared.id)
+        .await
+        .unwrap()
+        .material;
+    assert!(c.share.is_none());
+    assert!(c.upload_for.is_none());
+    // And nothing the analysis path does can give it one.
+    let e = library::material_analysis_claim(
+        &w.d,
+        &agent,
+        input(json!({"material_id":c.id,"expected_revision":c.revision})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "composed_material");
+    assert!(material(&w, c.id).share.is_none());
 }

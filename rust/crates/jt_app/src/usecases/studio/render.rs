@@ -298,7 +298,7 @@ pub async fn brand_set(d: &Deps, ctx: &Ctx, i: BrandSetInput) -> Result<BrandOut
     super::chain::active(r.as_mut()).await?;
     if let Some(logo) = i.tokens.logo_material_id {
         let blocked = super::library::blocked_derivatives(r.as_mut()).await?;
-        source(r.as_mut(), logo, "logo_material_id", &blocked).await?;
+        source(r.as_mut(), logo, "logo_material_id", &blocked, ctx.now).await?;
     }
     let stored = r.studio_materials().brand().await?;
     let revision = stored.as_ref().map_or(0, |b| b.revision);
@@ -340,6 +340,7 @@ async fn source(
     id: MaterialId,
     field: &str,
     blocked: &BTreeSet<MaterialId>,
+    now: OffsetDateTime,
 ) -> Result<Material, AppError> {
     let m = r
         .studio_materials()
@@ -387,6 +388,21 @@ async fn source(
     } else {
         None
     };
+    if reason.is_none() {
+        let row = r.studio_materials().get_intelligence(m.id).await?;
+        if !super::library::is_analysed(&m, row.as_ref(), now) {
+            // Its faces, names and marks are not known yet: drawing it would publish what no one
+            // checked. Retryable once the analysis is complete.
+            return Err(AppError {
+                message:
+                    "the material is not analysed yet; render it once its analysis is complete"
+                        .into(),
+                details: json!({"field": field, "reason": "source_not_analysed",
+                                "material_id": id, "retryable": true}),
+                ..conflict("source_not_analysed")
+            });
+        }
+    }
     match reason {
         Some((reason, message)) => Err(AppError::validation(
             message,
@@ -658,6 +674,7 @@ async fn sources(
     i: &PostRenderInput,
     brand: &BrandTokens,
     notes: &mut Vec<BrandFallback>,
+    now: OffsetDateTime,
 ) -> Result<(Vec<(String, Material)>, Option<Material>), AppError> {
     let blocked = super::library::blocked_derivatives(r).await?;
     let mut photos = Vec::new();
@@ -665,12 +682,12 @@ async fn sources(
         if let Some(p) = i.photos.get(slot.key) {
             photos.push((
                 slot.key.to_owned(),
-                source(r, p.material_id, slot.key, &blocked).await?,
+                source(r, p.material_id, slot.key, &blocked, now).await?,
             ));
         }
     }
     let logo = match brand.logo_material_id {
-        Some(id) => match source(r, id, "logo_material_id", &blocked).await {
+        Some(id) => match source(r, id, "logo_material_id", &blocked, now).await {
             Ok(m) => Some(m),
             Err(_) => {
                 notes.push(BrandFallback {
@@ -780,7 +797,7 @@ pub async fn post_render(
     let stored = r.studio_materials().brand().await?;
     let tokens = stored.map(|b| b.tokens).unwrap_or_default();
     let (brand, mut fallbacks) = tokens.effective();
-    let (photos, logo) = sources(r.as_mut(), &t, &i, &brand, &mut fallbacks).await?;
+    let (photos, logo) = sources(r.as_mut(), &t, &i, &brand, &mut fallbacks, ctx.now).await?;
     check_variety(r.as_mut(), &t, &i).await?;
     let photo_materials: Vec<Material> = photos.iter().map(|(_, m)| m.clone()).collect();
     derive(&photo_materials, logo.as_ref())?;
@@ -898,7 +915,7 @@ async fn store(
     let tokens = stored.map(|b| b.tokens).unwrap_or_default();
     let (brand, _) = tokens.effective();
     let mut notes = Vec::new();
-    let (photos, logo) = sources(r.as_mut(), t, i, &brand, &mut notes).await?;
+    let (photos, logo) = sources(r.as_mut(), t, i, &brand, &mut notes, ctx.now).await?;
     // The logo drawn must be the logo recorded: an AI logo never leaves the provenance.
     if logo.as_ref().map(|m| m.id) != drawn_logo {
         return Err(AppError {
@@ -1007,6 +1024,18 @@ async fn store(
     r.studio().save_file(file.clone()).await?;
     r.studio_materials()
         .insert_material(material.clone())
+        .await?;
+    // Created analysed: it shows what its analysed sources show, and no agent analyses it again.
+    let mut source_rows = Vec::new();
+    for id in &sources_ids {
+        source_rows.push(r.studio_materials().get_intelligence(*id).await?);
+    }
+    r.studio_materials()
+        .save_intelligence(super::library::composed_record(
+            &material,
+            &source_rows,
+            ctx.now,
+        ))
         .await?;
     r.ledger()
         .append(ledger_entry(

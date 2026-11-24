@@ -55,8 +55,12 @@ Rules the renderer keeps:
 
 ## Photos
 
-A photo slot takes `{material_id, focus_x?, focus_y?}`: a live, filed JPEG, PNG or WebP material
-(not `not_shareable`, at most 25 MB stored). The focus (0 to 1 from the left and top) is the point a crop keeps in
+A photo slot takes `{material_id, focus_x?, focus_y?}`: a live, filed, **analysed** JPEG, PNG or
+WebP material (not `not_shareable`, at most 25 MB stored). A material whose analysis is not
+complete yet is refused with `CONFLICT` `source_not_analysed` (`details.retryable: true`): analyse
+it first (it is in your work list), then render again. What no one checked for faces, names and
+marks is never drawn into a post. A brand logo not analysed yet is left out of the brand chip,
+and the answer says so under `brand_fallbacks`. The focus (0 to 1 from the left and top) is the point a crop keeps in
 view; the middle by default. All photos bound to an olay must be the **same** olay; genel photos
 may join them.
 
@@ -83,6 +87,12 @@ The same request key answers the same render again (another input under the same
 `CONFLICT`; a render erased since is `CONFLICT` `render_erased`). Rendering byte-identical output
 again with a new key answers the earlier material with `reused: true`. If the brand logo changes
 while a render is drawn, the render is refused (`CONFLICT` `brand_logo_changed`): call again.
+
+A rendered material is created analysed: it takes its labels, quality, people, `depicts` and
+permission from its (analysed) sources, its analysis keeps them as its own, and it never appears
+as a `studio_material_analysis` item in your work list. `jeeta.studio.material_analysis_claim`
+and `material_analysis_retry` refuse it (`CONFLICT` `composed_material`), so no analysis can make
+it more shareable than its sources.
 
 ### A composition follows its sources
 
