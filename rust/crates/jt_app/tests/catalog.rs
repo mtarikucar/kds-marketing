@@ -52,9 +52,9 @@ fn mcp_only_use_cases_have_no_panel_route() {
     assert_eq!(
         mcp_only,
         [
-            "ads.campaign_propose",
             "social.own_posts",
             "social.own_post_image",
+            "ads.campaign_propose",
             "studio.material_production_claim",
             "studio.material_production_complete",
             "studio.material_production_fail",
@@ -512,7 +512,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 330);
+    assert_eq!(CATALOG.len(), 332);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export", "studio.posting_policy_set"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && !["calls.policy_get", "calls.end", "calls.transfer"].contains(&uc.id) && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || (uc.id.starts_with("outreach.") && !["outreach.campaigns_control", "outreach.enrollments_stop"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

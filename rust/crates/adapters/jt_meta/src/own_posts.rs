@@ -182,9 +182,14 @@ pub(crate) async fn own_posts(
     } else {
         &[None]
     };
+    // Whether Meta refused the insights for the permission (then no other insights read is
+    // tried), rather than for a metric.
     let mut refused_by = None;
     let mut last_error = None;
     for expansion in tries {
+        if expansion.is_some() && refused_by == Some(true) {
+            continue;
+        }
         let fields = match expansion {
             Some(insights) => format!("{MEDIA_FIELDS},{insights}"),
             None => MEDIA_FIELDS.to_owned(),
@@ -198,9 +203,8 @@ pub(crate) async fn own_posts(
             Err(e @ (ConnectorError::Permission { .. } | ConnectorError::Permanent { .. }))
                 if expansion.is_some() =>
             {
-                if refused_by.is_none() || matches!(e, ConnectorError::Permission { .. }) {
-                    refused_by = Some(matches!(e, ConnectorError::Permission { .. }));
-                }
+                let permission = matches!(e, ConnectorError::Permission { .. });
+                refused_by = Some(refused_by == Some(true) || permission);
                 last_error = Some(e);
                 continue;
             }

@@ -12,12 +12,20 @@ fn social_tools_are_exact_strict_and_agent_work_scoped() {
         vec![
             "jeeta.social.account_get",
             "jeeta.social.accounts_list",
+            "jeeta.social.own_post_image",
+            "jeeta.social.own_posts",
             "jeeta.social.version_schedule",
             "jeeta.social.versions_waiting",
         ]
     );
     for t in &tools {
-        assert_eq!(t.permissions, &[Permission::SocialWork], "{}", t.name);
+        // The account's own posts are read by content agents too (the brand scan).
+        let expected: &[Permission] = if t.name.starts_with("jeeta.social.own_") {
+            &[Permission::ContentWork, Permission::SocialWork]
+        } else {
+            &[Permission::SocialWork]
+        };
+        assert_eq!(t.permissions, expected, "{}", t.name);
         assert_eq!(
             t.input_schema.as_value()["additionalProperties"],
             false,

@@ -43,7 +43,7 @@ async fn instagram(w: &support::World, scopes: &[&str], extra: Value) -> Capabil
         NewCapability {
             kind_key: "instagram".into(),
             name: "Instagram".into(),
-            external_id: Some(IG.into()),
+            external_id: Some(format!("{IG}{}", CapabilityId::new_v7().as_uuid().simple())),
             connector_public: public,
             ..Default::default()
         },

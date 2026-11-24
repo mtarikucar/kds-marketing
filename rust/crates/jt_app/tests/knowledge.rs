@@ -2414,6 +2414,10 @@ async fn the_brand_scan_proposes_its_cards_and_only_the_owner_writes_them() {
 
     // An agent writes no card directly, the owner's words least of all.
     let e = err(card_update(&w.deps, &agent, voice.id, body(2, "Resmî konuşuruz.")).await);
+    assert_eq!(e.code, ErrorCode::Forbidden);
+    // Not even an agent whose key holds team.manage: a card is a person's to write.
+    let manager = w.agent(&["team.manage", "content.work"]).await;
+    let e = err(card_update(&w.deps, &manager, voice.id, body(2, "Resmî konuşuruz.")).await);
     assert_eq!(
         (e.code, reason(&e)),
         (ErrorCode::Forbidden, "human_required")
