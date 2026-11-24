@@ -790,3 +790,9 @@ async fn savepoint_undoes_only_what_follows() {
     let db = TestDb::new().await;
     jt_testkit::inbox_contract::savepoint_undoes_only_what_follows(uow(&db)).await;
 }
+
+#[tokio::test]
+async fn auto_reply_handover_mark() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::auto_reply_handover_mark(uow(&db)).await;
+}

@@ -153,3 +153,9 @@ async fn savepoint_undoes_only_what_follows() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::savepoint_undoes_only_what_follows(uow).await;
 }
+
+#[tokio::test]
+async fn auto_reply_handover_mark() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::auto_reply_handover_mark(uow).await;
+}

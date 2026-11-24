@@ -353,6 +353,8 @@ async fn mark_handed_back(
     if served(deps, r, id).await?.is_none() {
         return Ok(());
     }
+    // A person handed it back: what the customer and the owner were told is forgotten.
+    r.auto_reply().told_clear(id).await?;
     // The customer's last message still waits for an answer inside the reply window: the
     // replies take it now, on the same debounce as any message.
     let waiting = match r.conversations().get(id).await? {
@@ -439,10 +441,46 @@ pub(crate) async fn mark_due(
     id: ConversationId,
     now: OffsetDateTime,
 ) -> Result<(), AppError> {
-    let Some((auto, c)) = served(deps, r, id).await? else {
+    let Some((auto, mut c)) = served(deps, r, id).await? else {
         return Ok(());
     };
     let existing = r.auto_reply().queue_lock(id).await?;
+    // The assistant answers first: a person holds the conversation only by their own act. After
+    // an automatic hand-over with no person's act since, the customer's new message brings the
+    // assistant back, as a hand-back would.
+    if let Some(row) = &existing
+        && reenters(r, &c, row).await?
+        && eligible(
+            r,
+            &Conversation {
+                executor: Executor::Agent,
+                ..c.clone()
+            },
+            &auto,
+        )
+        .await?
+        .is_ok()
+    {
+        let generation = r
+            .conversations()
+            .update_executor(c.id, Executor::Agent)
+            .await?;
+        let ctx = system_ctx(c.workspace_id, now);
+        record(
+            r,
+            &ctx,
+            "inbox.autoreply.reentered",
+            "conversation",
+            id,
+            json!({ "cause": "automatic_hand_over", "generation": generation }),
+        )
+        .await?;
+        c = r
+            .conversations()
+            .get(id)
+            .await?
+            .ok_or_else(|| AppError::internal("a conversation just written"))?;
+    }
     let mut row = existing.unwrap_or_else(|| QueueRow::idle(id, now));
     // The customer's messages up to now are handled, whatever comes of them (the job's sweep
     // looks only for newer ones).
@@ -1350,6 +1388,7 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 .conversations()
                 .update_executor(c.id, Executor::Human { user_id: owner })
                 .await?;
+            let silence = auto_handover(r.as_mut(), c.id, generation, "failed", ctx.now).await?;
             record(
                 r.as_mut(),
                 ctx,
@@ -1359,16 +1398,18 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 json!({ "run_id": null, "reason": "failed", "by": By::Server.key() }),
             )
             .await?;
-            super::notices::queue_best_effort(
-                deps,
-                ctx,
-                r.as_mut(),
-                NoticeKind::HandedOver,
-                c.id,
-                format!("handed_over:{}:{generation}", c.id),
-                Some("failed"),
-            )
-            .await?;
+            if !silence.notice {
+                super::notices::queue_best_effort(
+                    deps,
+                    ctx,
+                    r.as_mut(),
+                    NoticeKind::HandedOver,
+                    c.id,
+                    format!("handed_over:{}:{generation}", c.id),
+                    Some("failed"),
+                )
+                .await?;
+            }
         }
         r.commit().await?;
         warn(Some(ctx.workspace_id), "give_up_failed");
@@ -1442,6 +1483,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     let Some(row) = r.auto_reply().queue_lock(id).await? else {
         return Ok(Prepared::Done(Worked::Skipped));
     };
+    let told_recently = told(r.as_mut(), id, now).await?.line;
     let c = r.conversations().lock(id).await?;
     let live = Live::read(r.as_mut()).await?;
     let auto = live.as_ref().and_then(|l| l.settings.auto_reply.clone());
@@ -1541,7 +1583,13 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     if let Some(policy) = bargaining_part(&auto) {
         system_workspace.push_str(&policy);
     }
-    let system_note = bargaining_note(&auto, bargain.as_ref(), human_priced);
+    let system_note = match (
+        bargaining_note(&auto, bargain.as_ref(), human_priced),
+        told_recently.then(|| TOLD_NOTE.to_owned()),
+    ) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (a, b) => a.or(b),
+    };
     let snapshot = Snapshot {
         generation: c.executor_generation,
         activity_revision: r.conversations().send_state(id).await?.activity_revision,
@@ -2440,6 +2488,141 @@ struct HandOver<'a> {
     line_allowed: bool,
 }
 
+/// After the customer and the owner were told of an automatic hand-over, how long a repeat is
+/// silent (no line to the customer, no notice to the owner).
+const TOLD_QUIET: Duration = Duration::hours(12);
+/// What the model is told while the customer has been told, recently, that a person will get
+/// back to them.
+const TOLD_NOTE: &str = "The customer was already told that a person from the team will get \
+back to them. Answer what you can yourself, and do not repeat that promise.";
+
+/// Records an automatic hand-over of conversation `id` to executor generation `generation` at
+/// `now` (so the customer's next message brings the assistant back while no person acts), and
+/// answers whether it is silent: the customer and the owner were told of one less than
+/// [`TOLD_QUIET`] ago.
+async fn auto_handover(
+    r: &mut dyn TenantRepos,
+    id: ConversationId,
+    generation: u32,
+    reason: &str,
+    now: OffsetDateTime,
+) -> Result<Silence, AppError> {
+    let told = told(r, id, now).await?;
+    let silence = Silence {
+        line: told.line,
+        notice: told
+            .notice
+            .is_some_and(|told_reason| told_reason.as_deref() == Some(reason)),
+    };
+    // An order's hand-over is a person's to finish: nothing for the assistant to come back from.
+    let back = (!reason.starts_with("order_")).then_some(generation);
+    r.auto_reply()
+        .handover_mark(id, back, now, (!silence.notice).then_some(reason))
+        .await?;
+    Ok(silence)
+}
+
+/// What a repeated automatic hand-over keeps quiet.
+#[derive(Clone, Copy, Debug)]
+struct Silence {
+    /// The line telling the customer that someone will get back to them.
+    line: bool,
+    /// The owner's notice (the same reason was told already).
+    notice: bool,
+}
+
+/// The reason the customer and the owner were told of a hand-over less than [`TOLD_QUIET`] ago,
+/// while no person wrote to the customer since (that is forgotten too).
+async fn told(
+    r: &mut dyn TenantRepos,
+    id: ConversationId,
+    now: OffsetDateTime,
+) -> Result<Told, AppError> {
+    let Some(row) = r.auto_reply().queue_get(id).await? else {
+        return Ok(Told::default());
+    };
+    let wrote = r.messages().person_last_at(id).await?;
+    // Recent, and no person wrote to the customer since.
+    let fresh = |at: Option<OffsetDateTime>| {
+        at.filter(|at| now - *at < TOLD_QUIET && wrote.is_none_or(|w| w <= *at))
+    };
+    Ok(Told {
+        notice: fresh(row.told_at).map(|_| row.told_reason.clone()),
+        line: fresh(row.line_told_at).is_some(),
+    })
+}
+
+/// What was told of an automatic hand-over within [`TOLD_QUIET`] ([`told`]).
+#[derive(Clone, Debug, Default)]
+struct Told {
+    /// The owner was notified, of this reason.
+    notice: Option<Option<String>>,
+    /// The customer was sent the line.
+    line: bool,
+}
+
+/// Whether conversation `c` comes back to the assistant: a person is its executor only by an
+/// automatic hand-over (`row` holds the generation it wrote, and the conversation is still at
+/// it: no take-over, no hand-back since), and no person wrote to the customer after it.
+async fn reenters(
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    row: &QueueRow,
+) -> Result<bool, AppError> {
+    if !matches!(c.executor, Executor::Human { .. })
+        || row.auto_handed_generation != Some(c.executor_generation)
+    {
+        return Ok(false);
+    }
+    let Some(handed_at) = row.auto_handed_at else {
+        return Ok(false);
+    };
+    Ok(r.messages()
+        .person_last_at(c.id)
+        .await?
+        .is_none_or(|at| at <= handed_at))
+}
+
+/// For the response-time job: whether the customer's last message of served conversation `c` is
+/// not waiting on a person at `now`: it is outside the reply window, or a run answered it (queued
+/// a reply or a quote after it; a run that was skipped or gave up did not). `false` for a
+/// conversation the automatic replies do not serve, which keeps the job's rule.
+pub(crate) async fn not_waiting(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    now: OffsetDateTime,
+) -> Result<bool, AppError> {
+    let Some(at) = c.last_inbound_at else {
+        return Ok(false);
+    };
+    if served(deps, r, c.id).await?.is_none() {
+        return Ok(false);
+    }
+    if now - at >= REPLY_WINDOW {
+        return Ok(true);
+    }
+    Ok(r.auto_reply().runs_sent_since(Some(c.id), None, at).await? > 0)
+}
+
+/// For the response-time job: its hand-over of served conversation `c` to executor generation
+/// `generation` is an automatic one (the customer's next message brings the assistant back).
+/// Nothing for a conversation the automatic replies do not serve.
+pub(crate) async fn handed_by_job(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    generation: u32,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if served(deps, r, c.id).await?.is_some() {
+        r.auto_reply()
+            .handover_mark(c.id, Some(generation), now, None)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Hands conversation `c` to a person (see the module docs), in the caller's transaction:
 /// answers the outbox row of the line to the customer, when one was queued.
 async fn hand_over(
@@ -2458,6 +2641,7 @@ async fn hand_over(
         .conversations()
         .update_executor(c.id, Executor::Human { user_id: owner })
         .await?;
+    let silence = auto_handover(r, c.id, generation, h.reason, ctx.now).await?;
     if let Some(summary) = h.summary.map(str::trim).filter(|s| !s.is_empty())
         && let Some(journey) = super::active_or_latest_journey(r, c.person_id).await?
     {
@@ -2475,26 +2659,40 @@ async fn hand_over(
             })
             .await?;
     }
+    let mut payload = json!({ "run_id": h.run_id, "reason": h.reason, "by": h.by.key() });
+    if silence.notice {
+        payload["owner_notified"] = json!(false);
+    }
+    if silence.line {
+        payload["customer_told"] = json!(false);
+    }
     record(
         r,
         ctx,
         "inbox.autoreply.handed_over",
         "conversation",
         c.id,
-        json!({ "run_id": h.run_id, "reason": h.reason, "by": h.by.key() }),
+        payload,
     )
     .await?;
-    // The owner is told by email, once for this hand-over.
-    super::notices::queue_best_effort(
-        deps,
-        ctx,
-        r,
-        NoticeKind::HandedOver,
-        c.id,
-        format!("handed_over:{}:{generation}", c.id),
-        Some(h.reason),
-    )
-    .await?;
+    // The owner is told by email, once for this hand-over, unless told of the same reason
+    // within the quiet time.
+    if !silence.notice {
+        super::notices::queue_best_effort(
+            deps,
+            ctx,
+            r,
+            NoticeKind::HandedOver,
+            c.id,
+            format!("handed_over:{}:{generation}", c.id),
+            Some(h.reason),
+        )
+        .await?;
+    }
+    // The customer was told that someone will get back to them: not again within that time.
+    if silence.line {
+        return Ok(None);
+    }
     let year = ctx.now.year();
     let Some(line) = h
         .line
@@ -2509,7 +2707,12 @@ async fn hand_over(
         quote: None,
         handing_over: true,
     };
-    Ok(enqueue(deps, ctx, r, c.id, line, &send).await?.ok())
+    let queued = enqueue(deps, ctx, r, c.id, line, &send).await?.ok();
+    // The customer is told only when the line was queued.
+    if queued.is_some() {
+        r.auto_reply().line_told(c.id, ctx.now).await?;
+    }
+    Ok(queued)
 }
 
 /// The model gave no answer (its call is recorded already, [`called`]): after a rate limit or an
