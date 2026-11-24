@@ -1480,12 +1480,17 @@ async fn a_source_judged_unusable_makes_its_compositions_unusable() {
     library::material_tag(
         &w.d,
         &w.ctx,
-        input(json!({"material_id":s.id,"expected_revision":material(&w, s.id).revision,
-            "quality":"unusable"})),
+        input(
+            json!({"material_id":s.id,"expected_revision":material(&w, s.id).revision,
+            "quality":"unusable"}),
+        ),
     )
     .await
     .unwrap();
     let after = material(&w, c.id);
     assert_eq!(after.tags.quality, Some(Quality::Unusable));
-    assert_eq!(after.share, c.share, "a quality alone does not reopen the permission");
+    assert_eq!(
+        after.share, c.share,
+        "a quality alone does not reopen the permission"
+    );
 }
