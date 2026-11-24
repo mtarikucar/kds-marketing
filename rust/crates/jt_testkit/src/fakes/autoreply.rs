@@ -81,10 +81,12 @@ impl AutoReplyRepo for MemTenant {
                     row.auto_handed_generation = old.auto_handed_generation;
                     row.auto_handed_at = old.auto_handed_at;
                     row.told_at = old.told_at;
+                    row.told_reason = old.told_reason.clone();
                 } else {
                     row.auto_handed_generation = None;
                     row.auto_handed_at = None;
                     row.told_at = None;
+                    row.told_reason = None;
                 }
                 s.auto_reply
                     .queue
@@ -98,11 +100,12 @@ impl AutoReplyRepo for MemTenant {
     async fn handover_mark(
         &mut self,
         id: ConversationId,
-        generation: u32,
+        generation: Option<u32>,
         at: OffsetDateTime,
-        told: bool,
+        told: Option<&str>,
     ) -> Result<(), AppError> {
         let ws = self.ws;
+        let told = told.map(str::to_owned);
         self.tx.write(move |s| {
             match s
                 .auto_reply
@@ -111,18 +114,33 @@ impl AutoReplyRepo for MemTenant {
                 .find(|(w, r)| *w == ws && r.conversation_id == id)
             {
                 Some((_, row)) => {
-                    row.auto_handed_generation = Some(generation);
+                    row.auto_handed_generation = generation;
                     row.auto_handed_at = Some(at);
-                    if told {
+                    if let Some(reason) = &told {
                         row.told_at = Some(at);
+                        row.told_reason = Some(reason.clone());
                     }
                 }
                 None => {
                     let mut row = QueueRow::idle(id, at);
-                    row.auto_handed_generation = Some(generation);
+                    row.auto_handed_generation = generation;
                     row.auto_handed_at = Some(at);
-                    row.told_at = told.then_some(at);
+                    row.told_at = told.as_ref().map(|_| at);
+                    row.told_reason = told.clone();
                     s.auto_reply.queue.push((ws, row));
+                }
+            }
+        });
+        Ok(())
+    }
+
+    async fn told_clear(&mut self, id: ConversationId) -> Result<(), AppError> {
+        let ws = self.ws;
+        self.tx.write(move |s| {
+            for (w, row) in &mut s.auto_reply.queue {
+                if *w == ws && row.conversation_id == id {
+                    row.told_at = None;
+                    row.told_reason = None;
                 }
             }
         });

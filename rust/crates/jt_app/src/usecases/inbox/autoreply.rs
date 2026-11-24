@@ -353,6 +353,8 @@ async fn mark_handed_back(
     if served(deps, r, id).await?.is_none() {
         return Ok(());
     }
+    // A person handed it back: what the customer and the owner were told is forgotten.
+    r.auto_reply().told_clear(id).await?;
     // The customer's last message still waits for an answer inside the reply window: the
     // replies take it now, on the same debounce as any message.
     let waiting = match r.conversations().get(id).await? {
@@ -448,6 +450,16 @@ pub(crate) async fn mark_due(
     // assistant back, as a hand-back would.
     if let Some(row) = &existing
         && reenters(r, &c, row).await?
+        && eligible(
+            r,
+            &Conversation {
+                executor: Executor::Agent,
+                ..c.clone()
+            },
+            &auto,
+        )
+        .await?
+        .is_ok()
     {
         let generation = r
             .conversations()
@@ -1376,7 +1388,7 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 .conversations()
                 .update_executor(c.id, Executor::Human { user_id: owner })
                 .await?;
-            let silent = auto_handover(r.as_mut(), c.id, generation, ctx.now).await?;
+            let silence = auto_handover(r.as_mut(), c.id, generation, "failed", ctx.now).await?;
             record(
                 r.as_mut(),
                 ctx,
@@ -1386,7 +1398,7 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 json!({ "run_id": null, "reason": "failed", "by": By::Server.key() }),
             )
             .await?;
-            if !silent {
+            if !silence.notice {
                 super::notices::queue_best_effort(
                     deps,
                     ctx,
@@ -1471,7 +1483,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     let Some(row) = r.auto_reply().queue_lock(id).await? else {
         return Ok(Prepared::Done(Worked::Skipped));
     };
-    let told_recently = row.told_at.is_some_and(|at| now - at < TOLD_QUIET);
+    let told_recently = told(r.as_mut(), id, now).await?.is_some();
     let c = r.conversations().lock(id).await?;
     let live = Live::read(r.as_mut()).await?;
     let auto = live.as_ref().and_then(|l| l.settings.auto_reply.clone());
@@ -2492,14 +2504,52 @@ async fn auto_handover(
     r: &mut dyn TenantRepos,
     id: ConversationId,
     generation: u32,
+    reason: &str,
     now: OffsetDateTime,
-) -> Result<bool, AppError> {
-    let told = r.auto_reply().queue_get(id).await?.and_then(|q| q.told_at);
-    let silent = told.is_some_and(|at| now - at < TOLD_QUIET);
+) -> Result<Silence, AppError> {
+    let told = told(r, id, now).await?;
+    let silence = Silence {
+        line: told.is_some(),
+        notice: told.is_some_and(|told_reason| told_reason.as_deref() == Some(reason)),
+    };
+    // An order's hand-over is a person's to finish: nothing for the assistant to come back from.
+    let back = (!reason.starts_with("order_")).then_some(generation);
     r.auto_reply()
-        .handover_mark(id, generation, now, !silent)
+        .handover_mark(id, back, now, (!silence.notice).then_some(reason))
         .await?;
-    Ok(silent)
+    Ok(silence)
+}
+
+/// What a repeated automatic hand-over keeps quiet.
+#[derive(Clone, Copy, Debug)]
+struct Silence {
+    /// The line telling the customer that someone will get back to them.
+    line: bool,
+    /// The owner's notice (the same reason was told already).
+    notice: bool,
+}
+
+/// The reason the customer and the owner were told of a hand-over less than [`TOLD_QUIET`] ago,
+/// while no person wrote to the customer since (that is forgotten too).
+async fn told(
+    r: &mut dyn TenantRepos,
+    id: ConversationId,
+    now: OffsetDateTime,
+) -> Result<Option<Option<String>>, AppError> {
+    let Some(row) = r.auto_reply().queue_get(id).await? else {
+        return Ok(None);
+    };
+    let Some(at) = row.told_at.filter(|at| now - *at < TOLD_QUIET) else {
+        return Ok(None);
+    };
+    if r.messages()
+        .person_last_at(id)
+        .await?
+        .is_some_and(|wrote| wrote > at)
+    {
+        return Ok(None);
+    }
+    Ok(Some(row.told_reason))
 }
 
 /// Whether conversation `c` comes back to the assistant: a person is its executor only by an
@@ -2525,9 +2575,9 @@ async fn reenters(
 }
 
 /// For the response-time job: whether the customer's last message of served conversation `c` is
-/// not waiting on a person at `now`: it is outside the reply window, or the assistant already
-/// handled it (its queue row rests, having looked at it). `false` for a conversation the
-/// automatic replies do not serve, which keeps the job's rule.
+/// not waiting on a person at `now`: it is outside the reply window, or a run answered it (queued
+/// a reply or a quote after it; a run that was skipped or gave up did not). `false` for a
+/// conversation the automatic replies do not serve, which keeps the job's rule.
 pub(crate) async fn not_waiting(
     deps: &Deps,
     r: &mut dyn TenantRepos,
@@ -2543,10 +2593,7 @@ pub(crate) async fn not_waiting(
     if now - at >= REPLY_WINDOW {
         return Ok(true);
     }
-    Ok(r.auto_reply()
-        .queue_get(c.id)
-        .await?
-        .is_some_and(|q| q.is_idle() && q.handled_at.is_some_and(|h| h >= at)))
+    Ok(r.auto_reply().runs_sent_since(Some(c.id), None, at).await? > 0)
 }
 
 /// For the response-time job: its hand-over of served conversation `c` to executor generation
@@ -2561,7 +2608,7 @@ pub(crate) async fn handed_by_job(
 ) -> Result<(), AppError> {
     if served(deps, r, c.id).await?.is_some() {
         r.auto_reply()
-            .handover_mark(c.id, generation, now, false)
+            .handover_mark(c.id, Some(generation), now, None)
             .await?;
     }
     Ok(())
@@ -2585,7 +2632,7 @@ async fn hand_over(
         .conversations()
         .update_executor(c.id, Executor::Human { user_id: owner })
         .await?;
-    let silent = auto_handover(r, c.id, generation, ctx.now).await?;
+    let silence = auto_handover(r, c.id, generation, h.reason, ctx.now).await?;
     if let Some(summary) = h.summary.map(str::trim).filter(|s| !s.is_empty())
         && let Some(journey) = super::active_or_latest_journey(r, c.person_id).await?
     {
@@ -2604,8 +2651,11 @@ async fn hand_over(
             .await?;
     }
     let mut payload = json!({ "run_id": h.run_id, "reason": h.reason, "by": h.by.key() });
-    if silent {
-        payload["silent"] = json!(true);
+    if silence.notice {
+        payload["owner_notified"] = json!(false);
+    }
+    if silence.line {
+        payload["customer_told"] = json!(false);
     }
     record(
         r,
@@ -2616,21 +2666,24 @@ async fn hand_over(
         payload,
     )
     .await?;
-    // A repeat within the quiet time is silent: no line to the customer, no notice.
-    if silent {
+    // The owner is told by email, once for this hand-over, unless told of the same reason
+    // within the quiet time.
+    if !silence.notice {
+        super::notices::queue_best_effort(
+            deps,
+            ctx,
+            r,
+            NoticeKind::HandedOver,
+            c.id,
+            format!("handed_over:{}:{generation}", c.id),
+            Some(h.reason),
+        )
+        .await?;
+    }
+    // The customer was told that someone will get back to them: not again within that time.
+    if silence.line {
         return Ok(None);
     }
-    // The owner is told by email, once for this hand-over.
-    super::notices::queue_best_effort(
-        deps,
-        ctx,
-        r,
-        NoticeKind::HandedOver,
-        c.id,
-        format!("handed_over:{}:{generation}", c.id),
-        Some(h.reason),
-    )
-    .await?;
     let year = ctx.now.year();
     let Some(line) = h
         .line

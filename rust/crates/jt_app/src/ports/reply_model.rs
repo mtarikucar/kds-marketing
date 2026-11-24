@@ -381,9 +381,10 @@ pub struct QueueRow {
     /// [`AutoReplyRepo::queue_save`] keeps it as stored.
     pub auto_handed_generation: Option<u32>,
     pub auto_handed_at: Option<OffsetDateTime>,
-    /// When the customer and the owner were last told of an automatic hand-over (the line, the
-    /// notice); kept like the two above.
+    /// When the owner was last told of an automatic hand-over (its notice) and the customer
+    /// its line, and for which reason; kept like the two above.
     pub told_at: Option<OffsetDateTime>,
+    pub told_reason: Option<String>,
 }
 
 impl QueueRow {
@@ -400,6 +401,7 @@ impl QueueRow {
             auto_handed_generation: None,
             auto_handed_at: None,
             told_at: None,
+            told_reason: None,
         }
     }
 
@@ -569,16 +571,20 @@ pub trait AutoReplyRepo: Send + Sync {
     /// Inserts or replaces the queue row of its conversation, but for its automatic hand-over and
     /// told times, which stay as stored ([`AutoReplyRepo::handover_mark`]).
     async fn queue_save(&mut self, row: &QueueRow) -> Result<(), AppError>;
-    /// Records an automatic hand-over of conversation `id` at `at` to executor generation
-    /// `generation` (making its queue row when there is none), and with `told` that the customer
-    /// and the owner were told of it then.
+    /// Records an automatic hand-over of conversation `id` at `at` (making its queue row when
+    /// there is none): `generation`, the executor generation it wrote, when the assistant may come
+    /// back from it (none: a person finishes it); with `told`, that the owner was told of it then,
+    /// for that reason.
     async fn handover_mark(
         &mut self,
         id: ConversationId,
-        generation: u32,
+        generation: Option<u32>,
         at: OffsetDateTime,
-        told: bool,
+        told: Option<&str>,
     ) -> Result<(), AppError>;
+    /// Forgets that the customer and the owner were told of a hand-over (a person handed the
+    /// conversation back).
+    async fn told_clear(&mut self, id: ConversationId) -> Result<(), AppError>;
     /// Removes conversation `id`'s queue row, if any.
     async fn queue_delete(&mut self, id: ConversationId) -> Result<(), AppError>;
     /// The conversations a run may take at `now` ([`QueueRow::takeable`]), the longest waiting
@@ -685,6 +691,7 @@ mod tests {
             auto_handed_generation: None,
             auto_handed_at: None,
             told_at: None,
+            told_reason: None,
         }
     }
 

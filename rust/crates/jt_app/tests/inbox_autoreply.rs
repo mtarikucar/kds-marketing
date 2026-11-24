@@ -3085,6 +3085,13 @@ async fn a_persons_reply_queued_after_the_summary_stops_the_order() {
         reasons(&t, "inbox.autoreply.refused"),
         ["order_person_wrote"]
     );
+    // A person finishes it: the customer's next message does not bring the assistant back.
+    let sent = texts_sent(&t).len();
+    says(&t, "wamid.TEST-AFTER-ORDER-1", 600, "Siparişim ne durumda?").await;
+    job(&t, due(600)).await;
+    assert!(t.w.ledger("inbox.autoreply.reentered").is_empty());
+    assert!(shop.calls().is_empty(), "no order");
+    assert_eq!(texts_sent(&t).len(), sent, "no summary, no link");
 }
 
 #[tokio::test]
@@ -3430,6 +3437,18 @@ async fn a_take_over_during_the_shops_call_sends_nothing_and_leaves_the_link_in_
         reasons(&t, "inbox.autoreply.refused"),
         ["order_link_unsent"]
     );
+    // A person finishes it: the customer's next message does not bring the assistant back, and
+    // the withheld link is not sent.
+    says(
+        &t,
+        "wamid.TEST-AFTER-ORDER-1",
+        600,
+        "Linki gönderir misiniz?",
+    )
+    .await;
+    job(&t, due(600)).await;
+    assert!(t.w.ledger("inbox.autoreply.reentered").is_empty());
+    assert_eq!(texts_sent(&t).len(), 2, "no link");
 }
 
 /// An order of `t`'s journey left `calling` since `at`, asked under `generation`.
@@ -4535,8 +4554,12 @@ async fn a_second_hand_over_within_twelve_hours_is_silent() {
     assert_eq!(notices(&t).len(), 1, "one notice");
     let entries = t.w.ledger("inbox.autoreply.handed_over");
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[1].payload["silent"], true);
-    assert!(entries[0].payload.get("silent").is_none());
+    assert_eq!(entries[1].payload["customer_told"], false);
+    assert_eq!(
+        entries[1].payload["owner_notified"], false,
+        "the same reason"
+    );
+    assert!(entries[0].payload.get("customer_told").is_none());
 }
 
 #[tokio::test]
@@ -4572,4 +4595,96 @@ async fn without_the_automatic_replies_the_response_time_job_and_people_are_unch
     assert!(matches!(conversation(&t).executor, Executor::Human { .. }));
     assert!(t.w.ledger("inbox.autoreply.reentered").is_empty());
     assert!(t.w.uow.snapshot().auto_reply.queue.is_empty());
+}
+
+/// Empties the "Standart iş ve fiyat" card: the automatic replies cannot answer.
+fn empty_standard(t: &T) {
+    t.w.uow.edit(|st| {
+        for (_, card) in &mut st.knowledge.cards {
+            if card.key.as_deref() == Some("reply_standard") {
+                card.body = String::new();
+            }
+        }
+    });
+}
+
+#[tokio::test]
+async fn a_complaint_after_an_out_of_standard_hand_over_tells_the_owner_again() {
+    let mut t = setup().await;
+    let _ = with_mailbox(&mut t).await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(hand_over_tool(
+        "out_of_standard",
+        "Ekibimizden biri size dönecek.",
+    ));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    let later = 2 * 3_600;
+    says(
+        &t,
+        "wamid.TEST-AGAIN-1",
+        later,
+        "Ürün hasarlı geldi, şikayetim var.",
+    )
+    .await;
+    t.model.answer(hand_over_tool(
+        "complaint",
+        "Ekibimizden biri size dönecek.",
+    ));
+    job(&t, due(later)).await;
+    handed_to_a_person(&t);
+    assert_eq!(notices(&t).len(), 2, "a new reason reaches the owner");
+    assert_eq!(
+        texts_sent(&t).len(),
+        1,
+        "the customer is not promised twice"
+    );
+    let entries = t.w.ledger("inbox.autoreply.handed_over");
+    assert_eq!(entries[1].payload["customer_told"], false);
+    assert!(entries[1].payload.get("owner_notified").is_none());
+}
+
+#[tokio::test]
+async fn a_hand_back_forgets_what_the_customer_was_told() {
+    let t = setup().await;
+    handed_over_with_a_line(&t).await;
+    conversations::hand_to_agent(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(60)),
+        conversation(&t).id,
+    )
+    .await
+    .unwrap();
+    says(&t, "wamid.TEST-AGAIN-1", HALF_HOUR, "Bir sorum daha var.").await;
+    t.model.answer(hand_over_tool(
+        "not_covered",
+        "Ekibimizden biri size dönecek.",
+    ));
+    t.meta.push_send_text(accepted());
+    job(&t, due(HALF_HOUR)).await;
+    assert_eq!(texts_sent(&t).len(), 2, "told again after the hand-back");
+}
+
+#[tokio::test]
+async fn re_entry_waits_until_the_assistant_could_answer() {
+    let t = setup().await;
+    handed_over_with_a_line(&t).await;
+    empty_standard(&t);
+    says(&t, "wamid.TEST-AGAIN-1", HALF_HOUR, "Bir sorum daha var.").await;
+    assert!(
+        matches!(conversation(&t).executor, Executor::Human { .. }),
+        "left with the person"
+    );
+    assert!(t.w.ledger("inbox.autoreply.reentered").is_empty());
+}
+
+#[tokio::test]
+async fn a_served_conversation_nobody_answered_still_reaches_a_person() {
+    let t = setup().await;
+    empty_standard(&t);
+    inbound(&t, 0, 0).await;
+    job(&t, due(0)).await;
+    assert!(t.model.requests().is_empty(), "the run was set aside");
+    jobs::run_response_sla(&t.w.deps, consumed_at(0) + Duration::hours(1)).await;
+    handed_to_a_person(&t);
 }

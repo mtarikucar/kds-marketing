@@ -69,6 +69,7 @@ struct QueueRecord {
     auto_handed_generation: Option<i64>,
     auto_handed_at: Option<OffsetDateTime>,
     told_at: Option<OffsetDateTime>,
+    told_reason: Option<String>,
 }
 
 impl QueueRecord {
@@ -91,6 +92,7 @@ impl QueueRecord {
                 .transpose()?,
             auto_handed_at: self.auto_handed_at,
             told_at: self.told_at,
+            told_reason: self.told_reason,
         })
     }
 }
@@ -220,8 +222,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
             "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at, \
-             handled_at, auto_handed_generation, auto_handed_at, told_at from auto_reply_queue \
-             where workspace_id = $1 and conversation_id = $2 for update",
+             handled_at, auto_handed_generation, auto_handed_at, told_at, told_reason \
+             from auto_reply_queue where workspace_id = $1 and conversation_id = $2 for update",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
@@ -235,8 +237,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
             "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at, \
-             handled_at, auto_handed_generation, auto_handed_at, told_at from auto_reply_queue \
-             where workspace_id = $1 and conversation_id = $2",
+             handled_at, auto_handed_generation, auto_handed_at, told_at, told_reason \
+             from auto_reply_queue where workspace_id = $1 and conversation_id = $2",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
@@ -276,28 +278,43 @@ impl AutoReplyRepo for PgTenantRepos {
     async fn handover_mark(
         &mut self,
         id: ConversationId,
-        generation: u32,
+        generation: Option<u32>,
         at: OffsetDateTime,
-        told: bool,
+        told: Option<&str>,
     ) -> Result<(), AppError> {
         let ws = self.workspace_id();
         sqlx::query(
             "insert into auto_reply_queue (workspace_id, conversation_id, first_at, attempts, \
-             auto_handed_generation, auto_handed_at, told_at) \
-             values ($1, $2, $4, 0, $3, $4, case when $5 then $4 end) \
+             auto_handed_generation, auto_handed_at, told_at, told_reason) \
+             values ($1, $2, $4, 0, $3, $4, case when $5::text is not null then $4 end, $5) \
              on conflict (workspace_id, conversation_id) do update set \
              auto_handed_generation = excluded.auto_handed_generation, \
              auto_handed_at = excluded.auto_handed_at, \
-             told_at = case when $5 then $4 else auto_reply_queue.told_at end",
+             told_at = case when $5::text is not null then $4 else auto_reply_queue.told_at end, \
+             told_reason = coalesce($5, auto_reply_queue.told_reason)",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
-        .bind(i64::from(generation))
+        .bind(generation.map(i64::from))
         .bind(at)
         .bind(told)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "mark an automatic hand-over"))?;
+        Ok(())
+    }
+
+    async fn told_clear(&mut self, id: ConversationId) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        sqlx::query(
+            "update auto_reply_queue set told_at = null, told_reason = null \
+             where workspace_id = $1 and conversation_id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "forget a hand-over's notice"))?;
         Ok(())
     }
 

@@ -2663,6 +2663,7 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
         auto_handed_generation: None,
         auto_handed_at: None,
         told_at: None,
+        told_reason: None,
     };
     let mut t = uow.tenant(f.ws).await.unwrap();
     t.auto_reply().queue_save(&row).await.unwrap();
@@ -2958,7 +2959,7 @@ pub async fn auto_reply_handover_mark(uow: Arc<dyn UnitOfWork>) {
     let at = |s: i64| FIXED_NOW + Duration::seconds(s);
     let mut t = uow.tenant(f.ws).await.unwrap();
     t.auto_reply()
-        .handover_mark(id, 3, at(0), true)
+        .handover_mark(id, Some(3), at(0), Some("complaint"))
         .await
         .unwrap();
     let row = t.auto_reply().queue_get(id).await.unwrap().unwrap();
@@ -2966,12 +2967,13 @@ pub async fn auto_reply_handover_mark(uow: Arc<dyn UnitOfWork>) {
         (row.auto_handed_generation, row.auto_handed_at, row.told_at),
         (Some(3), Some(at(0)), Some(at(0)))
     );
+    assert_eq!(row.told_reason.as_deref(), Some("complaint"));
     // A save of the row as read before keeps the mark.
     let mut stale = QueueRow::idle(id, at(5));
     stale.due_at = Some(at(10));
     t.auto_reply().queue_save(&stale).await.unwrap();
     t.auto_reply()
-        .handover_mark(id, 5, at(20), false)
+        .handover_mark(id, Some(5), at(20), None)
         .await
         .unwrap();
     t.commit().await.unwrap();
@@ -2982,4 +2984,16 @@ pub async fn auto_reply_handover_mark(uow: Arc<dyn UnitOfWork>) {
         (row.auto_handed_generation, row.auto_handed_at, row.told_at),
         (Some(5), Some(at(20)), Some(at(0)))
     );
+    assert_eq!(row.told_reason.as_deref(), Some("complaint"));
+    // An order's hand-over leaves nothing to come back from; a hand-back forgets the told.
+    t.auto_reply()
+        .handover_mark(id, None, at(30), None)
+        .await
+        .unwrap();
+    t.auto_reply().told_clear(id).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let row = t.auto_reply().queue_get(id).await.unwrap().unwrap();
+    assert_eq!(row.auto_handed_generation, None);
+    assert_eq!((row.told_at, row.told_reason), (None, None));
 }

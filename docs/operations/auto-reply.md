@@ -96,20 +96,29 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   refuses the send too. While it answers a conversation, agents are not offered it.
 - **Who holds a conversation.** A person holds it only by their own act: pressing take-over, or
   writing to the customer (in the panel or from the Business App) after it was handed to people.
-  An automatic hand-over (the model's, the server's, an order's, or the response-time job's) is
-  recorded on the queue row with the executor generation it wrote (`auto_handed_generation`,
-  `auto_handed_at`, migration `0051_auto_reply_reenter`); while the conversation is still at that
-  generation and no person wrote since, the customer's next message brings the assistant back,
-  as a hand-back would (a new generation, ledger `inbox.autoreply.reentered`), on the normal
-  settle time. The line to the customer and the owner's notice of an automatic hand-over go out
-  at most once per conversation in 12 hours (`told_at`): a repeat is silent (the run and
-  `inbox.autoreply.handed_over` with `silent: true`, nothing to the customer or the owner), and
-  while the customer was told, the model is told so in the conversation's note, so it answers
-  what it can without repeating the promise. For a served conversation the response-time job
-  hands nothing over whose customer message is outside the 24-hour reply window or already
-  handled by the assistant (its queue row rests, having looked at it); conversations the
-  automatic replies do not serve, and every conversation with the feature off, keep the job's
-  rule as it was.
+  An internal note or a change of the journey's owner is not such an act, and a Business App
+  message that arrives late is caught only by the in-flight drop. An automatic hand-over (the
+  model's, the server's or the response-time job's) is recorded on the queue row with the executor
+  generation it wrote (`auto_handed_generation`, `auto_handed_at`, migration
+  `0051_auto_reply_reenter`); while the conversation is still at that generation and no person
+  wrote since, the customer's next message brings the assistant back, as a hand-back would (a new
+  generation, ledger `inbox.autoreply.reentered`), on the normal settle time, but only when the
+  assistant could answer it (every check of a run passes); otherwise the conversation stays with
+  the person. An order's hand-over (`order_*`) is a person's to finish: the assistant never comes
+  back from it until a hand-back. Telling (`told_at`, `told_reason`): the customer's "someone will
+  get back to you" line goes out at most once in 12 hours, whatever the reason; the owner's notice
+  is held back only for the same reason within those 12 hours, so a new reason (a complaint after
+  an out-of-standard request) always reaches the owner; a hand-back, or a person writing to the
+  customer, forgets what was told. The ledger's `inbox.autoreply.handed_over` says
+  `customer_told: false` / `owner_notified: false` when either was held back, and while the
+  customer was told, the model is told so in the conversation's note. For a served conversation
+  the response-time job hands nothing over whose customer message is outside the 24-hour reply
+  window or was answered by a run (a reply or a quote queued after it; a run skipped or given up
+  did not answer it, and the job still hands such a conversation to a person); conversations the
+  automatic replies do not serve, and every conversation with the feature off, keep the job's rule
+  as it was. The migration's backfill marks an existing hand-over as automatic only when it is the
+  conversation's latest executor change of any kind and not an order's; nobody is marked as told.
+  An operator can always hand a conversation back by hand.
 - When a person on the team stated money in the current journey (an amount, a currency, a
   discount or payment word, or a bare number such as "3500 olur"), it never quotes in that
   journey: a quote becomes a hand-over (`human_quoted`), and the model is told so. Replies that
