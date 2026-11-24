@@ -440,6 +440,41 @@ async fn outbound_after_summary(r: &mut dyn TenantRepos, o: &OrderRow) -> Result
         .any(|m| m.direction == Direction::Outbound && m.id != shown.id && m.at > shown.at))
 }
 
+/// Whether every customer message the server received after order `o` was confirmed (its call
+/// time) leaves the order as it is (`order::harmless_after_confirmation`). A message whose receipt
+/// is not known counts as received after.
+async fn only_harmless_since(
+    r: &mut dyn TenantRepos,
+    o: &OrderRow,
+    c: Option<&Conversation>,
+) -> Result<bool, AppError> {
+    let Some(since) = o.called_at else {
+        return Ok(false);
+    };
+    let provider = c.and_then(|c| jt_connector::provider_for_kind(&c.kind_key));
+    let messages = r
+        .messages()
+        .recent(o.conversation_id, ORDER_HISTORY)
+        .await?;
+    for m in messages
+        .iter()
+        .filter(|m| m.direction == Direction::Inbound && m.at > since - Duration::days(1))
+    {
+        let received = match (provider, &m.external_id) {
+            (Some(provider), Some(id)) => r
+                .inbound_events()
+                .find_external(provider, id)
+                .await?
+                .map(|e| e.received_at),
+            _ => None,
+        };
+        if received.is_none_or(|at| at > since) && !order::harmless_after_confirmation(&m.body) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// What the customer made of the summary queued as outbox row `summary` (see [`Answer`]): it
 /// counts only once its send succeeded; then every customer message the server received after that
 /// send must be an explicit yes, and no person on the team may have written after it was queued.
@@ -957,10 +992,17 @@ async fn finish_order(
         .send_state(row.conversation_id)
         .await?
         .activity_revision;
-    // Since the confirmation, only more customer messages (nothing written to the customer by
-    // anyone after the summary): the link still goes; anything else leaves it to a person.
-    let moved = activity != s.activity_revision && outbound_after_summary(r.as_mut(), &o).await?;
+    // Since the confirmation, only harmless customer messages (thanks, a yes) and nothing written
+    // to the customer by anyone after the summary: the link still goes; anything else (a
+    // withdrawal, a wait, a question) leaves it to a person.
+    let moved = activity != s.activity_revision
+        && (outbound_after_summary(r.as_mut(), &o).await?
+            || !only_harmless_since(r.as_mut(), &o, c.as_ref()).await?);
     let person = person_after_summary(r.as_mut(), &o).await?;
+    // Still the agent's and ours, whatever else happened: a held-back link goes to a person.
+    let agents = c
+        .clone()
+        .filter(|c| c.executor == Executor::Agent && c.state == ConvState::Ours);
     let current = c.filter(|c| {
         c.executor == Executor::Agent
             && c.executor_generation == s.generation
@@ -1047,7 +1089,7 @@ async fn finish_order(
                         json!({ "run_id": run.id, "reason": "order_link_unsent" }),
                     )
                     .await?;
-                    match &current {
+                    match &agents {
                         Some(c) => {
                             hand_over(
                                 deps,

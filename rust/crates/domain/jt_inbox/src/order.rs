@@ -597,8 +597,44 @@ fn decoration(c: char) -> bool {
 /// collapsed), is one of [`YES_MESSAGES`]. A message with a
 /// `?` anywhere is never a yes, and nothing else is. Decided by the server alone.
 pub fn explicit_yes(text: &str) -> bool {
+    core_of(text).is_some_and(|core| YES_MESSAGES.contains(&core.as_str()))
+}
+
+/// The whole messages of thanks or acknowledgement a customer may send after confirming, while the
+/// order is created, as [`harmless_after_confirmation`] reads a message.
+pub const THANKS_MESSAGES: &[&str] = &[
+    "teşekkürler",
+    "teşekkür ederim",
+    "çok teşekkürler",
+    "çok teşekkür ederim",
+    "sağ ol",
+    "sağ olun",
+    "sağol",
+    "sağolun",
+    "eyvallah",
+    "süper",
+    "harika",
+    "tamamdır",
+    "bekliyorum",
+    "thanks",
+    "thank you",
+];
+
+/// Whether `text` (a customer's message after the confirmation, before the payment link is sent)
+/// leaves the order as it is: an [`explicit_yes`], or a whole message of [`THANKS_MESSAGES`], read
+/// the same way. Anything else (a withdrawal, a wait, a question) holds the link back.
+pub fn harmless_after_confirmation(text: &str) -> bool {
+    core_of(text).is_some_and(|core| {
+        YES_MESSAGES.contains(&core.as_str()) || THANKS_MESSAGES.contains(&core.as_str())
+    })
+}
+
+/// `text` as the whole-message lists are compared: none for a message with a `?`; else Turkish
+/// lower case with only the surrounding whitespace, the decorations a yes may carry and the
+/// trailing `.`, `!` and `,` taken off, whitespace inside collapsed.
+fn core_of(text: &str) -> Option<String> {
     if text.contains('?') || text.contains('？') {
-        return false;
+        return None;
     }
     let lower = normalise_text(text);
     let mut core = lower.trim_matches(|c: char| c.is_whitespace() || decoration(c));
@@ -611,8 +647,7 @@ pub fn explicit_yes(text: &str) -> bool {
         }
         core = next;
     }
-    let core = core.split_whitespace().collect::<Vec<_>>().join(" ");
-    YES_MESSAGES.contains(&core.as_str())
+    Some(core.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 /// `minor` as whole units with `.` between thousands (`3.500`, `3.500,50`).
@@ -1133,6 +1168,40 @@ mod tests {
             "evet 👍 ama",
         ] {
             assert!(!explicit_yes(not), "{not}");
+        }
+    }
+
+    #[test]
+    fn only_thanks_or_a_yes_leave_a_confirmed_order_as_it_is() {
+        for ok in [
+            "Teşekkürler",
+            "teşekkürler 🙏",
+            "Teşekkür ederim.",
+            "çok teşekkürler!",
+            "sağ olun",
+            "Sağolun",
+            "eyvallah",
+            "Süper",
+            "harika",
+            "tamamdır",
+            "bekliyorum",
+            "thanks",
+            "Thank you",
+            "evet",
+        ] {
+            assert!(harmless_after_confirmation(ok), "{ok}");
+        }
+        for not in [
+            "vazgeçtim",
+            "iptal edin",
+            "bir dakika",
+            "ne zaman gelir?",
+            "teşekkürler ama adres yanlış",
+            "teşekkürler?",
+            "teşekkürler 👎",
+            "",
+        ] {
+            assert!(!harmless_after_confirmation(not), "{not}");
         }
     }
 

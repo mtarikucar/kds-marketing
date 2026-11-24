@@ -3753,20 +3753,16 @@ async fn a_yes_the_server_received_before_the_summary_went_out_is_no_answer() {
     assert_eq!(orders(&t)[0].state, OrderState::Confirming);
 }
 
-#[tokio::test]
-async fn a_customer_message_during_the_shops_call_does_not_hold_back_the_link() {
-    let mut t = setup().await;
-    let shop = with_shop(&mut t).await;
-    quoted_then_accepted(&t).await;
-    summarised(&t).await;
-    // "Teşekkürler" arrives while the shop is asked.
+/// Queues "the customer writes `body` while the shop is asked" on `shop`'s next call.
+fn during_the_call(t: &T, shop: &ScriptedShop, wamid: &'static str, body: &'static str) {
     let (deps, uow, ws, cap) = (t.w.deps.clone(), t.w.uow.clone(), t.w.ws, t.cap);
     shop.during_next(move || async move {
         let mut draft = meta_drafts("whatsapp_messages").remove(0);
-        let at = FIXED_NOW_T + Duration::seconds(130);
-        draft.payload["message"]["id"] = json!("wamid.TEST-THANKS-1");
-        draft.payload["message"]["text"]["body"] = json!("Teşekkürler");
-        draft.external_id = "wamid.TEST-THANKS-1".into();
+        // After the confirmation (the run at the yes's settle time), during the shop's call.
+        let at = due(120) + Duration::seconds(5);
+        draft.payload["message"]["id"] = json!(wamid);
+        draft.payload["message"]["text"]["body"] = json!(body);
+        draft.external_id = wamid.into();
         draft.payload["occurred_at"] = json!(at.format(&Rfc3339).unwrap());
         let mut r = uow.tenant(ws).await.unwrap();
         r.inbound_events()
@@ -3789,6 +3785,15 @@ async fn a_customer_message_during_the_shops_call_does_not_hold_back_the_link() 
         r.commit().await.unwrap();
         jobs::run_inbox_consume(&deps, at + Duration::seconds(1)).await;
     });
+}
+
+#[tokio::test]
+async fn thanks_during_the_shops_call_does_not_hold_back_the_link() {
+    let mut t = setup().await;
+    let shop = with_shop(&mut t).await;
+    quoted_then_accepted(&t).await;
+    summarised(&t).await;
+    during_the_call(&t, &shop, "wamid.TEST-THANKS-1", "Teşekkürler");
     created(&shop, "SHOP-0011", 150_000);
     answered(&t, "Evet", 120, fields(), "").await;
     assert_eq!(orders(&t)[0].state, OrderState::Created);
@@ -3798,6 +3803,41 @@ async fn a_customer_message_during_the_shops_call_does_not_hold_back_the_link() 
         "the link goes out: {sent:?}"
     );
     assert_eq!(conversation(&t).executor, Executor::Agent);
+}
+
+#[tokio::test]
+async fn a_withdrawal_wait_or_question_during_the_shops_call_holds_back_the_link() {
+    for body in [
+        "vazgeçtim",
+        "iptal edin",
+        "bir dakika",
+        "Ne zaman kargoya verilir?",
+    ] {
+        let mut t = setup().await;
+        let shop = with_shop(&mut t).await;
+        quoted_then_accepted(&t).await;
+        summarised(&t).await;
+        during_the_call(&t, &shop, "wamid.TEST-DURING-1", body);
+        created(&shop, "SHOP-0012", 150_000);
+        answered(&t, "Evet", 120, fields(), "").await;
+        // The order exists at the shop; the link is a person's to send.
+        assert_eq!(orders(&t)[0].state, OrderState::Created, "{body}");
+        let sent = texts_sent(&t);
+        assert!(
+            sent.iter().all(|s| !s.contains("https://")),
+            "{body}: {sent:?}"
+        );
+        assert_eq!(sent.len(), 2, "only the quote and the summary: {body}");
+        handed_to_a_person(&t);
+        let s = t.w.uow.snapshot();
+        let note = &s.inbox.notes.last().unwrap().text;
+        assert!(note.contains("SHOP-0012"), "{body}: {note}");
+        assert_eq!(
+            reasons(&t, "inbox.autoreply.refused"),
+            ["order_link_unsent"],
+            "{body}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
