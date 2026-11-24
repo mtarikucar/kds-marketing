@@ -2664,6 +2664,7 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
         auto_handed_at: None,
         told_at: None,
         told_reason: None,
+        line_told_at: None,
     };
     let mut t = uow.tenant(f.ws).await.unwrap();
     t.auto_reply().queue_save(&row).await.unwrap();
@@ -2990,10 +2991,21 @@ pub async fn auto_reply_handover_mark(uow: Arc<dyn UnitOfWork>) {
         .handover_mark(id, None, at(30), None)
         .await
         .unwrap();
+    t.auto_reply().line_told(id, at(30)).await.unwrap();
+    assert_eq!(
+        t.auto_reply()
+            .queue_get(id)
+            .await
+            .unwrap()
+            .unwrap()
+            .line_told_at,
+        Some(at(30))
+    );
     t.auto_reply().told_clear(id).await.unwrap();
     t.commit().await.unwrap();
     let mut t = uow.tenant(f.ws).await.unwrap();
     let row = t.auto_reply().queue_get(id).await.unwrap().unwrap();
     assert_eq!(row.auto_handed_generation, None);
     assert_eq!((row.told_at, row.told_reason), (None, None));
+    assert_eq!(row.line_told_at, None);
 }

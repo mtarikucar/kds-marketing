@@ -4495,7 +4495,11 @@ async fn back_after_a_hand_over_a_bargain_gets_the_preferred_step() {
 async fn a_person_who_wrote_after_the_hand_over_holds_the_conversation() {
     let t = setup().await;
     handed_over_with_a_line(&t).await;
-    t.meta.push_send_text(accepted());
+    // The person's reply gets its own provider id (the scripted one is the line's).
+    t.meta.push_send_text(Ok(SendReceipt {
+        provider_id: "wamid.TEST-PERSON-1".into(),
+        cost_minor: None,
+    }));
     replies::reply(
         &t.w.deps,
         &at(&t.w.owner_ctx, consumed_at(60)),
@@ -4687,4 +4691,31 @@ async fn a_served_conversation_nobody_answered_still_reaches_a_person() {
     assert!(t.model.requests().is_empty(), "the run was set aside");
     jobs::run_response_sla(&t.w.deps, consumed_at(0) + Duration::hours(1)).await;
     handed_to_a_person(&t);
+}
+
+#[tokio::test]
+async fn a_hand_over_without_a_line_does_not_count_as_telling_the_customer() {
+    let t = setup().await;
+    // A hand-over whose line is empty: the owner may be told, the customer was not.
+    inbound(&t, 0, 0).await;
+    t.model.answer(tool(ModelTool::HandOver {
+        reason: "not_covered".into(),
+        summary: "Özet.".into(),
+        text: None,
+    }));
+    job(&t, due(0)).await;
+    handed_to_a_person(&t);
+    assert!(texts_sent(&t).is_empty());
+    says(&t, "wamid.TEST-AGAIN-1", HALF_HOUR, "Bir sorum daha var.").await;
+    t.model.answer(hand_over_tool(
+        "not_covered",
+        "Ekibimizden biri size dönecek.",
+    ));
+    t.meta.push_send_text(accepted());
+    job(&t, due(HALF_HOUR)).await;
+    assert_eq!(
+        texts_sent(&t),
+        ["Ekibimizden biri size dönecek."],
+        "the customer is told the first time it is sent"
+    );
 }

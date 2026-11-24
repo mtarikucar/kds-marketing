@@ -82,11 +82,13 @@ impl AutoReplyRepo for MemTenant {
                     row.auto_handed_at = old.auto_handed_at;
                     row.told_at = old.told_at;
                     row.told_reason = old.told_reason.clone();
+                    row.line_told_at = old.line_told_at;
                 } else {
                     row.auto_handed_generation = None;
                     row.auto_handed_at = None;
                     row.told_at = None;
                     row.told_reason = None;
+                    row.line_told_at = None;
                 }
                 s.auto_reply
                     .queue
@@ -141,6 +143,19 @@ impl AutoReplyRepo for MemTenant {
                 if *w == ws && row.conversation_id == id {
                     row.told_at = None;
                     row.told_reason = None;
+                    row.line_told_at = None;
+                }
+            }
+        });
+        Ok(())
+    }
+
+    async fn line_told(&mut self, id: ConversationId, at: OffsetDateTime) -> Result<(), AppError> {
+        let ws = self.ws;
+        self.tx.write(move |s| {
+            for (w, row) in &mut s.auto_reply.queue {
+                if *w == ws && row.conversation_id == id {
+                    row.line_told_at = Some(at);
                 }
             }
         });

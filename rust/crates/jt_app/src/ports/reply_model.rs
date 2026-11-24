@@ -385,6 +385,9 @@ pub struct QueueRow {
     /// its line, and for which reason; kept like the two above.
     pub told_at: Option<OffsetDateTime>,
     pub told_reason: Option<String>,
+    /// When the customer was last sent a hand-over's line; kept like the ones above
+    /// ([`AutoReplyRepo::line_told`]).
+    pub line_told_at: Option<OffsetDateTime>,
 }
 
 impl QueueRow {
@@ -402,6 +405,7 @@ impl QueueRow {
             auto_handed_at: None,
             told_at: None,
             told_reason: None,
+            line_told_at: None,
         }
     }
 
@@ -585,6 +589,9 @@ pub trait AutoReplyRepo: Send + Sync {
     /// Forgets that the customer and the owner were told of a hand-over (a person handed the
     /// conversation back).
     async fn told_clear(&mut self, id: ConversationId) -> Result<(), AppError>;
+    /// Records that the customer of conversation `id` was sent a hand-over's line at `at` (its
+    /// queue row exists: the hand-over marked it).
+    async fn line_told(&mut self, id: ConversationId, at: OffsetDateTime) -> Result<(), AppError>;
     /// Removes conversation `id`'s queue row, if any.
     async fn queue_delete(&mut self, id: ConversationId) -> Result<(), AppError>;
     /// The conversations a run may take at `now` ([`QueueRow::takeable`]), the longest waiting
@@ -692,6 +699,7 @@ mod tests {
             auto_handed_at: None,
             told_at: None,
             told_reason: None,
+            line_told_at: None,
         }
     }
 

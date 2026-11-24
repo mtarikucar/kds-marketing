@@ -1,14 +1,16 @@
 -- The inbox's automatic replies come back first after an automatic hand-over
 -- (`usecases::inbox::autoreply`): each queue row keeps the last automatic hand-over the assistant
 -- may come back from (the executor generation it wrote and when; none after an order's
--- hand-over, which a person finishes), and when and for which reason the customer and the owner
--- were last told of one. Additive: four nullable columns on `auto_reply_queue`. Repeatable:
--- every statement is guarded.
+-- hand-over, which a person finishes), when and for which reason the owner was last told of one,
+-- and when the customer was last sent a hand-over's line. Additive: five nullable columns on
+-- `auto_reply_queue`. Repeatable: every statement is guarded.
 alter table auto_reply_queue add column if not exists auto_handed_generation bigint
     check (auto_handed_generation is null or auto_handed_generation between 0 and 4294967295);
 alter table auto_reply_queue add column if not exists auto_handed_at timestamptz;
 alter table auto_reply_queue add column if not exists told_at timestamptz;
 alter table auto_reply_queue add column if not exists told_reason text;
+-- When the customer was last sent a hand-over's line ("someone will get back to you").
+alter table auto_reply_queue add column if not exists line_told_at timestamptz;
 
 -- Backfill, conservatively: a served conversation (it has a queue row) a person holds now is
 -- marked as handed over automatically only when its latest automatic hand-over in the ledger (the

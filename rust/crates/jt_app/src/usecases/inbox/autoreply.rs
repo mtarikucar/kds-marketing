@@ -1483,7 +1483,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     let Some(row) = r.auto_reply().queue_lock(id).await? else {
         return Ok(Prepared::Done(Worked::Skipped));
     };
-    let told_recently = told(r.as_mut(), id, now).await?.is_some();
+    let told_recently = told(r.as_mut(), id, now).await?.line;
     let c = r.conversations().lock(id).await?;
     let live = Live::read(r.as_mut()).await?;
     let auto = live.as_ref().and_then(|l| l.settings.auto_reply.clone());
@@ -2509,8 +2509,10 @@ async fn auto_handover(
 ) -> Result<Silence, AppError> {
     let told = told(r, id, now).await?;
     let silence = Silence {
-        line: told.is_some(),
-        notice: told.is_some_and(|told_reason| told_reason.as_deref() == Some(reason)),
+        line: told.line,
+        notice: told
+            .notice
+            .is_some_and(|told_reason| told_reason.as_deref() == Some(reason)),
     };
     // An order's hand-over is a person's to finish: nothing for the assistant to come back from.
     let back = (!reason.starts_with("order_")).then_some(generation);
@@ -2535,21 +2537,28 @@ async fn told(
     r: &mut dyn TenantRepos,
     id: ConversationId,
     now: OffsetDateTime,
-) -> Result<Option<Option<String>>, AppError> {
+) -> Result<Told, AppError> {
     let Some(row) = r.auto_reply().queue_get(id).await? else {
-        return Ok(None);
+        return Ok(Told::default());
     };
-    let Some(at) = row.told_at.filter(|at| now - *at < TOLD_QUIET) else {
-        return Ok(None);
+    let wrote = r.messages().person_last_at(id).await?;
+    // Recent, and no person wrote to the customer since.
+    let fresh = |at: Option<OffsetDateTime>| {
+        at.filter(|at| now - *at < TOLD_QUIET && wrote.is_none_or(|w| w <= *at))
     };
-    if r.messages()
-        .person_last_at(id)
-        .await?
-        .is_some_and(|wrote| wrote > at)
-    {
-        return Ok(None);
-    }
-    Ok(Some(row.told_reason))
+    Ok(Told {
+        notice: fresh(row.told_at).map(|_| row.told_reason.clone()),
+        line: fresh(row.line_told_at).is_some(),
+    })
+}
+
+/// What was told of an automatic hand-over within [`TOLD_QUIET`] ([`told`]).
+#[derive(Clone, Debug, Default)]
+struct Told {
+    /// The owner was notified, of this reason.
+    notice: Option<Option<String>>,
+    /// The customer was sent the line.
+    line: bool,
 }
 
 /// Whether conversation `c` comes back to the assistant: a person is its executor only by an
@@ -2698,7 +2707,12 @@ async fn hand_over(
         quote: None,
         handing_over: true,
     };
-    Ok(enqueue(deps, ctx, r, c.id, line, &send).await?.ok())
+    let queued = enqueue(deps, ctx, r, c.id, line, &send).await?.ok();
+    // The customer is told only when the line was queued.
+    if queued.is_some() {
+        r.auto_reply().line_told(c.id, ctx.now).await?;
+    }
+    Ok(queued)
 }
 
 /// The model gave no answer (its call is recorded already, [`called`]): after a rate limit or an

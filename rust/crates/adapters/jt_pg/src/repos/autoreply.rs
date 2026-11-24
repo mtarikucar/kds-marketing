@@ -70,6 +70,7 @@ struct QueueRecord {
     auto_handed_at: Option<OffsetDateTime>,
     told_at: Option<OffsetDateTime>,
     told_reason: Option<String>,
+    line_told_at: Option<OffsetDateTime>,
 }
 
 impl QueueRecord {
@@ -93,6 +94,7 @@ impl QueueRecord {
             auto_handed_at: self.auto_handed_at,
             told_at: self.told_at,
             told_reason: self.told_reason,
+            line_told_at: self.line_told_at,
         })
     }
 }
@@ -222,8 +224,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
             "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at, \
-             handled_at, auto_handed_generation, auto_handed_at, told_at, told_reason \
-             from auto_reply_queue where workspace_id = $1 and conversation_id = $2 for update",
+             handled_at, auto_handed_generation, auto_handed_at, told_at, told_reason, \
+             line_told_at from auto_reply_queue where workspace_id = $1 and conversation_id = $2 for update",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
@@ -237,8 +239,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
             "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at, \
-             handled_at, auto_handed_generation, auto_handed_at, told_at, told_reason \
-             from auto_reply_queue where workspace_id = $1 and conversation_id = $2",
+             handled_at, auto_handed_generation, auto_handed_at, told_at, told_reason, \
+             line_told_at from auto_reply_queue where workspace_id = $1 and conversation_id = $2",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
@@ -307,14 +309,29 @@ impl AutoReplyRepo for PgTenantRepos {
     async fn told_clear(&mut self, id: ConversationId) -> Result<(), AppError> {
         let ws = self.workspace_id();
         sqlx::query(
-            "update auto_reply_queue set told_at = null, told_reason = null \
-             where workspace_id = $1 and conversation_id = $2",
+            "update auto_reply_queue set told_at = null, told_reason = null, \
+             line_told_at = null where workspace_id = $1 and conversation_id = $2",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "forget a hand-over's notice"))?;
+        Ok(())
+    }
+
+    async fn line_told(&mut self, id: ConversationId, at: OffsetDateTime) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        sqlx::query(
+            "update auto_reply_queue set line_told_at = $3 \
+             where workspace_id = $1 and conversation_id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .bind(at)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "record a hand-over's line"))?;
         Ok(())
     }
 

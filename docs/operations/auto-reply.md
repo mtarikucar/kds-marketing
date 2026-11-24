@@ -105,7 +105,8 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   generation, ledger `inbox.autoreply.reentered`), on the normal settle time, but only when the
   assistant could answer it (every check of a run passes); otherwise the conversation stays with
   the person. An order's hand-over (`order_*`) is a person's to finish: the assistant never comes
-  back from it until a hand-back. Telling (`told_at`, `told_reason`): the customer's "someone will
+  back from it until a hand-back. Telling (`told_at`, `told_reason` for the owner's notice, `line_told_at`
+  for the customer, set only when the line was actually queued): the customer's "someone will
   get back to you" line goes out at most once in 12 hours, whatever the reason; the owner's notice
   is held back only for the same reason within those 12 hours, so a new reason (a complaint after
   an out-of-standard request) always reaches the owner; a hand-back, or a person writing to the
