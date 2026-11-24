@@ -716,6 +716,7 @@ async fn a_page_linked_account_reads_its_identity_through_the_page() {
 
     // A post of another account: refused. An identity read Meta refuses leaves what the
     // connection stored, which does not match either.
+    r.mock.clear();
     r.mock.set("GET", NODE, post(&r, Some(OTHER), None));
     r.mock.set(
         "GET",
