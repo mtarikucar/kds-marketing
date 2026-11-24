@@ -29,10 +29,11 @@ use jt_app::ports::connectors::{
     DeliveryStatus, GoogleApp, InboundEventDraft, InsightsReader, InstagramApp, IysAnswer,
     LeadGenFetcher, LeadGenRecord, LinkedinApp, MailMessage, MailSender, MailboxCursor,
     MailboxPoller, Media, MessagingSender, MetaApp, ModerationAction, OAuthApp, OAuthFlow,
-    OAuthProvider, PlatformAppConfig, PlatformScheduled, PolledMail, PostMetrics, PrivateReceipt,
-    PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest, PublishResolution,
-    Publisher, RecentPost, Scheduled, SendReceipt, SmsConsentFilter, SmsSender, SubjectFacts,
-    Telephony, TiktokAdsApp, TiktokApp, TiktokCreator, Url, XApp,
+    OAuthProvider, OwnPostsPage, OwnPostsQuery, PlatformAppConfig, PlatformScheduled, PolledMail,
+    PostMetrics, PrivateReceipt, PublicPoller, PublicSurface, PublicTarget, PublishReceipt,
+    PublishRequest, PublishResolution, Publisher, RecentPost, Scheduled, SendReceipt,
+    SmsConsentFilter, SmsSender, SubjectFacts, Telephony, TiktokAdsApp, TiktokApp, TiktokCreator,
+    Url, XApp,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
@@ -488,6 +489,16 @@ pub struct ScriptedConnector {
     /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::recent_posts_calls`]).
     recent_posts: Script<Result<Option<Vec<RecentPost>>, ConnectorError>>,
     recent_posts_calls: Mutex<Vec<u32>>,
+    /// An account's own posts answer from here, `Ok(None)` (the trait's default: not listed)
+    /// when nothing is queued; the queries are kept apart from [`ScriptedConnector::calls`]
+    /// (see [`ScriptedConnector::own_posts_calls`]).
+    own_posts: Script<Result<Option<OwnPostsPage>, ConnectorError>>,
+    own_posts_calls: Mutex<Vec<OwnPostsQuery>>,
+    /// An own post's image answers from here, `Ok(None)` when nothing is queued; the posts and
+    /// items asked for (with the largest size allowed) are kept apart from
+    /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::own_post_image_calls`]).
+    own_post_image: Script<Result<Option<Media>, ConnectorError>>,
+    own_post_image_calls: Mutex<Vec<(String, u32, usize)>>,
     send_text: Script<Result<SendReceipt, ConnectorError>>,
     /// Sender-name lookups answer from here, `Ok(None)` when nothing is queued; they are kept
     /// apart from [`ScriptedConnector::calls`] (see [`ScriptedConnector::sender_name_calls`]).
@@ -613,6 +624,10 @@ impl ScriptedConnector {
             account_metrics: Script::default(),
             recent_posts: Script::default(),
             recent_posts_calls: Mutex::default(),
+            own_posts: Script::default(),
+            own_posts_calls: Mutex::default(),
+            own_post_image: Script::default(),
+            own_post_image_calls: Mutex::default(),
             send_text: Script::default(),
             sender_name: Script::default(),
             sender_name_calls: Mutex::default(),
@@ -790,6 +805,26 @@ impl ScriptedConnector {
     /// The limits [`InsightsReader::recent_posts`] was asked for, in order.
     pub fn recent_posts_calls(&self) -> Vec<u32> {
         lock(&self.recent_posts_calls).clone()
+    }
+
+    /// Queues what the next [`InsightsReader::own_posts`] answers.
+    pub fn push_own_posts(&self, result: Result<Option<OwnPostsPage>, ConnectorError>) {
+        self.own_posts.push(result);
+    }
+
+    /// The queries [`InsightsReader::own_posts`] was asked, in order.
+    pub fn own_posts_calls(&self) -> Vec<OwnPostsQuery> {
+        lock(&self.own_posts_calls).clone()
+    }
+
+    /// Queues what the next [`InsightsReader::own_post_image`] answers.
+    pub fn push_own_post_image(&self, result: Result<Option<Media>, ConnectorError>) {
+        self.own_post_image.push(result);
+    }
+
+    /// The `(post_id, index, max_bytes)` [`InsightsReader::own_post_image`] was asked, in order.
+    pub fn own_post_image_calls(&self) -> Vec<(String, u32, usize)> {
+        lock(&self.own_post_image_calls).clone()
     }
 
     /// Run after recording a provider write, before its result. Supports races and crashes.
@@ -1149,6 +1184,28 @@ impl InsightsReader for ScriptedConnector {
     ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
         lock(&self.recent_posts_calls).push(limit);
         self.recent_posts.try_next().unwrap_or(Ok(None))
+    }
+
+    async fn own_posts(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        query: &OwnPostsQuery,
+    ) -> Result<Option<OwnPostsPage>, ConnectorError> {
+        lock(&self.own_posts_calls).push(query.clone());
+        self.own_posts.try_next().unwrap_or(Ok(None))
+    }
+
+    async fn own_post_image(
+        &self,
+        _cred: &Credential,
+        _public: &Value,
+        post_id: &str,
+        index: u32,
+        max_bytes: usize,
+    ) -> Result<Option<Media>, ConnectorError> {
+        lock(&self.own_post_image_calls).push((post_id.to_owned(), index, max_bytes));
+        self.own_post_image.try_next().unwrap_or(Ok(None))
     }
 }
 

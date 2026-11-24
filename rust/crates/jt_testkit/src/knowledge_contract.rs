@@ -89,6 +89,7 @@ pub fn proposal(
     by: Proposer,
 ) -> Proposal {
     Proposal {
+        card_key: None,
         id: KnowledgeProposalId::new_v7(),
         kind,
         card_id: card,

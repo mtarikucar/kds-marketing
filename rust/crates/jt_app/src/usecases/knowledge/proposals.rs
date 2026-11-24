@@ -4,7 +4,16 @@
 //!
 //! A proposal is a change an agent learned while working and the owner did not say: a new card,
 //! a card's whole new text, a rule or a goal, with a one-line reason in Turkish. Nothing changes
-//! until the owner adds it; it closes by itself after 14 days (60 for the system's own).
+//! until the owner adds it; it closes by itself after 14 days (60 for the system's own). A new
+//! card may name the well-known card it makes (`card_key`, one of `WELL_KNOWN_CARDS`, such as
+//! the brand scan's `visual_style`); its title is then the well-known one unless the agent gives
+//! one. While the workspace has a live card of that key, the proposal is refused (`CONFLICT`
+//! `card_exists`, naming the card: propose a `card_edit` of it), and while another proposal for
+//! that key waits, `CONFLICT` `proposal_exists`. A card of that key the owner removed does not
+//! refuse it. Accepting it makes the card with its key; a live one of that key made meanwhile
+//! supersedes it. When the owner had removed the card of that key, accepting restores that card
+//! with the proposal's title and text as its next revision (one card a key: its earlier text
+//! stays in its history, where the owner can read it back).
 //!
 //! Refusals at create: `CONFLICT` `too_many_proposals` (20 pending, the system's not counted),
 //! `CONFLICT` `proposal_rate` (10 a day from one connection), `CONFLICT` `proposal_exists` (the
@@ -20,8 +29,8 @@
 use jt_knowledge::{
     AGENT_PROPOSAL_TTL, Card, Cause, KnowledgeCardId, KnowledgeProposalId, MAX_GOALS,
     MAX_LIVE_CARDS, MAX_PENDING_PROPOSALS, MAX_PROHIBITIONS, MAX_PROPOSALS_PER_DAY, Proposal,
-    ProposalKind, ProposalStatus, Proposer, Subject, append_lines, validate_proposal,
-    validate_text,
+    ProposalKind, ProposalStatus, Proposer, Subject, append_lines, validate_card_key,
+    validate_proposal, validate_text, well_known_title,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -50,6 +59,9 @@ pub struct ProposalCreateInput {
     pub kind: ProposalKind,
     #[serde(default)]
     pub card_id: Option<KnowledgeCardId>,
+    /// `card_new` only: the well-known card it makes (`jt_knowledge::WELL_KNOWN_CARDS`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_key: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     pub body: String,
@@ -65,10 +77,14 @@ pub async fn proposal_create(
     let connection = agent(ctx)?;
     ctx.require_any(WORK_PERMISSIONS)?;
     let key = validate_text("request_key", &input.request_key, 1, 128).map_err(invalid)?;
+    let card_key = validate_card_key(input.kind, input.card_key.as_deref()).map_err(invalid)?;
     let draft = validate_proposal(
         input.kind,
         input.card_id,
-        input.title.as_deref(),
+        input
+            .title
+            .as_deref()
+            .or(card_key.as_deref().and_then(well_known_title)),
         &input.body,
         &input.reason,
     )
@@ -110,6 +126,21 @@ pub async fn proposal_create(
         }
         None => None,
     };
+    if let Some(card_key) = &card_key
+        && let Some(card) = r
+            .knowledge()
+            .cards()
+            .await?
+            .into_iter()
+            .find(|c| c.is_live() && c.key.as_deref() == Some(card_key))
+    {
+        return Err(refused(
+            ErrorCode::Conflict,
+            "card_exists",
+            "the workspace has this card: propose a card_edit of it",
+            json!({ "card_id": card.id }),
+        ));
+    }
     let pending = r
         .knowledge()
         .proposals(Some(ProposalStatus::Pending))
@@ -134,10 +165,10 @@ pub async fn proposal_create(
             json!({ "max": MAX_PROPOSALS_PER_DAY }),
         ));
     }
-    if pending
-        .iter()
-        .any(|p| p.kind == draft.kind && p.card_id == draft.card_id && p.body == draft.body)
-    {
+    if pending.iter().any(|p| {
+        (p.kind == draft.kind && p.card_id == draft.card_id && p.body == draft.body)
+            || (card_key.is_some() && p.card_key == card_key)
+    }) {
         return Err(conflict(
             "proposal_exists",
             "the same proposal waits for the owner",
@@ -147,6 +178,7 @@ pub async fn proposal_create(
         id: KnowledgeProposalId(deps.ids.uuid()),
         kind: draft.kind,
         card_id: draft.card_id,
+        card_key,
         title: draft.title,
         body: draft.body,
         reason: draft.reason,
@@ -205,33 +237,67 @@ pub async fn proposal_accept(
     match p.kind {
         ProposalKind::CardNew => {
             let cards = r.knowledge().cards().await?;
+            if p.card_key.is_some() && cards.iter().any(|c| c.is_live() && c.key == p.card_key) {
+                return close(r, ctx, p, ProposalStatus::Superseded, "proposal_superseded").await;
+            }
             if live(&cards) >= MAX_LIVE_CARDS {
                 return Err(too_many_cards());
             }
-            let card = Card {
-                id: KnowledgeCardId(deps.ids.uuid()),
-                key: None,
-                title: p.title.clone().unwrap_or_default(),
-                body: p.body.clone(),
-                attachments: Vec::new(),
-                position: next_position(&cards),
-                revision: 1,
-                created_at: ctx.now,
-                created_by: ctx.actor.clone(),
-                updated_at: ctx.now,
-                updated_by: ctx.actor.clone(),
-                archived_at: None,
-            };
-            r.knowledge().insert_card(&card).await?;
-            let (posting, prospecting) = moves(None, &card);
-            let c = accepted(
-                &p,
-                person,
-                Subject::Card,
-                Some(&card),
-                (posting, prospecting),
-            );
-            kb.record(r.as_mut(), deps, ctx, c).await?;
+            // The owner removed the card of this key: it comes back with the proposal's text.
+            let removed = cards
+                .iter()
+                .find(|c| p.card_key.is_some() && c.key == p.card_key)
+                .map(|c| c.id);
+            if let Some(removed) = removed {
+                let before = r
+                    .knowledge()
+                    .lock_card(removed)
+                    .await?
+                    .ok_or_else(|| AppError::internal("a card just listed is gone"))?;
+                let mut card = before.clone();
+                card.title = p.title.clone().unwrap_or(card.title);
+                card.body = p.body.clone();
+                card.position = next_position(&cards);
+                card.archived_at = None;
+                card.revision += 1;
+                card.updated_at = ctx.now;
+                card.updated_by = ctx.actor.clone();
+                r.knowledge().save_card(&card).await?;
+                let c = accepted(
+                    &p,
+                    person,
+                    Subject::Card,
+                    Some(&card),
+                    moves(Some(&before), &card),
+                );
+                kb.record(r.as_mut(), deps, ctx, c).await?;
+                supersede_edits(r.as_mut(), card.id, ctx.now).await?;
+            } else {
+                let card = Card {
+                    id: KnowledgeCardId(deps.ids.uuid()),
+                    key: p.card_key.clone(),
+                    title: p.title.clone().unwrap_or_default(),
+                    body: p.body.clone(),
+                    attachments: Vec::new(),
+                    position: next_position(&cards),
+                    revision: 1,
+                    created_at: ctx.now,
+                    created_by: ctx.actor.clone(),
+                    updated_at: ctx.now,
+                    updated_by: ctx.actor.clone(),
+                    archived_at: None,
+                };
+                r.knowledge().insert_card(&card).await?;
+                let (posting, prospecting) = moves(None, &card);
+                let c = accepted(
+                    &p,
+                    person,
+                    Subject::Card,
+                    Some(&card),
+                    (posting, prospecting),
+                );
+                kb.record(r.as_mut(), deps, ctx, c).await?;
+            }
         }
         ProposalKind::CardEdit => {
             let card_id = p
@@ -433,6 +499,9 @@ async fn ledger(
         map.insert("proposal_id".into(), json!(p.id));
         map.insert("kind".into(), json!(p.kind.key()));
         map.insert("card_id".into(), json!(p.card_id));
+        if let Some(card_key) = &p.card_key {
+            map.insert("card_key".into(), json!(card_key));
+        }
     }
     let mut entry = ledger_entry(ctx, action, "knowledge_proposal", p.id, payload)?;
     entry.strategy_version_id = r

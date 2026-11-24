@@ -303,6 +303,7 @@ struct ProposalRecord {
     id: Uuid,
     kind: String,
     card_id: Option<Uuid>,
+    card_key: Option<String>,
     title: Option<String>,
     body: String,
     reason: String,
@@ -334,6 +335,7 @@ impl ProposalRecord {
             id: KnowledgeProposalId(self.id),
             kind: stored(ProposalKind::parse(&self.kind), "knowledge proposal kind")?,
             card_id: self.card_id.map(KnowledgeCardId),
+            card_key: self.card_key,
             title: self.title,
             body: self.body,
             reason: self.reason,
@@ -358,8 +360,8 @@ impl ProposalRecord {
     }
 }
 
-const PROPOSAL_COLUMNS: &str = "id, kind, card_id, title, body, reason, status, base_revision, \
-     proposed_at, proposed_by_connection, proposed_by_component, expires_at, decided_at, \
+const PROPOSAL_COLUMNS: &str = "id, kind, card_id, card_key, title, body, reason, status, \
+     base_revision, proposed_at, proposed_by_connection, proposed_by_component, expires_at, decided_at, \
      decided_by_user, applied_revision";
 
 fn proposer_columns(p: &Proposer) -> (Option<Uuid>, Option<&str>) {
@@ -863,8 +865,9 @@ impl KnowledgeRepo for PgTenantRepos {
         let done = sqlx::query(
             "insert into knowledge_proposals (workspace_id, id, kind, card_id, title, body, \
              reason, status, base_revision, proposed_at, proposed_by_connection, \
-             proposed_by_component, expires_at, decided_at, decided_by_user, applied_revision) \
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+             proposed_by_component, expires_at, decided_at, decided_by_user, applied_revision, \
+             card_key) \
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
              on conflict do nothing",
         )
         .bind(ws.as_uuid())
@@ -891,6 +894,7 @@ impl KnowledgeRepo for PgTenantRepos {
                 .map(|n| int(n, "the applied revision"))
                 .transpose()?,
         )
+        .bind(p.card_key.as_deref())
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "store a knowledge proposal"))?;

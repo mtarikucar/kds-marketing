@@ -25,7 +25,7 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 133] = [
+const POST_M4_ADDED: [(&str, &str); 135] = [
     ("modules.list", "jeeta.modules.list"),
     ("modules.install", "jeeta.modules.install"),
     ("modules.update", "jeeta.modules.update"),
@@ -235,6 +235,9 @@ const POST_M4_ADDED: [(&str, &str); 133] = [
     ("strategy.note_file", "jeeta.strategy.note_file"),
     ("strategy.note_release", "jeeta.strategy.note_release"),
     ("strategy.proposal_create", "jeeta.strategy.proposal_create"),
+    // A connected account's own posts, for the brand scan (docs/operations/brand-scan.md).
+    ("social.own_posts", "jeeta.social.own_posts"),
+    ("social.own_post_image", "jeeta.social.own_post_image"),
 ];
 
 /// Panel-only rows added after the M4 amendment: the TikTok posting screen, which only a human

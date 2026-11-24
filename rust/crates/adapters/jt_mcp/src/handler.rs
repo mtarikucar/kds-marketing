@@ -184,7 +184,7 @@ impl McpHandler {
             tracing::error!(code = err.code.as_str(), "could not ledger a tool call");
         }
         match outcome {
-            Ok(output) => CallToolResult::structured(output),
+            Ok(output) => crate::tools::success(output),
             Err(err) => tool_error(err),
         }
     }

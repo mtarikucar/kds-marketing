@@ -14,6 +14,7 @@ use jt_app::ports::connectors::{
     PrivateReceipt, PublicPoller, PublicSurface, PublicTarget, PublishReceipt, PublishRequest,
     Publisher, Scheduled, SendReceipt, SubjectFacts,
 };
+use jt_app::ports::connectors::{OwnPostsPage, OwnPostsQuery};
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use jt_tenancy::WorkspaceId;
 use serde_json::Value;
@@ -21,8 +22,8 @@ use time::Date;
 use url::Url;
 
 use crate::{
-    META_HOSTS, MetaConnector, ads, assets, comments, insights, leadgen, messaging, oauth, probe,
-    publish, schedule,
+    META_HOSTS, MetaConnector, ads, assets, comments, insights, leadgen, messaging, oauth,
+    own_posts, probe, publish, schedule,
 };
 
 #[async_trait]
@@ -191,6 +192,28 @@ impl InsightsReader for MetaConnector {
         public: &Value,
     ) -> Result<AccountMetrics, ConnectorError> {
         insights::account_metrics(self, cred, public).await
+    }
+
+    /// An Instagram account's own posts; `None` for another kind.
+    async fn own_posts(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        query: &OwnPostsQuery,
+    ) -> Result<Option<OwnPostsPage>, ConnectorError> {
+        own_posts::own_posts(self, cred, public, query).await
+    }
+
+    /// An Instagram post's image; `None` for another kind.
+    async fn own_post_image(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        post_id: &str,
+        index: u32,
+        max_bytes: usize,
+    ) -> Result<Option<Media>, ConnectorError> {
+        own_posts::own_post_image(self, cred, public, post_id, index, max_bytes).await
     }
 }
 

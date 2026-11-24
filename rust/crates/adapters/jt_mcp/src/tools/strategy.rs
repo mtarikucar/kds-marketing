@@ -63,6 +63,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           objective, topics with has_posts, closing topics and prospecting). \
                           Topic ids are what tools that ask for a hypothesis_id take. The \
                           owner's edits apply at once: read this at the start of every run. \
+                          Before writing any piece, follow the voice card (key voice) and the \
+                          visual style card (key visual_style) once the owner added one; a \
+                          pending proposal is not a source (docs/operations/brand-scan.md). \
                           [risk: READ]",
             permissions: &[Permission::WorkspaceRead],
             schema: schema_for::<NoArgs>,
@@ -168,7 +171,10 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           owner adds it in Bilgi bankasi; it closes by itself after 14 days. At \
                           most 20 pending, 10 a day from one connection (CONFLICT \
                           too_many_proposals, proposal_rate); the same proposal pending twice is \
-                          CONFLICT proposal_exists. A replay of request_key answers the same \
+                          CONFLICT proposal_exists. A card_new may name the well-known card it \
+                          makes with card_key (visual_style); while the workspace has a card of \
+                          that key it is CONFLICT card_exists with its card_id (propose a \
+                          card_edit of it instead). A replay of request_key answers the same \
                           proposal. [risk: WRITE]",
             permissions: knowledge::WORK_PERMISSIONS,
             schema: proposal_create_schema,
@@ -781,7 +787,11 @@ fn proposal_create_schema() -> Schema {
             "request_key": { "type": "string", "minLength": 1, "maxLength": 128 },
             "kind": { "type": "string", "enum": ["card_new", "card_edit", "rule_add", "goal_add"] },
             "card_id": { "type": "string", "format": "uuid", "description": "card_edit: the card." },
-            "title": { "type": "string", "maxLength": 80, "description": "card_new: required." },
+            "card_key": {
+                "type": "string", "enum": ["visual_style"],
+                "description": "card_new only: the well-known card it makes (visual_style: the brand scan's photo style and formats). The title defaults to the well-known one."
+            },
+            "title": { "type": "string", "maxLength": 80, "description": "card_new: required, unless card_key names a well-known card." },
             "body": { "type": "string", "minLength": 1, "maxLength": 8000 },
             "reason": {
                 "type": "string", "minLength": 1, "maxLength": 300,

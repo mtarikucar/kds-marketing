@@ -21,8 +21,11 @@ const fn host(connector: &'static str, host: &'static str) -> AllowedHost {
 ///
 /// - `meta`: the Graph API (`graph.facebook.com`), the Instagram Graph API and Instagram login
 ///   (`graph.instagram.com`, `api.instagram.com`), the resumable media upload
-///   (`rupload.facebook.com`) and the download of a media file a person sent to a WhatsApp number
-///   (`lookaside.fbsbx.com`, the host of the `url` Graph names for a media id);
+///   (`rupload.facebook.com`), the download of a media file a person sent to a WhatsApp number
+///   (`lookaside.fbsbx.com`, the host of the `url` Graph names for a media id), and Meta's media
+///   CDN (`*.cdninstagram.com`, `*.fbcdn.net`: the hosts of the `media_url` and `thumbnail_url`
+///   Graph names for an Instagram post, numbered per region, hence wildcard entries; read
+///   without a token, their addresses being signed);
 /// - `netgsm`: SMS and the account API (`api.netgsm.com.tr`), WhatsApp
 ///   (`whatsappapi.netgsm.com.tr`), voice files (`sesdosya.netgsm.com.tr`) and the Netsantral
 ///   click-to-call endpoint (`crmsntrl.netgsm.com.tr:9111`, plain http: see the module docs);
@@ -44,6 +47,8 @@ pub const FIXED_HOSTS: &[AllowedHost] = &[
     host("meta", "api.instagram.com"),
     host("meta", "rupload.facebook.com"),
     host("meta", "lookaside.fbsbx.com"),
+    host("meta", "*.cdninstagram.com"),
+    host("meta", "*.fbcdn.net"),
     host("netgsm", "api.netgsm.com.tr"),
     host("netgsm", "whatsappapi.netgsm.com.tr"),
     host("netgsm", "sesdosya.netgsm.com.tr"),
@@ -101,6 +106,8 @@ mod tests {
                 ("meta", "api.instagram.com"),
                 ("meta", "rupload.facebook.com"),
                 ("meta", "lookaside.fbsbx.com"),
+                ("meta", "*.cdninstagram.com"),
+                ("meta", "*.fbcdn.net"),
                 ("netgsm", "api.netgsm.com.tr"),
                 ("netgsm", "whatsappapi.netgsm.com.tr"),
                 ("netgsm", "sesdosya.netgsm.com.tr"),
@@ -121,7 +128,8 @@ mod tests {
         );
         // Every provider host is on the public internet, and the table builds a client.
         for entry in FIXED_HOSTS {
-            assert_eq!(validate_public_host(entry.host), Ok(()), "{entry:?}");
+            let host = entry.host.strip_prefix("*.").unwrap_or(entry.host);
+            assert_eq!(validate_public_host(host), Ok(()), "{entry:?}");
         }
         Egress::new(FIXED_HOSTS);
     }
@@ -134,6 +142,14 @@ mod tests {
             ("meta", "https://graph.instagram.com/me"),
             ("meta", "https://api.instagram.com/oauth/access_token"),
             ("meta", "https://rupload.facebook.com/ig-api-upload/1"),
+            (
+                "meta",
+                "https://scontent-ams2-1.cdninstagram.com/v/t51.29350-15/1_n.jpg?oh=1",
+            ),
+            (
+                "meta",
+                "https://scontent.xx.fbcdn.net/v/t51.29350-15/1_n.jpg",
+            ),
             (
                 "meta",
                 "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1",
@@ -184,6 +200,13 @@ mod tests {
             "https://crmsntrl.netgsm.com.tr/",
             "https://evil.graph.facebook.com/",
             "https://graph.facebook.com.evil.example/",
+            // A wildcard entry is every name under its own, never the name itself or a
+            // look-alike ending with it.
+            "https://cdninstagram.com/",
+            "https://evilcdninstagram.com/",
+            "https://fbcdn.net.evil.example/",
+            "http://scontent.cdninstagram.com/",
+            "https://scontent.cdninstagram.com:8443/",
             // Plain http to an https-only provider host.
             "http://graph.facebook.com/v21.0/me",
             "http://api.x.com/2/tweets",

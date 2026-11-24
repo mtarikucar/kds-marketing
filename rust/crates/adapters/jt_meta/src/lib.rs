@@ -82,6 +82,7 @@ mod insights;
 mod leadgen;
 mod messaging;
 mod oauth;
+mod own_posts;
 mod ports;
 mod probe;
 mod publish;
@@ -102,6 +103,7 @@ pub use oauth::{
     FACEBOOK_SCOPES, INSTAGRAM_COMMENT_FIELDS, INSTAGRAM_INSIGHTS_SCOPE, INSTAGRAM_SCOPES,
     PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
 };
+pub use own_posts::MAX_OWN_POSTS_PAGE;
 pub use webhook::{
     InboundEventDraft, Origin, ParseError, ParsedEvent, WebhookError, parse, scoped_body,
     verify_and_parse,
@@ -109,14 +111,17 @@ pub use webhook::{
 
 /// The hosts the adapter reaches, exactly the `meta` entries of `jt_outbound::FIXED_HOSTS`: the
 /// Graph API, the Instagram Graph API, Instagram Login's token endpoint, the resumable media
-/// upload (not used in M1b; listed so a capability names every host its connector may reach) and
-/// the download of a media file a person sent to a WhatsApp number.
+/// upload (not used in M1b; listed so a capability names every host its connector may reach),
+/// the download of a media file a person sent to a WhatsApp number, and Meta's media CDN, where
+/// an account's own post's image is read (`*.` is any name under it, never the name itself).
 pub const META_HOSTS: &[&str] = &[
     "graph.facebook.com",
     "graph.instagram.com",
     "api.instagram.com",
     "rupload.facebook.com",
     "lookaside.fbsbx.com",
+    "*.cdninstagram.com",
+    "*.fbcdn.net",
 ];
 
 /// How many times an Instagram media container is read before giving up, by default.

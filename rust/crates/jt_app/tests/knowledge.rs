@@ -212,6 +212,7 @@ fn propose(
         request_key: key.into(),
         kind,
         card_id: card,
+        card_key: None,
         title: (kind == ProposalKind::CardNew).then(|| "Sık sorulanlar".into()),
         body: body.into(),
         reason: "Müşteriler bunu soruyor".into(),
@@ -2390,4 +2391,258 @@ fn a_version_cancelled_before_it_had_a_planned_post_reads() {
     }))
     .expect("a cancel without a planned post reads");
     assert_eq!(version.cancelled.unwrap().slot_id, None);
+}
+
+/// The brand scan's output (docs/operations/brand-scan.md): an agent proposes the voice card's
+/// new text and the well-known visual style card; it can never write a card itself; the owner
+/// adds them; a replay of a request key is the same proposal; a second visual style card is
+/// refused, so a later scan proposes an edit of the one the owner has.
+#[tokio::test]
+async fn the_brand_scan_proposes_its_cards_and_only_the_owner_writes_them() {
+    let w = world().await;
+    seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
+    let voice = card_of(&w, "voice").await;
+    card_update(
+        &w.deps,
+        &w.owner_ctx,
+        voice.id,
+        body(1, "Samimi konuşuruz."),
+    )
+    .await
+    .unwrap();
+    let agent = w.agent(&["content.work"]).await;
+
+    // An agent writes no card directly, the owner's words least of all.
+    let e = err(card_update(&w.deps, &agent, voice.id, body(2, "Resmî konuşuruz.")).await);
+    assert_eq!(e.code, ErrorCode::Forbidden);
+    // Not even an agent whose key holds team.manage: a card is a person's to write.
+    let manager = w.agent(&["team.manage", "content.work"]).await;
+    let e = err(card_update(&w.deps, &manager, voice.id, body(2, "Resmî konuşuruz.")).await);
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::Forbidden, "human_required")
+    );
+    let e = err(card_create(&w.deps, &agent, create("Görsel stil", "Açık zemin.")).await);
+    assert_eq!(e.code, ErrorCode::Forbidden);
+    assert_eq!(card_of(&w, "voice").await.body, "Samimi konuşuruz.");
+
+    // The voice: the card's whole new text, the owner's words kept.
+    let voice_text = "Samimi konuşuruz.\nKısa cümleler, en çok bir emoji.\n\nDayanak: site, \
+                      https://www.instagram.com/p/AAA2/";
+    let voice_input = || ProposalCreateInput {
+        request_key: "brand-scan-voice".into(),
+        kind: ProposalKind::CardEdit,
+        card_id: Some(voice.id),
+        card_key: None,
+        title: None,
+        body: voice_text.into(),
+        reason: "Marka taraması: son paylaşımların tonundan.".into(),
+    };
+    let proposed = proposal_create(&w.deps, &agent, voice_input())
+        .await
+        .unwrap();
+    assert_eq!(proposed.base_revision, Some(2));
+    // A replay of the same request key answers the same proposal and makes no second one.
+    let again = proposal_create(&w.deps, &agent, voice_input())
+        .await
+        .unwrap();
+    assert_eq!(again.id, proposed.id);
+    assert_eq!(
+        proposals(&w)
+            .await
+            .iter()
+            .filter(|p| p.is_pending() && p.card_id == Some(voice.id))
+            .count(),
+        1
+    );
+    assert_eq!(
+        card_of(&w, "voice").await.body,
+        "Samimi konuşuruz.",
+        "nothing yet"
+    );
+
+    // The visual style: a new well-known card, its title the well-known one.
+    let style_input = |key: &str, text: &str| ProposalCreateInput {
+        request_key: key.into(),
+        kind: ProposalKind::CardNew,
+        card_id: None,
+        card_key: Some("visual_style".into()),
+        title: None,
+        body: text.into(),
+        reason: "Marka taraması: gerçek fotoğraflardan.".into(),
+    };
+    let style = proposal_create(
+        &w.deps,
+        &agent,
+        style_input("brand-scan-style", "Açık zemin."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(style.card_key.as_deref(), Some("visual_style"));
+    assert_eq!(style.title.as_deref(), Some("Görsel stil"));
+    let replay = proposal_create(
+        &w.deps,
+        &agent,
+        style_input("brand-scan-style", "Açık zemin."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(replay.id, style.id);
+    // One proposal of the card waits at a time.
+    let e = err(proposal_create(&w.deps, &agent, style_input("brand-scan-2", "Koyu zemin.")).await);
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::Conflict, "proposal_exists")
+    );
+    // Only a new card names a key, and only a well-known one that is not seeded.
+    let mut keyed_edit = voice_input();
+    keyed_edit.request_key = "keyed-edit".into();
+    keyed_edit.card_key = Some("visual_style".into());
+    let e = err(proposal_create(&w.deps, &agent, keyed_edit).await);
+    assert_eq!(
+        (e.code, e.details["field"].as_str()),
+        (ErrorCode::Validation, Some("card_key"))
+    );
+    let mut seeded = style_input("seeded-key", "x");
+    seeded.card_key = Some("voice".into());
+    let e = err(proposal_create(&w.deps, &agent, seeded).await);
+    assert_eq!(e.details["field"], "card_key");
+
+    // The owner adds both.
+    proposal_accept(&w.deps, &w.owner_ctx, proposed.id)
+        .await
+        .unwrap();
+    assert_eq!(card_of(&w, "voice").await.body, voice_text);
+    proposal_accept(&w.deps, &w.owner_ctx, style.id)
+        .await
+        .unwrap();
+    let card = card_of(&w, "visual_style").await;
+    assert_eq!(
+        (card.title.as_str(), card.body.as_str()),
+        ("Görsel stil", "Açık zemin.")
+    );
+
+    // A later scan finds the card and proposes an edit of it instead.
+    let e = err(proposal_create(&w.deps, &agent, style_input("brand-scan-3", "Doğal ışık.")).await);
+    assert_eq!((e.code, reason(&e)), (ErrorCode::Conflict, "card_exists"));
+    assert_eq!(e.details["card_id"], json!(card.id));
+    // Its edit written before the owner changed the card is superseded, never applied.
+    let later = proposal_create(
+        &w.deps,
+        &agent,
+        propose(
+            "brand-scan-4",
+            ProposalKind::CardEdit,
+            Some(card.id),
+            "Doğal ışık.",
+        ),
+    )
+    .await
+    .unwrap();
+    card_update(
+        &w.deps,
+        &w.owner_ctx,
+        card.id,
+        body(1, "Beyaz zemin, gün ışığı."),
+    )
+    .await
+    .unwrap();
+    assert_eq!(status_of(&w, later.id).await, ProposalStatus::Superseded);
+    assert_eq!(
+        card_of(&w, "visual_style").await.body,
+        "Beyaz zemin, gün ışığı."
+    );
+}
+
+/// A visual style card the owner removed does not lock the brand scan out: a new keyed proposal
+/// is taken, and accepting it brings the same card back with the proposal's text (its earlier
+/// text stays in its history). A card of the key that appears while a proposal waits
+/// supersedes the proposal.
+#[tokio::test]
+async fn a_removed_visual_style_card_comes_back_and_a_new_one_supersedes() {
+    let w = world().await;
+    seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
+    let agent = w.agent(&["content.work"]).await;
+    let keyed = |key: &str, text: &str| ProposalCreateInput {
+        request_key: key.into(),
+        kind: ProposalKind::CardNew,
+        card_id: None,
+        card_key: Some("visual_style".into()),
+        title: None,
+        body: text.into(),
+        reason: "Marka taraması: gerçek fotoğraflardan.".into(),
+    };
+    let first = proposal_create(&w.deps, &agent, keyed("s-1", "Açık zemin."))
+        .await
+        .unwrap();
+    proposal_accept(&w.deps, &w.owner_ctx, first.id)
+        .await
+        .unwrap();
+    let card = card_of(&w, "visual_style").await;
+    card_archive(
+        &w.deps,
+        &w.owner_ctx,
+        card.id,
+        CardArchiveInput {
+            expected_revision: 1,
+            archived: true,
+        },
+    )
+    .await
+    .unwrap();
+    // Removed: a new proposal of the key is taken, not refused.
+    let again = proposal_create(&w.deps, &agent, keyed("s-2", "Doğal ışık, ahşap masa."))
+        .await
+        .unwrap();
+    proposal_accept(&w.deps, &w.owner_ctx, again.id)
+        .await
+        .unwrap();
+    let back = card_of(&w, "visual_style").await;
+    assert_eq!(back.id, card.id, "one card a key");
+    assert!(back.is_live());
+    assert_eq!(back.body, "Doğal ışık, ahşap masa.");
+    assert_eq!(back.revision, 3);
+    let history = revisions(&w, Subject::Card, Some(card.id)).await;
+    assert!(
+        history.iter().any(|r| r.content["body"] == "Açık zemin."),
+        "the earlier text stays in the history"
+    );
+
+    // A card of the key appears while a proposal waits (removed and proposed again, then the
+    // owner restores the removed one): the proposal is superseded, the card left as it is.
+    card_archive(
+        &w.deps,
+        &w.owner_ctx,
+        card.id,
+        CardArchiveInput {
+            expected_revision: 3,
+            archived: true,
+        },
+    )
+    .await
+    .unwrap();
+    let waiting = proposal_create(&w.deps, &agent, keyed("s-3", "Koyu zemin."))
+        .await
+        .unwrap();
+    card_archive(
+        &w.deps,
+        &w.owner_ctx,
+        card.id,
+        CardArchiveInput {
+            expected_revision: 4,
+            archived: false,
+        },
+    )
+    .await
+    .unwrap();
+    let e = err(proposal_accept(&w.deps, &w.owner_ctx, waiting.id).await);
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::Conflict, "proposal_superseded")
+    );
+    assert_eq!(status_of(&w, waiting.id).await, ProposalStatus::Superseded);
+    assert_eq!(
+        card_of(&w, "visual_style").await.body,
+        "Doğal ışık, ahşap masa."
+    );
 }

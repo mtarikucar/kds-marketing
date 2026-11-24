@@ -70,6 +70,7 @@
 //! | a post's counters | `POST {api}/v2/video/query/?fields=id,like_count,comment_count,share_count,view_count {filters: {video_ids: [id]}}` | `video.list` |
 //! | the account's counters | `GET {api}/v2/user/info/?fields=follower_count,following_count,likes_count,video_count` | `user.info.stats` |
 //! | the account's recent public videos ([`InsightsReader::recent_posts`]) | `POST {api}/v2/video/list/?fields=id,title,video_description,cover_image_url,share_url,create_time,like_count,comment_count,share_count,view_count {max_count}` | `video.list` |
+//! | a page of the account's own public videos ([`InsightsReader::own_posts`]) | the same `{max_count, cursor}` | `video.list` |
 //!
 //! The username is not read from `/v2/user/info/`: its `username` field needs `user.info.profile`,
 //! which the app does not ask for (<https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info>);
@@ -340,6 +341,7 @@
 //! [`AdCampaignWriter`]: jt_app::ports::connectors::AdCampaignWriter
 //! [`AdBudgetWriter`]: jt_app::ports::connectors::AdBudgetWriter
 //! [`InsightsReader::recent_posts`]: jt_app::ports::connectors::InsightsReader::recent_posts
+//! [`InsightsReader::own_posts`]: jt_app::ports::connectors::InsightsReader::own_posts
 //! [`ConnectorError`]: jt_connector::ConnectorError
 //! [`Credential::OAuth`]: jt_connector::Credential::OAuth
 
