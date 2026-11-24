@@ -5,7 +5,8 @@
 //!   permission [`MEDIA_INSIGHTS`] as a field expansion, so one call reads a page and its
 //!   counters);
 //! - one post's image: `GET /{media}?fields=media_type,media_url,thumbnail_url,owner{id},username,
-//!   children{…}` (a post whose owner is not the connected account is refused), then
+//!   children{…}`, whose owner must be the connected account ([`ownership`]: a post that is not
+//!   is `PostImage::NotTheAccounts`, before any image is read), then
 //!   the image itself from Meta's media CDN (`*.cdninstagram.com`, `*.fbcdn.net`), without a
 //!   token (its addresses are signed and expire, which is why it is read again each time).
 //!
@@ -26,6 +27,7 @@ use std::collections::BTreeMap;
 use jt_app::ports::connectors::{
     Media, OWN_POST_METRICS, OwnPost, OwnPostKind, OwnPostsPage, OwnPostsQuery, Unavailable,
 };
+use jt_app::ports::connectors::{OwnershipCheck, PostImage};
 use jt_connector::{ConnectorError, Credential};
 use serde_json::Value;
 use url::Url;
@@ -120,17 +122,91 @@ fn name(v: &Value) -> Option<&str> {
     v.as_str().map(str::trim).filter(|n| !n.is_empty())
 }
 
-/// Whether the post `answer` (its `owner` and `username`) is the connected account's: its owner
-/// is the capability's account (`external_id`), or, when Graph names no owner id, its username
-/// is the capability's (`username`).
-fn owned(answer: &Value, public: &Value) -> bool {
-    let account = account_of(public);
-    match text(&answer["owner"]["id"]) {
-        Some(owner) => account == Some(owner.as_str()),
-        None => {
-            matches!((name(&answer["username"]), name(&public["username"])),
-                (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
+/// The connected account as Graph names it: every id it has (the stored account id, and the
+/// ids read live: an Instagram Login account's app-scoped `id` and professional `user_id`, a
+/// Page-linked account's `id`) and its username.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Identity {
+    pub(crate) ids: Vec<String>,
+    pub(crate) username: Option<String>,
+    pub(crate) read: bool,
+}
+
+impl Identity {
+    /// What the connection stored: its account id (`external_id`) and username.
+    fn stored(public: &Value) -> Identity {
+        Identity {
+            ids: account_of(public).map(str::to_owned).into_iter().collect(),
+            username: name(&public["username"]).map(str::to_owned),
+            read: false,
         }
+    }
+
+    /// `self` with what a live read of the account (`me`) adds.
+    fn with_live(mut self, me: &Value) -> Identity {
+        for field in ["id", "user_id"] {
+            if let Some(id) = text(&me[field])
+                && !self.ids.contains(&id)
+            {
+                self.ids.push(id);
+            }
+        }
+        if let Some(username) = name(&me["username"]) {
+            self.username = Some(username.to_owned());
+        }
+        self.read = true;
+        self
+    }
+}
+
+/// Whether the post `answer` is the connected account's (`account`): its owner id is one of the
+/// account's ids, or the username Graph gives for the post's owner is the account's
+/// (case-insensitively). Both are what Graph says about the post's owner, never anything the
+/// caller sent; a post of another account matches neither. `Err` says what was compared.
+pub(crate) fn ownership(answer: &Value, account: &Identity) -> Result<(), OwnershipCheck> {
+    let owner = text(&answer["owner"]["id"]);
+    let username = name(&answer["username"]);
+    let by_id = owner.as_ref().is_some_and(|o| account.ids.contains(o));
+    let by_name = matches!((username, account.username.as_deref()),
+        (Some(a), Some(b)) if a.eq_ignore_ascii_case(b));
+    if by_id || by_name {
+        return Ok(());
+    }
+    Err(OwnershipCheck {
+        owner_id_present: owner.is_some(),
+        username_present: username.is_some(),
+        account_ids: account.ids.len() as u32,
+        account_username_present: account.username.is_some(),
+        identity_read: account.read,
+    })
+}
+
+/// The connected account's live identity, read with the same token: `GET /me?fields=id,user_id,
+/// username` with an Instagram Login token, `GET /{account}?fields=id,username` through a Page.
+/// A read Meta refuses leaves what the connection stored.
+async fn identity(
+    connector: &MetaConnector,
+    via: Via<'_>,
+    public: &Value,
+) -> Result<Identity, ConnectorError> {
+    let stored = Identity::stored(public);
+    let read = match via {
+        Via::Instagram(_) => {
+            via.get(connector, &["me"], &[("fields", "id,user_id,username")])
+                .await
+        }
+        Via::Graph(_) => match account_of(public) {
+            Some(account) => {
+                via.get(connector, &[node(account)?], &[("fields", "id,username")])
+                    .await
+            }
+            None => return Ok(stored),
+        },
+    };
+    match read {
+        Ok(me) => Ok(stored.with_live(&me)),
+        Err(ConnectorError::Permission { .. } | ConnectorError::Permanent { .. }) => Ok(stored),
+        Err(e) => Err(e),
     }
 }
 
@@ -309,17 +385,21 @@ pub(crate) async fn own_post_image(
     post_id: &str,
     index: u32,
     max_bytes: usize,
-) -> Result<Option<Media>, ConnectorError> {
+) -> Result<Option<PostImage>, ConnectorError> {
     let Some(via) = via(cred, public)? else {
         return Ok(None);
     };
     let answer = via
         .get(connector, &[node(post_id)?], &[("fields", IMAGE_FIELDS)])
         .await?;
-    if !owned(&answer, public) {
-        return Err(ConnectorError::permanent(
-            "the post is not the connected account's",
-        ));
+    // The post itself is checked, before its item is chosen: a carousel's items and a video's
+    // cover are the post's own. What the connection stored decides at once when it matches;
+    // otherwise the account's live identity is read and compared.
+    if ownership(&answer, &Identity::stored(public)).is_err() {
+        let live = identity(connector, via, public).await?;
+        if let Err(check) = ownership(&answer, &live) {
+            return Ok(Some(PostImage::NotTheAccounts(check)));
+        }
     }
     let item = if answer["media_type"].as_str() == Some("CAROUSEL_ALBUM") {
         answer["children"]["data"]
@@ -337,10 +417,10 @@ pub(crate) async fn own_post_image(
     let (_, data) = connector.download(url, None, max_bytes).await?;
     let mime = sniff_image(&data)
         .ok_or_else(|| ConnectorError::permanent("the post's image is not an image"))?;
-    Ok(Some(Media {
+    Ok(Some(PostImage::Image(Media {
         mime: mime.to_owned(),
         data,
-    }))
+    })))
 }
 
 #[cfg(test)]

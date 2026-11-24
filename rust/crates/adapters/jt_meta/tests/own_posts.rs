@@ -6,6 +6,7 @@
 mod support;
 
 use jt_app::ports::connectors::{InsightsReader, OwnPostKind, OwnPostsQuery, Unavailable};
+use jt_app::ports::connectors::{Media, OwnershipCheck, PostImage};
 use jt_connector::{ConnectorError, Credential};
 use jt_meta::INSTAGRAM_SCOPES;
 use serde_json::{Value, json};
@@ -371,6 +372,7 @@ async fn a_posts_image_is_read_from_the_cdn_without_a_token() {
         )
         .await
         .unwrap()
+        .map(media)
         .expect("an Instagram post has an image");
     let found = r.mock.request("GET", node);
     assert_graph_auth(&found, PAGE_TOKEN);
@@ -459,10 +461,15 @@ fn single(owner: &str, media_url: &str) -> Reply {
 
 const NODE: &str = "/fb/v19.0/18000000000000002";
 
-async fn image_of(
-    r: &Rig,
-    max_bytes: usize,
-) -> Result<Option<jt_app::ports::connectors::Media>, ConnectorError> {
+/// The image of a post found to be the account's (panics on a refusal of ownership).
+fn media(found: PostImage) -> Media {
+    match found {
+        PostImage::Image(media) => media,
+        PostImage::NotTheAccounts(check) => panic!("taken as another account's: {check:?}"),
+    }
+}
+
+async fn image_of(r: &Rig, max_bytes: usize) -> Result<Option<PostImage>, ConnectorError> {
     r.meta
         .own_post_image(
             &page_cred(),
@@ -475,38 +482,8 @@ async fn image_of(
 }
 
 #[tokio::test]
-async fn another_accounts_post_and_addresses_off_the_cdn_are_refused() {
+async fn addresses_off_the_cdn_are_refused() {
     let r = rig().await;
-    let cdn = format!("{}/gif", r.mock.base("/cdn"));
-    r.mock.on("GET", "/cdn/gif", raw(200, GIF));
-    // Another account's post: refused before its image is read.
-    r.mock.set("GET", NODE, single("17841400000000999", &cdn));
-    let e = image_of(&r, 1 << 20).await.unwrap_err();
-    assert!(matches!(e, ConnectorError::Permanent { .. }), "{e:?}");
-    // No owner at all, and no username to match: refused too.
-    r.mock.set(
-        "GET",
-        NODE,
-        ok(json!({"media_type": "IMAGE", "media_url": cdn})),
-    );
-    assert!(image_of(&r, 1 << 20).await.is_err());
-    assert!(r.mock.requests("GET", "/cdn/gif").is_empty());
-    // Without an owner id, the username the connection recorded identifies the account.
-    r.mock.set(
-        "GET",
-        NODE,
-        ok(json!({"media_type": "IMAGE", "media_url": cdn, "username": "Test_Atolye"})),
-    );
-    let mut named = public("instagram");
-    named["username"] = json!("test_atolye");
-    let image = r
-        .meta
-        .own_post_image(&page_cred(), &named, "18000000000000002", 0, 1 << 20)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(image.mime, "image/gif");
-
     // An address off Meta's hosts, plain http to the CDN, another port: never reached.
     for url in [
         "https://images.example/1.jpg",
@@ -598,7 +575,7 @@ async fn the_size_cap_holds_without_a_content_length() {
     let e = read(4_096).await.unwrap_err();
     assert!(matches!(e, ConnectorError::Permanent { .. }), "{e:?}");
     // Within it: read whole.
-    let image = read(1 << 20).await.unwrap().unwrap();
+    let image = media(read(1 << 20).await.unwrap().unwrap());
     assert_eq!(image.data.len(), 10_000);
     assert_eq!(image.mime, "image/gif");
 }
@@ -636,4 +613,130 @@ async fn a_cursor_graph_refuses_is_not_tried_again_without_insights() {
         .unwrap()
         .unwrap();
     assert_eq!(r.mock.requests("GET", MEDIA).len(), 2);
+}
+
+/// The ids of one Instagram Login account: the professional `user_id` the connection stores, and
+/// the app-scoped `id` Graph may name a post's owner with.
+const APP_SCOPED: &str = "9000000000000001";
+const IG_NODE: &str = "/ig/18000000000000002";
+const OTHER: &str = "17841400000000999";
+
+fn ig_public() -> Value {
+    json!({ "provider": "meta", "kind_key": "instagram", "external_id": IG,
+            "username": "test_atolye", "login": "instagram" })
+}
+
+/// A single image post as Graph names it: `owner` (an id, or none) and `username` (or none).
+fn post(r: &Rig, owner: Option<&str>, username: Option<&str>) -> Reply {
+    let mut answer =
+        json!({"media_type": "IMAGE", "media_url": format!("{}/gif", r.mock.base("/cdn"))});
+    if let Some(owner) = owner {
+        answer["owner"] = json!({ "id": owner });
+    }
+    if let Some(username) = username {
+        answer["username"] = json!(username);
+    }
+    ok(answer)
+}
+
+#[tokio::test]
+async fn a_post_is_the_accounts_by_any_of_its_ids_or_its_username() {
+    let r = rig().await;
+    r.mock.on("GET", "/cdn/gif", raw(200, GIF));
+    let me = ok(json!({"id": APP_SCOPED, "user_id": IG, "username": "Test_Atolye"}));
+    r.mock.set("GET", "/ig/me", me);
+    let (cred, account) = (ig_login_cred(), ig_public());
+    let read = || {
+        r.meta
+            .own_post_image(&cred, &account, "18000000000000002", 0, 1 << 20)
+    };
+
+    // The owner id is the id the connection stored: taken at once, no identity read.
+    r.mock.set("GET", IG_NODE, post(&r, Some(IG), None));
+    media(read().await.unwrap().unwrap());
+    assert!(r.mock.requests("GET", "/ig/me").is_empty());
+
+    // The owner id is the account's other id (the app-scoped one): the live identity, read with
+    // the same token, has it.
+    r.mock.clear();
+    r.mock.set("GET", IG_NODE, post(&r, Some(APP_SCOPED), None));
+    media(read().await.unwrap().unwrap());
+    let identity = r.mock.request("GET", "/ig/me");
+    assert_eq!(identity.param("fields"), Some("id,user_id,username"));
+    assert_eq!(identity.bearer(), Some(IG_LOGIN_TOKEN));
+
+    // No owner id, the post's username is the account's (case aside).
+    r.mock
+        .set("GET", IG_NODE, post(&r, None, Some("TEST_ATOLYE")));
+    media(read().await.unwrap().unwrap());
+
+    // No owner id and another username: refused, and its image never read.
+    r.mock.clear();
+    r.mock
+        .set("GET", IG_NODE, post(&r, None, Some("someone_else")));
+    let refused = read().await.unwrap().unwrap();
+    assert_eq!(
+        refused,
+        PostImage::NotTheAccounts(OwnershipCheck {
+            owner_id_present: false,
+            username_present: true,
+            account_ids: 2,
+            account_username_present: true,
+            identity_read: true,
+        })
+    );
+    assert!(r.mock.requests("GET", "/cdn/gif").is_empty());
+
+    // Another account's owner id and username: refused.
+    r.mock
+        .set("GET", IG_NODE, post(&r, Some(OTHER), Some("someone_else")));
+    let PostImage::NotTheAccounts(check) = read().await.unwrap().unwrap() else {
+        panic!("another account's post was taken");
+    };
+    assert!(check.owner_id_present && check.username_present);
+    assert!(r.mock.requests("GET", "/cdn/gif").is_empty());
+}
+
+#[tokio::test]
+async fn a_page_linked_account_reads_its_identity_through_the_page() {
+    let r = rig().await;
+    r.mock.on("GET", "/cdn/gif", raw(200, GIF));
+    let account = format!("/fb/v19.0/{IG}");
+    // The connection stored no username; the account's own node gives it.
+    r.mock.set("GET", NODE, post(&r, None, Some("test_atolye")));
+    r.mock.set(
+        "GET",
+        &account,
+        ok(json!({"id": IG, "username": "test_atolye"})),
+    );
+    media(image_of(&r, 1 << 20).await.unwrap().unwrap());
+    let read = r.mock.request("GET", &account);
+    assert_graph_auth(&read, PAGE_TOKEN);
+    assert_eq!(read.param("fields"), Some("id,username"));
+
+    // A post of another account: refused. An identity read Meta refuses leaves what the
+    // connection stored, which does not match either.
+    r.mock.set("GET", NODE, post(&r, Some(OTHER), None));
+    r.mock.set(
+        "GET",
+        &account,
+        status(
+            400,
+            json!({"error": {"message": "(#100) no", "type": "OAuthException", "code": 100}}),
+        ),
+    );
+    let PostImage::NotTheAccounts(check) = image_of(&r, 1 << 20).await.unwrap().unwrap() else {
+        panic!("another account's post was taken");
+    };
+    assert_eq!(
+        check,
+        OwnershipCheck {
+            owner_id_present: true,
+            username_present: false,
+            account_ids: 1,
+            account_username_present: false,
+            identity_read: false,
+        }
+    );
+    assert!(r.mock.requests("GET", "/cdn/gif").is_empty());
 }

@@ -13,7 +13,8 @@ use jt_app::ctx::Ctx;
 use jt_app::error::ErrorCode;
 use jt_app::ports::UnitOfWork;
 use jt_app::ports::connectors::{
-    Media, OwnPost, OwnPostKind, OwnPostsPage, OwnPostsQuery, Unavailable, Url,
+    Media, OwnPost, OwnPostKind, OwnPostsPage, OwnPostsQuery, OwnershipCheck, PostImage,
+    Unavailable, Url,
 };
 use jt_app::usecases::social::own_posts::{
     MAX_OWN_POST_IMAGE_BYTES, OwnPostImageInput, OwnPostsInput, own_post_image, own_posts,
@@ -322,10 +323,10 @@ async fn a_posts_image_is_handed_over_in_memory() {
     .await;
     let content = agent(&w, &[Permission::SocialWork]);
     let bytes = b"\x89PNG\r\n\x1a\nimage".to_vec();
-    w.ads.push_own_post_image(Ok(Some(Media {
+    w.ads.push_own_post_image(Ok(Some(PostImage::Image(Media {
         mime: "image/png".into(),
         data: bytes.clone(),
-    })));
+    }))));
     let image = own_post_image(
         &w.d,
         &content,
@@ -429,4 +430,51 @@ async fn a_long_caption_is_cut_on_a_character_and_says_so() {
         Some("Yeni ürünümüz hazır.")
     );
     assert!(!out.posts[1].caption_truncated);
+}
+
+/// A post the adapter finds is not the account's is Jeeta's own refusal, not the provider's: its
+/// own code, and what was compared, with no id or name in it.
+#[tokio::test]
+async fn a_post_of_another_account_is_refused_by_its_own_code() {
+    let w = support::world().await;
+    let id = instagram(
+        &w,
+        &["instagram_basic", "instagram_manage_insights"],
+        json!({}),
+    )
+    .await;
+    w.ads
+        .push_own_post_image(Ok(Some(PostImage::NotTheAccounts(OwnershipCheck {
+            owner_id_present: true,
+            username_present: false,
+            account_ids: 2,
+            account_username_present: true,
+            identity_read: true,
+        }))));
+    let e = own_post_image(
+        &w.d,
+        &agent(&w, &[Permission::SocialWork]),
+        OwnPostImageInput {
+            capability_id: id,
+            post_id: "18000000000000002".into(),
+            index: 0,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(
+        e.details,
+        json!({
+            "reason": "post_not_the_accounts",
+            "matched": "none",
+            "owner_id_present": true,
+            "username_present": false,
+            "account_ids_compared": 2,
+            "account_username_present": true,
+            "identity_read": true,
+        })
+    );
+    assert!(e.details.get("provider").is_none());
+    assert!(!e.message.contains("provider"));
 }

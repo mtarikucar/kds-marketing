@@ -1419,8 +1419,10 @@ pub trait InsightsReader: Send + Sync {
     }
     /// The image of the account's own post `post_id` (of a carousel, its item `index`, from 0;
     /// of a video, its cover), read now from the platform, in memory: at most `max_bytes`, else
-    /// an error before more is read. `Ok(None)`, the default, for a provider or a kind that gives
-    /// none; `Permanent` for a post or an item that has no image. Never stored or logged.
+    /// an error before more is read. A post the adapter finds is not the connected account's is
+    /// [`PostImage::NotTheAccounts`], before any image is read. `Ok(None)`, the default, for a
+    /// provider or a kind that gives none; `Permanent` for a post or an item that has no image.
+    /// Never stored or logged.
     async fn own_post_image(
         &self,
         cred: &Credential,
@@ -1428,7 +1430,7 @@ pub trait InsightsReader: Send + Sync {
         post_id: &str,
         index: u32,
         max_bytes: usize,
-    ) -> Result<Option<Media>, ConnectorError> {
+    ) -> Result<Option<PostImage>, ConnectorError> {
         let _ = (cred, public, post_id, index, max_bytes);
         Ok(None)
     }
@@ -1485,6 +1487,30 @@ pub trait MessagingSender: Send + Sync {
         let _ = (cred, public, media_id, max_bytes);
         Ok(None)
     }
+}
+
+/// What [`InsightsReader::own_post_image`] found: the image, or that the post is not the
+/// connected account's (the adapter's own check, not the provider's refusal).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PostImage {
+    Image(Media),
+    NotTheAccounts(OwnershipCheck),
+}
+
+/// Why a post was not taken as the connected account's, without any id or name: what the
+/// provider said about the post's owner and what was compared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnershipCheck {
+    /// The provider named the post's owner id.
+    pub owner_id_present: bool,
+    /// The provider named the post's owner username.
+    pub username_present: bool,
+    /// How many ids of the connected account the owner id was compared with.
+    pub account_ids: u32,
+    /// The connected account's username was known to compare with.
+    pub account_username_present: bool,
+    /// Whether the account's live identity was read (else only what the connection stored).
+    pub identity_read: bool,
 }
 
 /// A media file a person sent, as its provider gave it ([`MessagingSender::fetch_media`]): held

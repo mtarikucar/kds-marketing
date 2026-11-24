@@ -23,6 +23,7 @@ use jt_app::ports::connectors::{
     CampaignProviderState, CampaignSpec, CreativeSpec, LeadFormSpec,
 };
 
+use jt_app::ports::connectors::PostImage;
 use jt_app::ports::connectors::{
     AccountMetrics, AdAccountContext, AdBudgetWriter, AdInsights, AdSet, AdSetInsights, AdStatus,
     AppSync, Asset, Connector, ConnectorRegistry, ConsentRow, ConsentSync, DeliveryReports,
@@ -497,7 +498,7 @@ pub struct ScriptedConnector {
     /// An own post's image answers from here, `Ok(None)` when nothing is queued; the posts and
     /// items asked for (with the largest size allowed) are kept apart from
     /// [`ScriptedConnector::calls`] (see [`ScriptedConnector::own_post_image_calls`]).
-    own_post_image: Script<Result<Option<Media>, ConnectorError>>,
+    own_post_image: Script<Result<Option<PostImage>, ConnectorError>>,
     own_post_image_calls: Mutex<Vec<(String, u32, usize)>>,
     send_text: Script<Result<SendReceipt, ConnectorError>>,
     /// Sender-name lookups answer from here, `Ok(None)` when nothing is queued; they are kept
@@ -818,7 +819,7 @@ impl ScriptedConnector {
     }
 
     /// Queues what the next [`InsightsReader::own_post_image`] answers.
-    pub fn push_own_post_image(&self, result: Result<Option<Media>, ConnectorError>) {
+    pub fn push_own_post_image(&self, result: Result<Option<PostImage>, ConnectorError>) {
         self.own_post_image.push(result);
     }
 
@@ -1203,7 +1204,7 @@ impl InsightsReader for ScriptedConnector {
         post_id: &str,
         index: u32,
         max_bytes: usize,
-    ) -> Result<Option<Media>, ConnectorError> {
+    ) -> Result<Option<PostImage>, ConnectorError> {
         lock(&self.own_post_image_calls).push((post_id.to_owned(), index, max_bytes));
         self.own_post_image.try_next().unwrap_or(Ok(None))
     }
