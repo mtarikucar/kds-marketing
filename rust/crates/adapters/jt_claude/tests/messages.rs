@@ -77,6 +77,7 @@ fn request() -> ModelRequest {
         system_fixed: "Fixed instructions.".into(),
         system_workspace: "# The business\nName: Test Atölye\n".into(),
         system_note: None,
+        offer_discount: false,
         history: vec![
             Turn {
                 speaker: Speaker::Customer,
@@ -437,4 +438,82 @@ async fn a_servers_note_goes_after_the_cached_system_blocks_never_in_a_turn() {
         json!({"type": "text", "text": "Answer again without digits."})
     );
     assert!(!body["messages"].to_string().contains("Answer again"));
+}
+
+#[tokio::test]
+async fn the_discount_tool_is_offered_only_when_the_workspace_allows_one_and_names_no_amount() {
+    let (model, seen) = mock(
+        200,
+        vec![],
+        include_str!("fixtures/messages_tool_use_200.json"),
+    )
+    .await;
+    model.answer(&request()).await.unwrap();
+    let mut with = request();
+    with.offer_discount = true;
+    model.answer(&with).await.unwrap();
+    let requests = seen.requests.lock().unwrap();
+    let names = |i: usize| -> Vec<String> {
+        let body: Value = serde_json::from_str(&requests[i].2).unwrap();
+        body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert_eq!(names(0), ["reply", "quote", "hand_over"]);
+    assert_eq!(names(1), ["reply", "quote", "hand_over", "discount"]);
+    let body: Value = serde_json::from_str(&requests[1].2).unwrap();
+    let schema = &body["tools"][3]["input_schema"];
+    let props: Vec<&String> = schema["properties"].as_object().unwrap().keys().collect();
+    assert_eq!(props, ["text"], "no amount, step or percent");
+    assert_eq!(schema["additionalProperties"], false);
+}
+
+#[test]
+fn the_discount_and_the_order_tools_compose_independently() {
+    let names = |r: &ModelRequest| -> Vec<String> {
+        jt_claude::request_body(DEFAULT_MODEL, r)["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let offer = || OrderOffer {
+        amount_minor: 350_000,
+        currency: "TRY".into(),
+        valid_until: time::OffsetDateTime::UNIX_EPOCH,
+        done: None,
+    };
+    // Neither: exactly the three tools, as before both existed.
+    let plain = request();
+    assert_eq!(
+        jt_claude::request_body(DEFAULT_MODEL, &plain)["tools"],
+        jt_claude::tools()
+    );
+    let mut discount = request();
+    discount.offer_discount = true;
+    assert_eq!(
+        names(&discount),
+        ["reply", "quote", "hand_over", "discount"]
+    );
+    assert_eq!(
+        jt_claude::request_body(DEFAULT_MODEL, &discount)["tools"],
+        jt_claude::tools_with_discount()
+    );
+    let mut order = request();
+    order.order = Some(offer());
+    assert_eq!(
+        names(&order),
+        ["reply", "quote", "hand_over", "create_order"]
+    );
+    let mut both = request();
+    both.offer_discount = true;
+    both.order = Some(offer());
+    assert_eq!(
+        names(&both),
+        ["reply", "quote", "hand_over", "discount", "create_order"]
+    );
 }

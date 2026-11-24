@@ -289,7 +289,40 @@ pub struct AutoReply {
     /// `Some(false)` only when turned off; none is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notify_email: Option<bool>,
+    /// The discount the automatic replies may give when a customer bargains, in percent of the
+    /// journey's first automatic quote: the preferred step, then the largest (both 0: none).
+    /// Read leniently: a stored value that is not a whole percent within range reads as 0.
+    #[serde(
+        default,
+        skip_serializing_if = "is_zero",
+        deserialize_with = "lenient_pct"
+    )]
+    pub discount_preferred_pct: u8,
+    #[serde(
+        default,
+        skip_serializing_if = "is_zero",
+        deserialize_with = "lenient_pct"
+    )]
+    pub discount_max_pct: u8,
 }
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+/// A stored discount percent: a whole number from 0 to [`MAX_DISCOUNT_PCT`], else `u8::MAX`
+/// (never an error: a bad row must not break reading the settings; [`AutoReply::discount`] then
+/// gives no discount).
+fn lenient_pct<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value
+        .as_u64()
+        .filter(|n| *n <= u64::from(MAX_DISCOUNT_PCT))
+        .map_or(u8::MAX, |n| n as u8))
+}
+
+/// The largest discount the automatic replies may be allowed, in percent.
+pub const MAX_DISCOUNT_PCT: u8 = 50;
 
 fn default_valid_days() -> u32 {
     AUTO_QUOTE_VALID_DAYS
@@ -299,6 +332,19 @@ impl AutoReply {
     /// Whether the replies are on for capability `id`.
     pub fn serves(&self, id: Uuid) -> bool {
         self.capability_ids.contains(&id)
+    }
+
+    /// The bargaining discount in force: (preferred, largest) percent, or (0, 0), off, for a
+    /// stored pair that breaks the rules (a value out of range or not a whole number, the
+    /// preferred above the largest).
+    pub fn discount(&self) -> (u8, u8) {
+        if self.discount_preferred_pct > self.discount_max_pct
+            || self.discount_max_pct > MAX_DISCOUNT_PCT
+        {
+            (0, 0)
+        } else {
+            (self.discount_preferred_pct, self.discount_max_pct)
+        }
     }
 
     /// Whether the owner's email notices are on (they are unless turned off).
@@ -320,6 +366,39 @@ pub struct AutoReplyInput {
     /// The owner's email notices on or off; none keeps the stored setting.
     #[serde(default)]
     pub notify_email: Option<bool>,
+    /// The preferred and the largest bargaining discount, in percent (`0..=`
+    /// [`MAX_DISCOUNT_PCT`], preferred at most the largest); none keeps the stored ones.
+    #[serde(default)]
+    pub discount_preferred_pct: Option<u8>,
+    #[serde(default)]
+    pub discount_max_pct: Option<u8>,
+}
+
+/// The bargaining discount `input` sets, over `stored` (preferred, largest): each at most
+/// [`MAX_DISCOUNT_PCT`], the preferred at most the largest.
+pub fn validate_discount(input: &AutoReplyInput, stored: (u8, u8)) -> Result<(u8, u8), Invalid> {
+    let preferred = input.discount_preferred_pct.unwrap_or(stored.0);
+    let max = input.discount_max_pct.unwrap_or(stored.1);
+    for (field, pct) in [
+        ("auto_reply.discount_preferred_pct", preferred),
+        ("auto_reply.discount_max_pct", max),
+    ] {
+        if pct > MAX_DISCOUNT_PCT {
+            return Err(Invalid::new(
+                field,
+                "out_of_range",
+                format!("a discount is 0 to {MAX_DISCOUNT_PCT} percent"),
+            ));
+        }
+    }
+    if preferred > max {
+        return Err(Invalid::new(
+            "auto_reply.discount_preferred_pct",
+            "out_of_range",
+            "the preferred discount is at most the largest",
+        ));
+    }
+    Ok((preferred, max))
 }
 
 /// `Ok` with the range `input` gives (none when it gives none): `0 < min <= max <=`
@@ -386,7 +465,35 @@ mod auto_reply_tests {
             min_minor: min,
             max_minor: max,
             notify_email: None,
+            discount_preferred_pct: None,
+            discount_max_pct: None,
         }
+    }
+
+    #[test]
+    fn a_bad_stored_discount_reads_as_none_and_never_breaks_the_read() {
+        let read = |extra: serde_json::Value| -> AutoReply {
+            let mut v = json!({"capability_ids": [], "quote_valid_days": 7});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            serde_json::from_value(v).unwrap()
+        };
+        for bad in [
+            json!({"discount_preferred_pct": 60, "discount_max_pct": 10}),
+            json!({"discount_preferred_pct": 5, "discount_max_pct": 51}),
+            json!({"discount_preferred_pct": -1, "discount_max_pct": 10}),
+            json!({"discount_preferred_pct": 5.5, "discount_max_pct": 10}),
+            json!({"discount_preferred_pct": "5", "discount_max_pct": 10}),
+            json!({"discount_preferred_pct": 15, "discount_max_pct": 10}),
+        ] {
+            assert_eq!(read(bad.clone()).discount(), (0, 0), "{bad}");
+        }
+        assert_eq!(
+            read(json!({"discount_preferred_pct": 5, "discount_max_pct": 10})).discount(),
+            (5, 10)
+        );
+        assert_eq!(read(json!({})).discount(), (0, 0));
     }
 
     fn reason(input: &AutoReplyInput) -> &'static str {
@@ -424,6 +531,8 @@ mod auto_reply_tests {
             min_minor: Some(1),
             max_minor: Some(2),
             notify_email: None,
+            discount_preferred_pct: None,
+            discount_max_pct: None,
         };
         assert_eq!(reason(&twice), "duplicate");
         assert_eq!(

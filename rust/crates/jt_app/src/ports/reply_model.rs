@@ -183,6 +183,9 @@ pub struct ModelRequest {
     /// A note from the server for this call alone (the repair of a refused reply): sent after the
     /// cached system blocks, never cached, never in a customer's turn.
     pub system_note: Option<String>,
+    /// The `discount` tool is offered: the workspace allows a bargaining discount. Off, the
+    /// request is what it was before the discount existed.
+    pub offer_discount: bool,
     pub history: Vec<Turn>,
     pub max_tokens: u32,
     /// The order tool, offered only when given (see the module docs).
@@ -226,6 +229,11 @@ pub enum ModelTool {
         fields: Box<OrderFields>,
         text: String,
     },
+    /// The customer bargains over the automatic quote: the server gives the business's next
+    /// discount step, at the price it computes. `text` is a short line before the server's own
+    /// line stating the new price; it may state no amount. The model names no amount, step or
+    /// percent.
+    Discount { text: String },
 }
 
 impl std::fmt::Debug for ModelTool {
@@ -252,6 +260,7 @@ impl std::fmt::Debug for ModelTool {
                 .field("summary", summary)
                 .field("text", text)
                 .finish(),
+            ModelTool::Discount { text } => f.debug_struct("Discount").field("text", text).finish(),
             // A customer's details: never printed.
             ModelTool::CreateOrder { .. } => f.write_str("CreateOrder(***)"),
         }

@@ -125,6 +125,9 @@ export interface AutoReplyView {
   notify: NotifyView;
   /** The order and its payment link, through the workspace's own shop. */
   order: OrderView;
+  /** The bargaining discount, in percent: the preferred step and the largest (0: none). */
+  discount_preferred_pct: number;
+  discount_max_pct: number;
 }
 
 /** `read::OrderView`: the automatic replies' orders through the workspace's shop. */
@@ -153,6 +156,9 @@ export interface AutoReplyInput {
   max_minor?: number;
   /** The owner's email notices on or off; left out: as stored. */
   notify_email?: boolean;
+  /** The bargaining discount in percent (0 to 50, preferred at most largest); left out: as stored. */
+  discount_preferred_pct?: number;
+  discount_max_pct?: number;
 }
 
 /** `KnowledgeOut.goals`: "Hedefler". */

@@ -256,13 +256,45 @@ pub fn create_order_tool() -> Value {
     })
 }
 
-/// The tools `request` offers: [`tools`], and [`create_order_tool`] when it offers the order.
+/// The `discount` tool, for a workspace that allows a bargaining discount: it takes only a short
+/// line; the server sets the step and the price.
+pub fn discount_tool() -> Value {
+    json!({
+        "name": "discount",
+        "description": "The customer bargains over the price you quoted (asks for a discount, says it is expensive, names a lower price): ask the server for the business's next discount. The server sets the new price and adds it to your line. Never use it unless the customer bargains.",
+        "strict": true,
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text"],
+            "properties": {
+                "text": { "type": "string", "description": "A short, warm line before the server's price line, in the customer's language, with no amount, number or percent; empty for none." }
+            }
+        }
+    })
+}
+
+/// [`tools`] and the `discount` tool.
+pub fn tools_with_discount() -> Value {
+    let mut all = tools();
+    if let Some(list) = all.as_array_mut() {
+        list.push(discount_tool());
+    }
+    all
+}
+
+/// The tools `request` offers: [`tools`], then the `discount` tool when it offers a discount and
+/// [`create_order_tool`] when it offers the order, each independently. With neither, exactly
+/// [`tools`].
 pub fn tools_for(request: &ModelRequest) -> Value {
     let mut all = tools();
-    if request.order.is_some()
-        && let Some(list) = all.as_array_mut()
-    {
-        list.push(create_order_tool());
+    if let Some(list) = all.as_array_mut() {
+        if request.offer_discount {
+            list.push(discount_tool());
+        }
+        if request.order.is_some() {
+            list.push(create_order_tool());
+        }
     }
     all
 }
@@ -403,6 +435,9 @@ fn tool_of(block: &Value) -> Option<ModelTool> {
                 basis: q.basis,
                 text: q.text,
             }),
+        "discount" => serde_json::from_value::<ReplyIn>(input)
+            .ok()
+            .map(|d| ModelTool::Discount { text: d.text }),
         "hand_over" => {
             serde_json::from_value::<HandOverIn>(input)
                 .ok()

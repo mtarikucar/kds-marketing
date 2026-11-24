@@ -956,6 +956,28 @@ describe('KnowledgePage automatic replies', () => {
     expect(within(screen.getByRole('region', { name: k.rules.title })).queryByText(/Sipariş:/)).not.toBeInTheDocument();
   });
 
+  it('saves the bargaining discount from the two small fields', async () => {
+    const user = userEvent.setup();
+    const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': onRules }, { ...knowledge, rules: onRules }));
+    renderAt('/knowledge');
+    await page();
+    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+    const section = within(dialog).getByRole('region', { name: k.rules.dialog.autoReply });
+    expect(within(section).getByText(k.rules.dialog.discount)).toBeInTheDocument();
+    const preferred = within(section).getByLabelText(k.rules.dialog.discountPreferred);
+    const largest = within(section).getByLabelText(k.rules.dialog.discountMax);
+    await user.clear(preferred);
+    await user.type(preferred, '5');
+    await user.clear(largest);
+    await user.type(largest, '10');
+    await user.click(within(dialog).getByRole('button', { name: k.save }));
+    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+    expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toMatchObject({
+      auto_reply: { capability_ids: [WHATSAPP_ID], discount_preferred_pct: 5, discount_max_pct: 10 },
+    });
+  });
+
   it('shows no email line and no checkbox without a verified mailbox', async () => {
     const user = userEvent.setup();
     const noMailbox = { ...onRules, auto_reply: { ...onRules.auto_reply, notify: { available: false, on: true, from: null } } };

@@ -4507,6 +4507,9 @@
         "autoReplyMin": "At least",
         "autoReplyMax": "At most",
         "notify": "Email me hand-overs and orders",
+        "discount": "Bargaining discount",
+        "discountPreferred": "preferably %",
+        "discountMax": "at most %",
         "autoReplyHelp": "Write in the “Standart iş ve fiyat” card how you price within the range. Requests outside the standard come to you. While it is on, customer messages and their photos are sent to Anthropic (Claude) to answer them.",
         "autoReplyInvalid": "Enter both amounts; the lower one cannot be above the higher one."
       }

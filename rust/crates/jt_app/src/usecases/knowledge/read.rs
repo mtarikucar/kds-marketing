@@ -152,6 +152,9 @@ pub struct AutoReplyView {
     pub notify: NotifyView,
     /// The order and its payment link, through the workspace's own shop.
     pub order: OrderView,
+    /// The bargaining discount, in percent: the preferred step and the largest (0: none).
+    pub discount_preferred_pct: u8,
+    pub discount_max_pct: u8,
 }
 
 /// The automatic replies' orders as the rules show them (`inbox::autoreply`, its orders).
@@ -439,6 +442,8 @@ fn rules_view(
                 kind: c.kind_key.clone(),
             })
             .collect(),
+        discount_preferred_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount().0),
+        discount_max_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount().1),
         notify: {
             let mailbox = crate::usecases::inbox::notices::mailbox(capabilities);
             NotifyView {
