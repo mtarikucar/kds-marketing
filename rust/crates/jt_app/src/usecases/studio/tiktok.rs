@@ -16,7 +16,10 @@
 //! The human chooses there how the post goes out: posted directly, or sent to their TikTok drafts
 //! (TikTok notifies them in its inbox, and they finish editing and post it in TikTok), which
 //! needs a credential granted `video.upload`: a connection made before drafts existed is
-//! offered direct posts only until it is reconnected.
+//! offered direct posts only until it is reconnected. The screen suggests the draft
+//! (`suggest_draft`) when the account's latest post that went to TikTok was refused because
+//! TikTok has not audited the app (a direct post to a public account fails the same way until it
+//! does); the human still chooses.
 //!
 //! The screen also shows the account as it stands, read with it and best effort (a read TikTok
 //! refuses leaves it out; the screen still works): its counters (`user.info.stats`) and its
@@ -39,8 +42,8 @@ use crate::{
             TiktokPostRefusal,
         },
         studio::{
-            ApprovalReceipt, ApprovalTarget, MeasurementStatus, MediaAsset, Piece, Slot, SlotId,
-            SlotState,
+            ApprovalReceipt, ApprovalTarget, MeasurementStatus, MediaAsset, Piece, PublishAttempt,
+            Slot, SlotId, SlotQuery, SlotState,
         },
     },
     usecases::{
@@ -94,6 +97,79 @@ pub struct TiktokPostingOut {
     /// Whether a draft can be sent: the credential was granted `video.upload` (else TikTok must
     /// be reconnected for drafts).
     pub drafts_available: bool,
+    /// Whether the screen suggests trying a draft: the account's latest direct post TikTok
+    /// answered (within [`SUGGEST_WINDOW`]) was refused because TikTok has not audited the app, and
+    /// no direct post went out since ([`suggests_draft`]). A suggestion only: nothing is chosen for
+    /// the human. Without [`TiktokPostingOut::drafts_available`] it cannot be followed until TikTok
+    /// is reconnected.
+    pub suggest_draft: bool,
+}
+
+/// Whether `c`'s credential was granted the scope a draft needs (`video.upload`).
+pub(crate) fn drafts_granted(c: &Capability) -> bool {
+    granted_scopes(c).contains(&DRAFTS_SCOPE)
+}
+
+/// How far back the account's posts are looked at for [`TiktokPostingOut::suggest_draft`].
+pub const SUGGEST_WINDOW: Duration = Duration::days(30);
+
+/// Whether `direct` (one account's attempts of direct posts: a draft says nothing about whether
+/// TikTok takes a direct post) suggest a draft: of those refused because TikTok has not audited
+/// the app and those that went out, the latest (by when it was claimed) is a refusal. Only a
+/// direct post that went out since (the audit passed, or the account turned private) ends the
+/// suggestion; a draft that went out, or a direct post that failed for another reason, does not.
+/// A permission failure stored before the refusal had its own category reads as one
+/// ([`crate::usecases::failure::publish_category`]).
+pub fn suggests_draft<'a>(direct: impl IntoIterator<Item = &'a PublishAttempt>) -> bool {
+    use jt_studio::{PublishOutcome as O, RedactedPublishError as E};
+    let refused = |a: &PublishAttempt| match a.outcome() {
+        Some(O::Failed(e)) => {
+            crate::usecases::failure::publish_category(*e, a.failure_reason()) == E::AppNotAudited
+        }
+        _ => false,
+    };
+    direct
+        .into_iter()
+        .filter(|a| refused(a) || matches!(a.outcome(), Some(O::Succeeded(_) | O::Observed(_))))
+        .max_by_key(|a| a.claimed_at())
+        .is_some_and(refused)
+}
+
+/// [`suggests_draft`] for the account `s` posts to: the direct posts of its slots of the last
+/// [`SUGGEST_WINDOW`] (an attempt's mode is the choice approved for the revision it sent; one
+/// with no choice recorded was direct, as every post was before drafts). The screen's own slot
+/// counts too, should it ever carry an attempt.
+async fn suggest_draft(d: &Deps, ws: WorkspaceId, s: &Screen) -> Result<bool, AppError> {
+    let now = d.clock.now();
+    let mut r = d.uow.tenant(ws).await?;
+    let ids: Vec<SlotId> = r
+        .studio()
+        .list_slots(SlotQuery {
+            from: now - SUGGEST_WINDOW,
+            until: now + SUGGEST_WINDOW,
+            hypothesis_id: None,
+            lane: None,
+        })
+        .await?
+        .into_iter()
+        .filter(|x| x.capability_id == s.capability.id)
+        .map(|x| x.id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(false);
+    }
+    let (attempts, _) = r.studio().slots_evidence(&ids).await?;
+    let sent: Vec<(SlotId, u64)> = attempts
+        .iter()
+        .map(|a| (a.slot_id(), a.piece().revision))
+        .collect();
+    let approvals = r.studio().slot_approvals(&sent).await?;
+    let draft = |a: &PublishAttempt| {
+        approvals.iter().any(|(slot, receipt)| {
+            *slot == a.slot_id() && receipt.tiktok.as_ref().is_some_and(TiktokPost::is_draft)
+        })
+    };
+    Ok(suggests_draft(attempts.iter().filter(|a| !draft(a))))
 }
 
 /// The scope a draft needs.
@@ -361,6 +437,7 @@ pub async fn tiktok_posting(
     let media = kind(&previews)?;
     let creator = creator(d, &s).await?;
     let (account_metrics, recent_posts) = account(d, &s).await;
+    let suggest_draft = suggest_draft(d, ctx.workspace_id, &s).await?;
     let approval = {
         let mut r = d.uow.tenant(ctx.workspace_id).await?;
         r.studio()
@@ -377,7 +454,8 @@ pub async fn tiktok_posting(
         approval,
         account_metrics,
         recent_posts,
-        drafts_available: granted_scopes(&s.capability).contains(&DRAFTS_SCOPE),
+        drafts_available: drafts_granted(&s.capability),
+        suggest_draft,
         slot: s.slot,
     })
 }
@@ -548,8 +626,9 @@ pub async fn tiktok_post(
     let (_, media, _, _) = content(&s.piece, &s.capability);
     let mut kind = kind(&previews(d, ctx.workspace_id, media).await?)?;
     if let TiktokMedia::Video { duration_ms } = &mut kind {
-        let (_, bytes) =
-            files::resolve_media(d, ctx.workspace_id, media, &s.capability.kind_key).await?;
+        // Read from the file itself, however it is then sent (uploaded, or pulled by TikTok).
+        let bytes =
+            files::resolve_uploads(d, ctx.workspace_id, media, &s.capability.kind_key).await?;
         *duration_ms = bytes.first().and_then(MediaUpload::video_duration_ms);
     }
     let creator = creator(d, &s).await?;

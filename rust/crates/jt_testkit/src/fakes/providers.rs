@@ -65,6 +65,8 @@ pub struct FakeAppConfig {
     pub public_base_url: Option<Url>,
     /// The platform switch `JEETA_OUTREACH_ENABLED`; off by default, as on a real platform.
     pub outreach_enabled: bool,
+    /// The platform switch `JEETA_TIKTOK_VIDEO_PULL`; off by default, as on a real platform.
+    pub tiktok_video_pull: bool,
 }
 
 impl Default for FakeAppConfig {
@@ -79,6 +81,7 @@ impl Default for FakeAppConfig {
             google: None,
             public_base_url: Some(Url::parse(TEST_PUBLIC_BASE_URL).expect("a valid test URL")),
             outreach_enabled: false,
+            tiktok_video_pull: false,
         }
     }
 }
@@ -170,6 +173,9 @@ impl PlatformAppConfig for FakeAppConfig {
 
     fn outreach_enabled(&self) -> bool {
         self.outreach_enabled
+    }
+    fn tiktok_video_pull(&self) -> bool {
+        self.tiktok_video_pull
     }
 }
 

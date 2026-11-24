@@ -369,8 +369,10 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
   const [yourBrand, setYourBrand] = useState(false);
   const [brandedContent, setBrandedContent] = useState(false);
   const [length, setLength] = useState<number>();
-  const [mode, setMode] = useState<api.TiktokPostMode>('direct_post');
+  // Unchosen, a draft when the screen suggests one (TikTok has not audited the app), else a direct post.
+  const [chosenMode, setMode] = useState<api.TiktokPostMode>();
   const data = posting.data;
+  const mode = chosenMode ?? (data?.suggest_draft && data.drafts_available ? 'draft' : 'direct_post');
   const caption = title ?? data?.title ?? '';
   // What is sent is what the screen shows: an interaction greyed out (by a fresher read of the
   // account, or on photos) is off.
@@ -506,6 +508,7 @@ export function TiktokPostingScreen({ slot }: { slot: api.Slot }) {
             </Link>
           </p>
         )}
+        {data.suggest_draft && data.drafts_available && <p className="text-xs text-muted-foreground">{t('studio.tiktok.draftSuggested')}</p>}
         {draft && <p className="text-xs text-muted-foreground">{t('studio.tiktok.draftHelp')}</p>}
       </div>
       <div role="group" aria-label={t('studio.tiktok.preview')} className="flex flex-wrap gap-2">

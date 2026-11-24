@@ -62,9 +62,9 @@
 //! | the account ([`OAuthProvider::list_assets`]), the probe | `GET {api}/v2/user/info/?fields=open_id,display_name` | `user.info.basic` |
 //! | the account's username (best effort, for the asset, the probe and permalinks) | `POST {api}/v2/post/publish/creator_info/query/` → `creator_username` | `video.publish` |
 //! | the posting screen ([`Publisher::creator_info`]), and before every post: who may see it, what the creator turned off, the longest video | `POST {api}/v2/post/publish/creator_info/query/` | `video.publish` |
-//! | a video | `POST {api}/v2/post/publish/video/init/` → `publish_id`, `upload_url`; then `PUT upload_url` per chunk | `video.publish` |
+//! | a video | `POST {api}/v2/post/publish/video/init/` → `publish_id`, `upload_url`; then `PUT upload_url` per chunk (`FILE_UPLOAD`), or → `publish_id` alone (`PULL_FROM_URL`) | `video.publish` |
 //! | photos | `POST {api}/v2/post/publish/content/init/` → `publish_id` | `video.publish` |
-//! | a video draft | `POST {api}/v2/post/publish/inbox/video/init/` → `publish_id`, `upload_url`; then `PUT upload_url` per chunk | `video.upload` |
+//! | a video draft | `POST {api}/v2/post/publish/inbox/video/init/` → `publish_id`, `upload_url`; then `PUT upload_url` per chunk (`FILE_UPLOAD`), or → `publish_id` alone (`PULL_FROM_URL`) | `video.upload` |
 //! | a photo draft | `POST {api}/v2/post/publish/content/init/ {post_mode: MEDIA_UPLOAD}` → `publish_id` | `video.upload` |
 //! | a post's status ([`Publisher::resolve`]) | `POST {api}/v2/post/publish/status/fetch/ {publish_id}` | `video.publish` or `video.upload` |
 //! | a post's counters | `POST {api}/v2/video/query/?fields=id,like_count,comment_count,share_count,view_count {filters: {video_ids: [id]}}` | `video.list` |
@@ -94,12 +94,14 @@
 //! | the token endpoint: `invalid_grant` (a spent or wrong code, an expired or revoked refresh token, <https://developers.tiktok.com/doc/oauth-error-handling>), HTTP 401 | `Auth` |
 //! | the token endpoint: HTTP 5xx, `server_error`, `temporarily_unavailable` | `Transient` |
 //! | `scope_not_authorized` (HTTP 401: the grant lacks the scope, so it is not the credential's death), `scope_permission_missed` | `Permission` |
-//! | `privacy_level_option_mismatch`, `unaudited_client_can_only_post_to_private_accounts`, `spam_risk_user_banned_from_posting` | `Permission` |
+//! | `unaudited_client_can_only_post_to_private_accounts` (an app TikTok has not audited posting directly to a public account: not the grant's fault, reconnecting does not help) | `Permanent` with `Cause::AppNotAudited` |
+//! | `url_ownership_unverified` (a `PULL_FROM_URL` medium on a host not verified for the app: nothing posted) | `Permanent` with `Cause::MediaUnfetched` |
+//! | `privacy_level_option_mismatch`, `spam_risk_user_banned_from_posting` | `Permission` |
 //! | `rate_limit_exceeded`, `spam_risk_too_many_posts` (also with HTTP 200), `reached_active_user_cap`, `spam_risk_too_many_pending_share` (a draft's daily cap), HTTP 429 | `Throttle` (TikTok names no wait); on the posting screen's read, an HTTP 2xx with one of [`CANNOT_POST_CODES`] is an account that may not post at this moment, not an error |
 //! | `access_token_invalid`; `access_token_expired`, `token_revoked` (v1's names, not in TikTok's current table); HTTP 401 | `Auth`: the owner must reconnect |
 //! | `internal_error`, HTTP 5xx; a read's transport failure or broken answer, a connect failure, a host resolving to no public address | `Transient` |
 //! | a call that may have posted (a photo's init, a video's last chunk) or spent a grant (the token calls) whose answer was lost, broke off, was oversized or unreadable on success, or lacked the publish id | `Unknown` (never retry blindly) |
-//! | `url_ownership_unverified`, `invalid_param`, any other 4xx or status; a read answer lacking what the call needs; a read answer over 4 MiB; a host the `tiktok` tier does not hold | `Permanent` |
+//! | `invalid_param`, any other 4xx or status; a read answer lacking what the call needs; a read answer over 4 MiB; a host the `tiktok` tier does not hold | `Permanent` |
 //!
 //! **Retries.** Reads (`GET`, and the `POST` queries: `creator_info`, the status, the video query)
 //! are tried once more ([`READ_ATTEMPTS`] in all) when no answer arrived (the connection failed,
@@ -117,6 +119,10 @@
 //! - one video: one `video/mp4` file in `request.media` (compared ignoring case and surrounding
 //!   space), 1 byte to [`MAX_VIDEO_BYTES`], and no media URLs; its title is the text and the
 //!   link (after a blank line), at most [`MAX_TITLE_UNITS`] UTF-16 units;
+//! - one video TikTok pulls (`PULL_FROM_URL`, the platform switch `JEETA_TIKTOK_VIDEO_PULL` on):
+//!   one `https` URL in `request.media_urls` whose type in `request.media_mimes` is `video/mp4`,
+//!   and no bytes (a URL of a `video/` type beside anything else, or of another video type, is
+//!   refused); its title as an uploaded video's;
 //! - photos: 1 to [`MAX_PHOTOS`] `https` URLs in `request.media_urls`, and no bytes; their
 //!   description is the text and the link, at most [`MAX_DESCRIPTION_UNITS`] UTF-16 units (no
 //!   title is sent: the request has one text);
@@ -149,7 +155,14 @@
 //! switch and the commercial toggles are the Direct Post's,
 //! <https://developers.tiktok.com/doc/content-posting-api-reference-photo-post>).
 //!
-//! A video is sent as `FILE_UPLOAD` (<https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide>):
+//! A video by URL is sent as `PULL_FROM_URL`: its init (the direct post's, with its `post_info`, or
+//! the draft's, with the source alone) carries `source_info: {source: PULL_FROM_URL, video_url}`
+//! and nothing is uploaded; TikTok downloads it (within an hour) and posts it by itself, so the init
+//! may post: a lost answer is `Unknown`, and a refused init is never followed by an upload of the
+//! same video. Its length is not read here (the posting screen read it from the file); a video too
+//! long is TikTok's `duration_check_failed`.
+//!
+//! An uploaded video is sent as `FILE_UPLOAD` (<https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide>):
 //! below [`CHUNK_BYTES`] in one chunk (`chunk_size` = the whole size), else in chunks of
 //! [`CHUNK_BYTES`], `total_chunk_count` = the size divided by it rounded down, the last chunk
 //! taking the remaining bytes (under 2 × [`CHUNK_BYTES`], so within TikTok's 5–64 MB chunks, a
@@ -185,7 +198,9 @@
 //! publish id, no URL): posted, and the use cases wait a while for the public id of a post chosen
 //! public before they settle it as it is. `FAILED` is [`PublishResolution::Failed`] with
 //! "publish failed: <fail_reason>",
-//! `Permanent` (`auth_removed`, the creator having removed the app's access: `Auth`).
+//! `Permanent` (`auth_removed`, the creator having removed the app's access: `Auth`;
+//! `video_pull_failed` and `photo_pull_failed`, TikTok unable to download the medium from its URL:
+//! `Permanent` with `Cause::MediaUnfetched`).
 //! `SEND_TO_USER_INBOX` (a draft: TikTok notified the creator in its inbox to finish the post in
 //! TikTok; <https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status>) is
 //! settled too: [`PublishResolution::Published`] with the receipt as sent (the publish id, no

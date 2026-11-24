@@ -231,6 +231,8 @@ export interface TiktokPosting {
   recent_posts: RecentPost[] | null;
   /** Whether drafts can be sent (the connection was granted `video.upload`). */
   drafts_available: boolean;
+  /** Whether the screen suggests a draft: the account's latest post was refused because TikTok has not audited the app. */
+  suggest_draft?: boolean;
 }
 /** One of an account's recent public posts (`jt_app::ports::connectors::RecentPost`). */
 export interface RecentPost {

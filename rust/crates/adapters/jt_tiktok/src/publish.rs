@@ -7,7 +7,7 @@ use jt_app::ports::connectors::{
     MediaUpload, PublishReceipt, PublishRequest, PublishResolution, TiktokCreator, TiktokMedia,
     TiktokPost, TiktokPostFlags, TiktokPostMode, TiktokPostRefusal,
 };
-use jt_connector::{ConnectorError, Credential};
+use jt_connector::{Cause, ConnectorError, Credential};
 use jt_outbound::Method;
 use serde_json::{Map, Value, json};
 use url::Url;
@@ -34,6 +34,10 @@ pub(crate) const NOTHING_TO_POST: &str =
 /// Why a post with both a video (bytes) and photos (URLs) is refused.
 pub(crate) const VIDEO_AND_PHOTOS: &str =
     "a TikTok post is one uploaded video or photos by URL, not both";
+
+/// Why a post naming a video URL beside anything else is refused.
+pub(crate) const ONE_VIDEO_URL: &str =
+    "a TikTok video by URL is one video/mp4 URL, and nothing else";
 
 /// The longest publish id taken, in characters (TikTok's are at most 64).
 const MAX_PUBLISH_ID_CHARS: usize = 64;
@@ -187,6 +191,8 @@ enum Post<'a> {
         title: Option<String>,
         plan: ChunkPlan,
     },
+    /// One video TikTok pulls from its URL (`PULL_FROM_URL`), and its title.
+    PulledVideo { url: &'a Url, title: Option<String> },
     /// Photos by URL, and their description.
     Photos {
         urls: &'a [Url],
@@ -242,6 +248,21 @@ fn plan(request: &PublishRequest) -> Result<Post<'_>, ConnectorError> {
             })
         }
         ([_, _, ..], []) => Err(ConnectorError::permanent("a TikTok post carries one video")),
+        ([], urls) if names_video(request) => {
+            let ([url], [mime]) = (urls, request.media_mimes.as_slice()) else {
+                return Err(ConnectorError::permanent(ONE_VIDEO_URL));
+            };
+            if !mime.trim().eq_ignore_ascii_case(VIDEO_MIME) {
+                return Err(ConnectorError::permanent(ONE_VIDEO_URL));
+            }
+            if url.scheme() != "https" {
+                return Err(ConnectorError::permanent(
+                    "TikTok pulls a video over https only",
+                ));
+            }
+            let title = compose(request, MAX_TITLE_UNITS, "video title")?;
+            Ok(Post::PulledVideo { url, title })
+        }
         ([], urls) => {
             if urls.len() > MAX_PHOTOS {
                 return Err(ConnectorError::permanent(format!(
@@ -257,6 +278,16 @@ fn plan(request: &PublishRequest) -> Result<Post<'_>, ConnectorError> {
             Ok(Post::Photos { urls, description })
         }
     }
+}
+
+/// Whether `request`'s URLs name a video: a `video/` type among `media_mimes` (the file store's
+/// types, in the order of `media_urls`). Photos name `image/` types, or none (a request made
+/// before the types were carried).
+fn names_video(request: &PublishRequest) -> bool {
+    request
+        .media_mimes
+        .iter()
+        .any(|m| m.trim().to_ascii_lowercase().starts_with("video/"))
 }
 
 /// The posting screen's choice of `request`, a direct post's privacy one of [`PRIVACY_LEVELS`] as
@@ -391,6 +422,9 @@ pub(crate) async fn publish(
         Post::Video { media, .. } => TiktokMedia::Video {
             duration_ms: media.video_duration_ms(),
         },
+        // Its length was read from the file when the human approved it (`studio.tiktok_post`);
+        // here it is left to TikTok (`duration_check_failed`).
+        Post::PulledVideo { .. } => TiktokMedia::Video { duration_ms: None },
         Post::Photos { .. } => TiktokMedia::Photos,
     };
     choice
@@ -403,6 +437,9 @@ pub(crate) async fn publish(
                 media, mime, plan, ..
             },
         ) => draft_video(connector, token, media, &mime, plan).await?,
+        (TiktokPostMode::Draft, Post::PulledVideo { url, .. }) => {
+            draft_pulled_video(connector, token, url).await?
+        }
         (TiktokPostMode::Draft, Post::Photos { urls, description }) => {
             draft_photos(connector, token, urls, description).await?
         }
@@ -418,6 +455,11 @@ pub(crate) async fn publish(
             let flags = choice.flags(&creator);
             let privacy = choice.privacy_level.as_str();
             post_video(connector, token, &flags, privacy, media, &mime, title, plan).await?
+        }
+        (TiktokPostMode::DirectPost, Post::PulledVideo { url, title }) => {
+            let flags = choice.flags(&creator);
+            let privacy = choice.privacy_level.as_str();
+            post_pulled_video(connector, token, &flags, privacy, url, title).await?
         }
         (TiktokPostMode::DirectPost, Post::Photos { urls, description }) => {
             let flags = choice.flags(&creator);
@@ -461,18 +503,111 @@ async fn post_video(
     title: Option<String>,
     plan: ChunkPlan,
 ) -> Result<String, ConnectorError> {
+    let body = json!({
+        "post_info": video_info(flags, privacy, title),
+        "source_info": file_upload(plan),
+    });
+    let url = connector.api_url(&["v2", "post", "publish", "video", "init", ""], &[]);
+    upload_video(connector, token, url, body, media, mime, plan).await
+}
+
+/// A video's `post_info`: [`post_info`], its title when it has one, and the Duet and Stitch
+/// switches.
+fn video_info(flags: &TiktokPostFlags, privacy: &str, title: Option<String>) -> Map<String, Value> {
     let mut info = post_info(flags, privacy);
     if let Some(title) = title {
         info.insert("title".to_owned(), json!(title));
     }
     info.insert("disable_duet".to_owned(), json!(flags.disable_duet));
     info.insert("disable_stitch".to_owned(), json!(flags.disable_stitch));
+    info
+}
+
+/// A video's `PULL_FROM_URL` source: TikTok downloads it from `url` itself
+/// (<https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide>).
+fn pull_from_url(url: &Url) -> Value {
+    json!({
+        "source": "PULL_FROM_URL",
+        "video_url": url.as_str(),
+    })
+}
+
+/// A video TikTok pulls from `url`: `POST /v2/post/publish/video/init/` with its `PULL_FROM_URL`
+/// source; the publish id.
+async fn post_pulled_video(
+    connector: &TiktokConnector,
+    token: &str,
+    flags: &TiktokPostFlags,
+    privacy: &str,
+    url: &Url,
+    title: Option<String>,
+) -> Result<String, ConnectorError> {
     let body = json!({
-        "post_info": info,
-        "source_info": file_upload(plan),
+        "post_info": video_info(flags, privacy, title),
+        "source_info": pull_from_url(url),
     });
-    let url = connector.api_url(&["v2", "post", "publish", "video", "init", ""], &[]);
-    upload_video(connector, token, url, body, media, mime, plan).await
+    let init = connector.api_url(&["v2", "post", "publish", "video", "init", ""], &[]);
+    init_pulled(connector, token, init, body, url).await
+}
+
+/// A video draft TikTok pulls from `url`: `POST /v2/post/publish/inbox/video/init/` with the
+/// source alone; the publish id.
+async fn draft_pulled_video(
+    connector: &TiktokConnector,
+    token: &str,
+    url: &Url,
+) -> Result<String, ConnectorError> {
+    let body = json!({ "source_info": pull_from_url(url) });
+    let init = connector.api_url(
+        &["v2", "post", "publish", "inbox", "video", "init", ""],
+        &[],
+    );
+    init_pulled(connector, token, init, body, url).await
+}
+
+/// The parts of signed media URLs (`parts`, [`crate::client::url_secrets`]) taken out of a quoted
+/// reason: those of at least [`MIN_HIDDEN_CHARS`] characters (the URL, its query, its signature,
+/// its ids and expiry), not a short value that would mask ordinary words.
+fn hidden_parts(parts: &[String]) -> Vec<&str> {
+    parts
+        .iter()
+        .map(String::as_str)
+        .filter(|p| p.chars().count() >= MIN_HIDDEN_CHARS)
+        .collect()
+}
+
+/// The shortest part of a signed media URL taken out of a quoted reason.
+const MIN_HIDDEN_CHARS: usize = 8;
+
+/// A pulled video's init at `init` with `body`, sent once: TikTok starts downloading the video
+/// when it accepts the init and posts it by itself once it has it, so the init may post
+/// (`Commit`: a lost answer is `Unknown`, never sent again, and never followed by an upload of the
+/// same video). A refused init posted nothing. The video's signed URL is taken out of any reason
+/// quoting TikTok's message.
+async fn init_pulled(
+    connector: &TiktokConnector,
+    token: &str,
+    init: Url,
+    body: Value,
+    video: &Url,
+) -> Result<String, ConnectorError> {
+    let owned = crate::client::url_secrets(video);
+    let hidden = hidden_parts(&owned);
+    let answer = connector
+        .call_hiding(
+            Method::POST,
+            init,
+            Auth::Bearer(token),
+            &Body::Json(body),
+            Endpoint::Api,
+            Effect::Commit,
+            &[],
+            &hidden,
+        )
+        .await?;
+    text(&answer["data"]["publish_id"])
+        .filter(|id| publish_id(id).is_some())
+        .ok_or_else(|| ConnectorError::unknown("accepted response lacks a valid publish id"))
 }
 
 /// A video's `FILE_UPLOAD` source: its size and how it is cut.
@@ -605,14 +740,19 @@ async fn init_photos(
         },
     });
     let url = connector.api_url(&["v2", "post", "publish", "content", "init", ""], &[]);
+    // The photos' signed URLs are taken out of any reason quoting TikTok's message.
+    let owned: Vec<String> = urls.iter().flat_map(crate::client::url_secrets).collect();
+    let hidden = hidden_parts(&owned);
     let answer = connector
-        .call(
+        .call_hiding(
             Method::POST,
             url,
             Auth::Bearer(token),
             &Body::Json(body),
             Endpoint::Api,
             Effect::Commit,
+            &[],
+            &hidden,
         )
         .await?;
     text(&answer["data"]["publish_id"])
@@ -674,16 +814,26 @@ pub(crate) async fn resolve(
             url: None,
         }),
         "FAILED" => {
+            // TikTok's `fail_reason` is one of its codes; a URL in it (a pulled medium's signed
+            // one) is never kept.
             let why: String = words(&data["fail_reason"])
                 .unwrap_or("TikTok gave no reason")
+                .split_whitespace()
+                .map(|w| if w.contains("://") { "<url>" } else { w })
+                .collect::<Vec<_>>()
+                .join(" ")
                 .chars()
                 .take(120)
                 .collect();
             let reason = crate::client::scrub(&format!("publish failed: {why}"), &[token]);
-            PublishResolution::Failed(if why == "auth_removed" {
-                ConnectorError::auth(reason)
-            } else {
-                ConnectorError::permanent(reason)
+            PublishResolution::Failed(match why.split_whitespace().next().unwrap_or_default() {
+                "auth_removed" => ConnectorError::auth(reason),
+                // TikTok could not download the media from its URL within its hour: the file
+                // server or its URL, not the content. Nothing was posted.
+                "video_pull_failed" | "photo_pull_failed" => {
+                    ConnectorError::permanent_because(Cause::MediaUnfetched, reason)
+                }
+                _ => ConnectorError::permanent(reason),
             })
         }
         pending if PENDING_STATUSES.contains(&pending) => PublishResolution::Pending,

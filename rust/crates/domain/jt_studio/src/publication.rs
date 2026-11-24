@@ -110,6 +110,14 @@ pub enum RedactedPublishError {
     Unknown,
     Policy,
     Internal,
+    /// The provider refused the post because it has not audited the platform's app for it
+    /// (`jt_connector::Cause::AppNotAudited`): not the connection's fault, and not the
+    /// content's; the same post fails the same way until the provider passes the app.
+    AppNotAudited,
+    /// The provider could not fetch the media from the URL it was given
+    /// (`jt_connector::Cause::MediaUnfetched`): its host unverified at the provider, or the
+    /// download failed; nothing was posted.
+    MediaUnfetched,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "evidence", rename_all = "snake_case")]

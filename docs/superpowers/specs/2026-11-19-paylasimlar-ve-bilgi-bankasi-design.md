@@ -278,6 +278,12 @@ Reasons in words:
   `validation` / `refused` → `platform içeriği kabul etmedi`, anything else → `platforma ulaşılamadı`;
   `missed_grace` → `zamanı geçti`. An `auth` or `permission` failure on an account that works again
   says `{Kanal} bu paylaşımı almadı: bağlantı yenilendi, yeniden hazırlatabilirsin.`
+  `app_not_audited` (TikTok has not audited Jeeta's app, so it refuses a direct post to a public
+  account; never "renewed", never a reconnect) → `Jeeta'nın TikTok uygulaması henüz denetlenmediği
+  için herkese açık hesaba doğrudan paylaşım yapılamıyor; yeniden hazırlatıp TikTok'a taslak olarak
+  göndermeyi dene`, with `Tekrar hazırlat` (without the draft grant: `…; taslak izni için önce TikTok'u
+  yeniden bağla, sonra yeniden hazırlatıp taslak olarak göndermeyi dene`, with `Yeniden bağla`); `media_unfetched` (the platform could not download the
+  media from its URL) → `platform medyayı Jeeta'dan indiremedi`, with `Tekrar hazırlat`.
 - `{neden}` of `check_hold`, `delivery_held`, `files_quality`: the first finding's Turkish copy in
   the owner's words (`materials.finding.*` re-worded, §8.5: never olay, materyal, strateji), never
   the code. A `check_hold` whose finding is `sensitive_needs_human` or `share_unset` is shown as the

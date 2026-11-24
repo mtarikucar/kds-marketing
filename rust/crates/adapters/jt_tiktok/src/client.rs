@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use jt_connector::ConnectorError;
+use jt_connector::{Cause, ConnectorError};
 use jt_outbound::{EgressError, EgressScope, Method, Prepared, Response, StatusCode, header};
 use serde_json::Value;
 use url::Url;
@@ -32,17 +32,28 @@ pub(crate) const CLIENT_REJECTED: &str = "platform client credentials rejected";
 /// the code, the refresh token).
 const PUBLIC_FORM_FIELDS: &[&str] = &["grant_type", "client_key", "redirect_uri"];
 
-/// `error.code`s that say the grant lacks a scope, or the creator or the app may not post that
-/// way (<https://developers.tiktok.com/doc/tiktok-api-v2-error-handling>,
+/// `error.code`s that say the grant lacks a scope, or the creator may not post that way
+/// (<https://developers.tiktok.com/doc/tiktok-api-v2-error-handling>,
 /// <https://developers.tiktok.com/doc/content-posting-api-reference-direct-post>):
 /// `Permission`. `scope_not_authorized` comes with HTTP 401, so these are read before the 401.
 const PERMISSION_CODES: &[&str] = &[
     "scope_not_authorized",
     "scope_permission_missed",
     "privacy_level_option_mismatch",
-    "unaudited_client_can_only_post_to_private_accounts",
     "spam_risk_user_banned_from_posting",
 ];
+
+/// The `error.code` of a direct post TikTok refuses because it has not audited the app: an
+/// unaudited app posts only to private accounts
+/// (<https://developers.tiktok.com/doc/content-posting-api-reference-direct-post>). Not the
+/// grant's fault, so not `Permission`: `Permanent` with [`Cause::AppNotAudited`] (reconnecting
+/// does not help; a draft is not refused this way).
+pub(crate) const UNAUDITED_CODE: &str = "unaudited_client_can_only_post_to_private_accounts";
+
+/// The `error.code` of a `PULL_FROM_URL` init whose URL is on a host or prefix not verified for
+/// the app (<https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide>):
+/// `Permanent` with [`Cause::MediaUnfetched`]. Nothing was posted.
+pub(crate) const URL_UNVERIFIED_CODE: &str = "url_ownership_unverified";
 
 /// `error.code`s that ask to slow down: the API's rate limit, the creator's daily post cap
 /// (`creator_info` answers it with HTTP 200), the client's daily publishing users: `Throttle`.
@@ -303,6 +314,25 @@ impl TiktokConnector {
         effect: Effect,
         taken: &[&str],
     ) -> Result<Value, ConnectorError> {
+        self.call_hiding(method, url, auth, body, endpoint, effect, taken, &[])
+            .await
+    }
+
+    /// [`TiktokConnector::call_taking`], also taking `hidden` out of any provider text quoted in
+    /// an error: a pulled medium's signed URL and its parts ([`url_secrets`]), which the body
+    /// carries and TikTok's message might quote.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn call_hiding(
+        &self,
+        method: Method,
+        url: Url,
+        auth: Auth<'_>,
+        body: &Body<'_>,
+        endpoint: Endpoint,
+        effect: Effect,
+        taken: &[&str],
+        hidden: &[&str],
+    ) -> Result<Value, ConnectorError> {
         let attempts = if effect == Effect::Read {
             READ_ATTEMPTS.max(1)
         } else {
@@ -312,6 +342,7 @@ impl TiktokConnector {
         if let Auth::Bearer(token) = auth {
             secrets.push(token);
         }
+        secrets.extend_from_slice(hidden);
         let mut attempt = 1;
         loop {
             let mut request = self
@@ -543,6 +574,12 @@ pub(crate) fn classify(
         }
         return ConnectorError::permanent(reason());
     }
+    if code == Some(UNAUDITED_CODE) {
+        return ConnectorError::permanent_because(Cause::AppNotAudited, reason());
+    }
+    if code == Some(URL_UNVERIFIED_CODE) {
+        return ConnectorError::permanent_because(Cause::MediaUnfetched, reason());
+    }
     if is(PERMISSION_CODES) {
         return ConnectorError::permission(reason());
     }
@@ -637,7 +674,7 @@ mod tests {
                 403,
                 api("unaudited_client_can_only_post_to_private_accounts"),
                 a,
-                "permission",
+                "permanent",
             ),
             (
                 403,
@@ -683,6 +720,32 @@ mod tests {
                 "{status} {body:?} {endpoint:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_unaudited_app_and_an_unverified_url_name_their_cause() {
+        let cause = |code: &str| {
+            classify(
+                StatusCode::FORBIDDEN,
+                api(code).as_ref(),
+                Endpoint::Api,
+                &[],
+            )
+            .cause()
+        };
+        assert_eq!(cause(UNAUDITED_CODE), Some(Cause::AppNotAudited));
+        assert_eq!(cause(URL_UNVERIFIED_CODE), Some(Cause::MediaUnfetched));
+        // A real permission failure stays one, and names no cause.
+        for code in ["scope_not_authorized", "privacy_level_option_mismatch"] {
+            let e = classify(
+                StatusCode::FORBIDDEN,
+                api(code).as_ref(),
+                Endpoint::Api,
+                &[],
+            );
+            assert_eq!((e.kind(), e.cause()), ("permission", None), "{code}");
+        }
+        assert_eq!(cause("invalid_param"), None);
     }
 
     #[test]

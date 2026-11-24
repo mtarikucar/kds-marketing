@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { areaRedo, deliveryAccept } from '@/api/content';
 import * as m from '@/api/materials';
 import {
+  needsDraftGrant,
   postDismiss,
   versionCancel,
   type CancelRef,
@@ -270,7 +271,8 @@ function useRowActs({ row, onAccounts, onTiktok, onGone }: ActionContext) {
       secondary = a.release_check ? quiet('release', t('postsPage.actions.release'), () => setDialog({ kind: 'release' })) : null;
       break;
     case 'failed':
-      if ((wait.facts.reason === 'auth' || wait.facts.reason === 'permission') && !wait.facts.recovered) {
+      // An unaudited refusal is answered with a draft: without the draft grant, reconnect first.
+      if (((wait.facts.reason === 'auth' || wait.facts.reason === 'permission') && !wait.facts.recovered) || needsDraftGrant(wait.facts)) {
         // The account still cannot post: preparing it again would fail the same way (§2.6).
         if (a.reconnect) primary = link('reconnect', t('postsPage.actions.reconnect'), `/connect?capability=${encodeURIComponent(a.reconnect)}`);
         else note = t('postsPage.panel.managerReconnect');

@@ -1196,13 +1196,18 @@ fn failure(f: &Facts, fact: &VersionFact) -> (&'static str, bool) {
         .iter()
         .filter_map(|a| match a.outcome() {
             Some(PublishOutcome::Refused(_)) => Some("refused"),
-            Some(PublishOutcome::Failed(e)) => Some(match e {
-                RedactedPublishError::Auth => "auth",
-                RedactedPublishError::Permission => "permission",
-                RedactedPublishError::Throttle => "rate_limited",
-                RedactedPublishError::Permanent | RedactedPublishError::Policy => "validation",
-                _ => "unreachable",
-            }),
+            Some(PublishOutcome::Failed(e)) => Some(
+                match crate::usecases::failure::publish_category(*e, a.failure_reason()) {
+                    // Before the kinds: reconnecting fixes neither (the account is not at fault).
+                    RedactedPublishError::AppNotAudited => "app_not_audited",
+                    RedactedPublishError::MediaUnfetched => "media_unfetched",
+                    RedactedPublishError::Auth => "auth",
+                    RedactedPublishError::Permission => "permission",
+                    RedactedPublishError::Throttle => "rate_limited",
+                    RedactedPublishError::Permanent | RedactedPublishError::Policy => "validation",
+                    _ => "unreachable",
+                },
+            ),
             _ => None,
         })
         .next()
@@ -1293,11 +1298,14 @@ fn post_row(
         // stands, or for a post of no content, it waits for nothing (D26).
         let waiting = area.is_some_and(|p| p.redo.is_none()) && acknowledged.is_none();
         if waiting {
+            // An unaudited refusal is answered with a draft, which needs the draft grant: without
+            // it the account is reconnected first.
+            let drafts = account.is_some_and(crate::usecases::studio::tiktok::drafts_granted);
             waits.push(wait(
                 WaitCode::Failed,
                 slot.scheduled_at,
                 json!({"account": account_name, "kind": kind, "reason": reason,
-                       "recovered": recovered}),
+                       "recovered": recovered, "drafts": drafts}),
             ));
             if manage_post {
                 actions.acknowledge = Some(SlotRef {
@@ -1305,8 +1313,8 @@ fn post_row(
                     expected_revision: slot.revision,
                 });
             }
-            if matches!(reason, "auth" | "permission")
-                && !recovered
+            if (matches!(reason, "auth" | "permission") && !recovered
+                || reason == "app_not_audited" && !drafts)
                 && v.has(Permission::CapabilitiesManage)
             {
                 actions.reconnect = Some(cap);

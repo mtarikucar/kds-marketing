@@ -423,7 +423,8 @@ async fn fail(
     );
     let error = AppError::validation(
         "publication failed",
-        json!({"provider_error":e.kind(),"provider_reason":reason}),
+        json!({"provider_error":e.kind(),"provider_cause":e.cause().map(jt_connector::Cause::key),
+               "provider_reason":reason}),
     );
     let outcome = if matches!(e, ConnectorError::Unknown { .. }) {
         PublishOutcome::Unknown(error)
@@ -443,7 +444,7 @@ async fn fail(
         attempt.actor().clone(),
         jt_ledger::Action::new("studio.publish.failure")
             .map_err(|_| AppError::internal("action"))?,
-        json!({"attempt_id":attempt.id(),"slot_id":attempt.slot_id(),"born_version_id":attempt.piece().chain.born_version_id,"executed_version_id":attempt.executed_version_id(),"arm_id":attempt.piece().chain.arm_id,"provider_error":e.kind(),"provider_reason":reason,"retry_after_s":retry_after_s}),
+        json!({"attempt_id":attempt.id(),"slot_id":attempt.slot_id(),"born_version_id":attempt.piece().chain.born_version_id,"executed_version_id":attempt.executed_version_id(),"arm_id":attempt.piece().chain.arm_id,"provider_error":e.kind(),"provider_cause":e.cause().map(jt_connector::Cause::key),"provider_reason":reason,"retry_after_s":retry_after_s}),
         d.clock.now(),
     );
     entry.strategy_version_id = Some(attempt.executed_version_id().0);

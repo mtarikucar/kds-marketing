@@ -906,3 +906,124 @@ async fn media_failure_does_not_leak_reservation() {
         "no provider I/O occurred but the upper bound remains held"
     );
 }
+
+/// TikTok's refusal of an app it has not audited (`Cause::AppNotAudited`) is its own category end
+/// to end: the attempt's evidence, the pending work's blocker (send it as a TikTok draft, never
+/// reconnect), and the owner's failure line; a real permission failure still asks to reconnect.
+#[tokio::test]
+async fn an_unaudited_app_is_its_own_failure_and_never_asks_to_reconnect() {
+    let (w, c) = world().await;
+    c.push_publish(Err(ConnectorError::permanent_because(
+        jt_connector::Cause::AppNotAudited,
+        "HTTP 403 unaudited_client_can_only_post_to_private_accounts: Unaudited clients can only post to a private account.",
+    )));
+    publish_due(&w.d, w.f.ws).await.unwrap();
+    let s = w.uow.snapshot();
+    assert_eq!(
+        s.studio.attempts[0].outcome(),
+        Some(&jt_studio::PublishOutcome::Failed(
+            jt_studio::RedactedPublishError::AppNotAudited
+        ))
+    );
+    let value = serde_json::to_value(s.studio.attempts[0].outcome()).unwrap();
+    assert_eq!(value["evidence"], "app_not_audited");
+    assert!(
+        s.studio.attempts[0]
+            .failure_reason()
+            .unwrap()
+            .contains("unaudited_client_can_only_post_to_private_accounts")
+    );
+    let failure = s
+        .ledger
+        .iter()
+        .find(|row| row.entry.action.as_str() == "studio.publish.failure")
+        .expect("failure entry");
+    assert_eq!(failure.entry.payload["provider_cause"], "app_not_audited");
+    let p = work::pending(&w.d, &w.ctx).await.unwrap();
+    let blocker = p
+        .blockers
+        .iter()
+        .find(|b| b.reason == "publish_app_not_audited")
+        .expect("its own blocker");
+    // This account was never granted drafts: TikTok is reconnected for them first (the TikTok
+    // screen's tests cover `send_as_tiktok_draft`).
+    assert_eq!(
+        blocker.next_action.as_deref(),
+        Some("reconnect_for_tiktok_drafts")
+    );
+    assert!(
+        p.blockers
+            .iter()
+            .all(|b| b.next_action.as_deref() != Some("reconnect_capability")),
+        "{:?}",
+        p.blockers
+    );
+    // Sent once, never again by itself.
+    assert_eq!(sends(&c), 1);
+
+    // A revoked grant is still a reconnect.
+    let (w, c) = world().await;
+    c.push_publish(Err(ConnectorError::permission(
+        "HTTP 401 scope_not_authorized: the grant lacks the scope",
+    )));
+    publish_due(&w.d, w.f.ws).await.unwrap();
+    let p = work::pending(&w.d, &w.ctx).await.unwrap();
+    let blocker = p
+        .blockers
+        .iter()
+        .find(|b| b.reason == "publish_permission")
+        .expect("a permission blocker");
+    assert_eq!(blocker.next_action.as_deref(), Some("reconnect_capability"));
+}
+
+/// Media the provider could not fetch (`Cause::MediaUnfetched`: an unverified URL host, a failed
+/// pull) is its own category too, and asks to check the URL verification.
+#[tokio::test]
+async fn media_the_provider_could_not_fetch_is_its_own_failure() {
+    let (w, c) = world().await;
+    c.push_publish(Err(ConnectorError::permanent_because(
+        jt_connector::Cause::MediaUnfetched,
+        "HTTP 403 url_ownership_unverified: verify the URL prefix",
+    )));
+    publish_due(&w.d, w.f.ws).await.unwrap();
+    let s = w.uow.snapshot();
+    assert_eq!(
+        s.studio.attempts[0].outcome(),
+        Some(&jt_studio::PublishOutcome::Failed(
+            jt_studio::RedactedPublishError::MediaUnfetched
+        ))
+    );
+    let p = work::pending(&w.d, &w.ctx).await.unwrap();
+    assert!(
+        p.blockers
+            .iter()
+            .any(|b| b.reason == "publish_media_unfetched"
+                && b.next_action.as_deref() == Some("check_media_url_verification"))
+    );
+    assert_eq!(sends(&c), 1);
+}
+
+/// TikTok videos are uploaded unless the platform switch `JEETA_TIKTOK_VIDEO_PULL` is on; then
+/// they go by a signed file-store URL that outlives TikTok's download window. Photos go by URL
+/// either way; no other kind changes.
+#[test]
+fn tiktok_videos_are_pulled_only_behind_the_switch() {
+    use jt_app::usecases::studio::files::{
+        MediaDelivery::{self, Bytes, SignedUrl},
+        PROVIDER_URL_LIFETIME, TIKTOK_PULL_WINDOW,
+    };
+    for (kind, mime, off, on) in [
+        ("tiktok", "video/mp4", Bytes, SignedUrl),
+        ("tiktok", " Video/MP4 ", Bytes, SignedUrl),
+        ("tiktok", "image/jpeg", SignedUrl, SignedUrl),
+        ("x", "video/mp4", Bytes, Bytes),
+        ("linkedin_page", "video/mp4", Bytes, Bytes),
+        ("instagram", "video/mp4", SignedUrl, SignedUrl),
+    ] {
+        assert_eq!(MediaDelivery::with(kind, mime, false), off, "{kind} {mime}");
+        assert_eq!(MediaDelivery::of(kind, mime), off, "{kind} {mime}");
+        assert_eq!(MediaDelivery::with(kind, mime, true), on, "{kind} {mime}");
+    }
+    // TikTok gives up an hour after it starts downloading; the URL lives far past that.
+    assert!(PROVIDER_URL_LIFETIME >= TIKTOK_PULL_WINDOW * 2);
+}

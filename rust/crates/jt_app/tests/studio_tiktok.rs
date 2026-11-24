@@ -1427,3 +1427,277 @@ async fn a_screen_title_naming_another_olay_holds_until_released() {
     assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
     assert_eq!(publishes(&t.tt).len(), 1);
 }
+
+/// Another Ready TikTok slot on `t`'s account, its piece carrying `media` (as a post prepared
+/// again is).
+async fn another_slot(t: &Tiktok, media: Vec<MediaUpload>) -> Slot {
+    let slot = Slot {
+        id: SlotId::new_v7(),
+        scheduled_at: FIXED_NOW + Duration::days(1),
+        state: SlotState::Planned,
+        revision: 0,
+        ..t.slot.clone()
+    };
+    let mut r = t.w.uow.tenant(t.w.f.ws).await.unwrap();
+    r.studio()
+        .insert_slots(&format!("tiktok/again/{}", slot.id), vec![slot.clone()])
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let (media, subject) = materials(&t.w, media).await;
+    piece_submit(
+        &t.w.d,
+        &t.w.ctx,
+        PieceInput {
+            slot_id: slot.id,
+            expected_revision: 0,
+            request_key: format!("tiktok-again-{}", slot.id),
+            text: "Bugünün menüsü #yemek".into(),
+            media,
+            adaptations: BTreeMap::new(),
+            subject: Some(subject),
+        },
+    )
+    .await
+    .unwrap();
+    slot
+}
+
+/// A direct post TikTok refused because it has not audited the app makes the account's next
+/// posting screen suggest a draft (the human still chooses); a post that went out since ends the
+/// suggestion; any other failure suggests nothing.
+#[tokio::test]
+async fn an_unaudited_refusal_makes_the_next_screen_suggest_a_draft() {
+    let mut t = tiktok_world(vec![mp4(30)]).await;
+    grant(&t, ALL_SCOPES).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    assert!(
+        !tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id)
+            .await
+            .unwrap()
+            .suggest_draft
+    );
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("PUBLIC_TO_EVERYONE")))
+        .await
+        .unwrap();
+    t.tt.push_publish(Err(ConnectorError::permanent_because(
+        jt_connector::Cause::AppNotAudited,
+        "HTTP 403 unaudited_client_can_only_post_to_private_accounts: Unaudited clients can only post to a private account.",
+    )));
+    publish_due(&t.w.d, t.w.f.ws).await.unwrap();
+    // The refused slot's own screen suggests it too (its refusal is not left out).
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    assert!(
+        tiktok_posting(&t.w.d, &t.w.ctx, t.slot.id)
+            .await
+            .unwrap()
+            .suggest_draft
+    );
+    let again = another_slot(&t, vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    let screen = tiktok_posting(&t.w.d, &t.w.ctx, again.id).await.unwrap();
+    assert!(screen.suggest_draft);
+    assert!(screen.approval.is_none(), "nothing is chosen for the human");
+    // Sent as a draft that TikTok took: a draft says nothing about direct posts, so the
+    // suggestion stays.
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(
+        &t.w.d,
+        &t.w.ctx,
+        TiktokPostInput {
+            slot_id: again.id,
+            expected_revision: 1,
+            post: draft(""),
+        },
+    )
+    .await
+    .unwrap();
+    t.w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(1)));
+    t.tt.push_publish(Ok(PublishReceipt {
+        external_id: "v_inbox_file~v2-1.7".into(),
+        url: None,
+    }));
+    t.tt.push_resolve(Ok(Some(PublishResolution::Pending)));
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+    let third = another_slot(&t, vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    assert!(
+        tiktok_posting(&t.w.d, &t.w.ctx, third.id)
+            .await
+            .unwrap()
+            .suggest_draft
+    );
+    // A direct post that went out (the audit passed): the suggestion ends.
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(
+        &t.w.d,
+        &t.w.ctx,
+        TiktokPostInput {
+            slot_id: third.id,
+            expected_revision: 1,
+            post: choice("PUBLIC_TO_EVERYONE"),
+        },
+    )
+    .await
+    .unwrap();
+    t.w.d.clock = Arc::new(FixedClock(FIXED_NOW + Duration::days(2)));
+    t.tt.push_publish(Ok(PublishReceipt {
+        external_id: "v_pub_file~v2-1.8".into(),
+        url: None,
+    }));
+    t.tt.push_resolve(Ok(Some(PublishResolution::Pending)));
+    assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+    let fourth = another_slot(&t, vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    assert!(
+        !tiktok_posting(&t.w.d, &t.w.ctx, fourth.id)
+            .await
+            .unwrap()
+            .suggest_draft
+    );
+
+    // Any other failure suggests nothing.
+    let t = tiktok_world(vec![mp4(30)]).await;
+    grant(&t, ALL_SCOPES).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("PUBLIC_TO_EVERYONE")))
+        .await
+        .unwrap();
+    t.tt.push_publish(Err(ConnectorError::permission(
+        "HTTP 401 scope_not_authorized",
+    )));
+    publish_due(&t.w.d, t.w.f.ws).await.unwrap();
+    let again = another_slot(&t, vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    assert!(
+        !tiktok_posting(&t.w.d, &t.w.ctx, again.id)
+            .await
+            .unwrap()
+            .suggest_draft
+    );
+}
+
+/// With `JEETA_TIKTOK_VIDEO_PULL` on, a TikTok video goes to the adapter as a signed URL with its
+/// type, no bytes (TikTok pulls it); its length is still read from the file when the human
+/// approves it. Off, it goes as bytes, as before.
+#[tokio::test]
+async fn a_video_goes_by_url_only_when_the_pull_switch_is_on() {
+    for pull in [false, true] {
+        let mut t = tiktok_world(vec![mp4(30)]).await;
+        t.w.d.apps = Arc::new(jt_testkit::fakes::FakeAppConfig {
+            tiktok_video_pull: pull,
+            ..Default::default()
+        });
+        t.tt.push_creator_info(Ok(Some(creator())));
+        tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("PUBLIC_TO_EVERYONE")))
+            .await
+            .unwrap();
+        t.tt.push_publish(Ok(PublishReceipt {
+            external_id: "v_pub_url~v2-1.7".into(),
+            url: None,
+        }));
+        assert_eq!(publish_due(&t.w.d, t.w.f.ws).await.unwrap(), 1);
+        let request = &publishes(&t.tt)[0];
+        if pull {
+            assert!(request.media.is_empty());
+            assert_eq!(request.media_urls.len(), 1);
+            assert_eq!(request.media_urls[0].scheme(), "https");
+            assert_eq!(request.media_mimes, vec!["video/mp4".to_owned()]);
+        } else {
+            assert_eq!(request.media, vec![mp4(30)]);
+            assert!(request.media_urls.is_empty());
+        }
+    }
+    // A video too long for the account is refused at approval with the switch on too.
+    let mut t = tiktok_world(vec![mp4(601)]).await;
+    t.w.d.apps = Arc::new(jt_testkit::fakes::FakeAppConfig {
+        tiktok_video_pull: true,
+        ..Default::default()
+    });
+    t.tt.push_creator_info(Ok(Some(creator())));
+    let e = tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("PUBLIC_TO_EVERYONE")))
+        .await
+        .unwrap_err();
+    assert_eq!(e.details["reason"], "tiktok_video_too_long");
+}
+
+/// The post that failed before the refusal had its own category is stored as a permission
+/// failure quoting TikTok's code: it reads as the unaudited refusal (suggestion, blocker) without
+/// any rewrite of the stored attempt.
+#[tokio::test]
+async fn an_unaudited_refusal_stored_as_a_permission_still_reads_as_one() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    grant(&t, ALL_SCOPES).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("PUBLIC_TO_EVERYONE")))
+        .await
+        .unwrap();
+    t.tt.push_publish(Err(ConnectorError::permission(
+        "HTTP 403 unaudited_client_can_only_post_to_private_accounts: Please review our integration guidelines",
+    )));
+    publish_due(&t.w.d, t.w.f.ws).await.unwrap();
+    let s = t.w.uow.snapshot();
+    assert_eq!(
+        s.studio.attempts[0].outcome(),
+        Some(&jt_studio::PublishOutcome::Failed(
+            jt_studio::RedactedPublishError::Permission
+        )),
+        "stored as it was"
+    );
+    let p = work::pending(&t.w.d, &t.w.ctx).await.unwrap();
+    assert!(
+        p.blockers
+            .iter()
+            .any(|b| b.reason == "publish_app_not_audited"
+                && b.next_action.as_deref() == Some("send_as_tiktok_draft")),
+        "{:?}",
+        p.blockers
+    );
+    let again = another_slot(&t, vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    assert!(
+        tiktok_posting(&t.w.d, &t.w.ctx, again.id)
+            .await
+            .unwrap()
+            .suggest_draft
+    );
+}
+
+/// On a connection without the draft grant the unaudited refusal first asks to reconnect TikTok
+/// (drafts need `video.upload`); the screen still says why (`suggest_draft`) and offers no draft.
+#[tokio::test]
+async fn without_the_draft_grant_an_unaudited_refusal_asks_to_reconnect_first() {
+    let t = tiktok_world(vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    tiktok_post(&t.w.d, &t.w.ctx, input(&t, choice("PUBLIC_TO_EVERYONE")))
+        .await
+        .unwrap();
+    t.tt.push_publish(Err(ConnectorError::permanent_because(
+        jt_connector::Cause::AppNotAudited,
+        "HTTP 403 unaudited_client_can_only_post_to_private_accounts",
+    )));
+    publish_due(&t.w.d, t.w.f.ws).await.unwrap();
+    let p = work::pending(&t.w.d, &t.w.ctx).await.unwrap();
+    let blocker = p
+        .blockers
+        .iter()
+        .find(|b| b.reason == "publish_app_not_audited")
+        .expect("its blocker");
+    assert_eq!(
+        blocker.next_action.as_deref(),
+        Some("reconnect_for_tiktok_drafts")
+    );
+    let again = another_slot(&t, vec![mp4(30)]).await;
+    t.tt.push_creator_info(Ok(Some(creator())));
+    counters(&t.tt);
+    let screen = tiktok_posting(&t.w.d, &t.w.ctx, again.id).await.unwrap();
+    assert!(screen.suggest_draft && !screen.drafts_available);
+}

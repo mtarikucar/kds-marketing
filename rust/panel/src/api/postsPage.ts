@@ -82,7 +82,10 @@ export type FoundMark = 'face' | 'name' | 'child' | 'logo' | 'company';
 export const FOUND_MARKS: readonly FoundMark[] = ['face', 'name', 'child', 'logo', 'company'];
 
 /** Why a post did not go out (`RedactedPublishError` class, §2.6 "Reasons in words"). */
-export type FailReason = 'auth' | 'permission' | 'rate_limited' | 'validation' | 'refused' | 'unreachable' | 'missed_grace';
+export type FailReason = 'auth' | 'permission' | 'rate_limited' | 'validation' | 'refused' | 'unreachable' | 'missed_grace' | 'app_not_audited' | 'media_unfetched';
+
+/** An `app_not_audited` failure on a connection without the draft grant: reconnect first. */
+export const needsDraftGrant = (f: WaitFacts): boolean => f.reason === 'app_not_audited' && f.drafts === false;
 
 /** What a `files_quality` wait's `finding` is: the first such file's quality tag (`unset`: none). */
 export type QualityFinding = 'needs_crop' | 'unusable' | 'publishable' | 'unset';
@@ -100,7 +103,9 @@ export type QualityFinding = 'needs_crop' | 'unusable' | 'publishable' | 'unset'
  * - `finding`: the first finding's code (`delivery_held`, `check_hold`), or for `files_quality`
  *   the file's quality tag ({@link QualityFinding});
  * - `reason`: the failure's class (`failed`);
- * - `recovered`: an `auth` / `permission` failure whose account posts again (`failed`).
+ * - `recovered`: an `auth` / `permission` failure whose account posts again (`failed`);
+ * - `drafts`: the connection was granted TikTok drafts (`failed`; an `app_not_audited` failure
+ *   without it is answered by reconnecting first).
  */
 export interface WaitFacts {
   account?: string | null;
@@ -112,6 +117,7 @@ export interface WaitFacts {
   finding?: string | null;
   reason?: FailReason;
   recovered?: boolean;
+  drafts?: boolean;
 }
 
 /** `Wait` (§3.2.2): one reason the row waits for the owner; the first of a row is the one shown. */

@@ -31,7 +31,7 @@ pub use comments::{
     CommentGrant, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES, comment_grant,
 };
 pub use credential::{Credential, MailTls};
-pub use error::ConnectorError;
+pub use error::{Cause, ConnectorError};
 pub use event::{EventKind, InboundEvent, InboundEventId, dedupe_key};
 pub use health::{ProbeResult, status_after_probe};
 pub use oauth::{
