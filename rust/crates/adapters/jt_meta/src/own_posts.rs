@@ -115,6 +115,11 @@ fn about_insights(e: &ConnectorError) -> bool {
     }
 }
 
+/// A username, trimmed; `None` when there is none.
+fn name(v: &Value) -> Option<&str> {
+    v.as_str().map(str::trim).filter(|n| !n.is_empty())
+}
+
 /// Whether the post `answer` (its `owner` and `username`) is the connected account's: its owner
 /// is the capability's account (`external_id`), or, when Graph names no owner id, its username
 /// is the capability's (`username`).
@@ -123,7 +128,6 @@ fn owned(answer: &Value, public: &Value) -> bool {
     match text(&answer["owner"]["id"]) {
         Some(owner) => account == Some(owner.as_str()),
         None => {
-            let name = |v: &Value| v.as_str().map(str::trim).filter(|n| !n.is_empty());
             matches!((name(&answer["username"]), name(&public["username"])),
                 (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
         }
