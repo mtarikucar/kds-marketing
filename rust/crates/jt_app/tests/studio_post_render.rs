@@ -1134,3 +1134,138 @@ async fn a_composition_is_never_more_shareable_than_its_sources() {
     assert_eq!(reason(&e), "composed_material");
     assert!(material(&w, c.id).share.is_none());
 }
+
+/// Completes `id`'s analysis as an agent does: claimed, then completed with no finding.
+async fn complete_analysis(w: &World, id: MaterialId) {
+    let a = agent_of(w);
+    let claim = library::material_analysis_claim(
+        &w.d,
+        &a,
+        input(json!({"material_id":id,"expected_revision":material(w, id).revision})),
+    )
+    .await
+    .unwrap();
+    library::material_analysis_complete(
+        &w.d,
+        &a,
+        input(
+            json!({"material_id":id,"expected_revision":claim.expected_revision,
+            "claim_token":claim.claim_token,"description":"Bir masa",
+            "labels":["masa"],"date_source":"unknown","depicts":[]}),
+        ),
+    )
+    .await
+    .unwrap();
+}
+
+/// A composition never stands in for an unanalysed photo behind it: drawn from a photo whose
+/// analysis is pending again (or never ran, as for a composition the previous release made), it
+/// is refused as a source, naming the photo; once the photo's analysis completes, the
+/// composition's own analysis is completed with it and it renders.
+#[tokio::test]
+async fn a_composition_never_stands_in_for_an_unanalysed_photo() {
+    let mut w = world().await;
+    w.d.tokens = Arc::new(jt_testkit::fakes::FixedTokenGen::new(
+        (0..20).map(|n| format!("analysis-token-{n}")),
+    ));
+    let o = olay(&w).await;
+    let p = real_photo(&w, "p", 1, o).await;
+    let c = render_from(&w, "c", "cover", "full_top", p.id)
+        .await
+        .unwrap()
+        .material;
+    // As before this release: the photo not analysed, the composition with no record.
+    library::material_analysis_retry(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":p.id,"expected_revision":material(&w, p.id).revision})),
+    )
+    .await
+    .unwrap();
+    {
+        use jt_app::ports::UnitOfWork;
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        r.studio_materials()
+            .delete_intelligence(c.id)
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+    }
+    let e = render_from(&w, "again", "steps", "photo_top", c.id)
+        .await
+        .unwrap_err();
+    assert_eq!(reason(&e), "source_not_analysed");
+    assert_eq!(e.details["unanalysed_material_id"], json!(p.id));
+    // Not analysis work, whatever its record says.
+    assert!(!analysis_items(&w).await.contains(&c.id));
+    complete_analysis(&w, p.id).await;
+    use jt_app::ports::materials::AnalysisStatus;
+    let out = library::material_intelligence_get(&w.d, &w.ctx, input(json!({"material_id":c.id})))
+        .await
+        .unwrap();
+    assert_eq!(out.intelligence.status, AnalysisStatus::Completed);
+    render_from(&w, "again", "steps", "photo_top", c.id)
+        .await
+        .unwrap();
+}
+
+/// A brand logo whose analysis is not complete is left out of the brand chip: the render goes on
+/// with the brand name's letter, says so, and does not record (or take the AI flag of) the logo.
+#[tokio::test]
+async fn an_unanalysed_logo_is_left_out_and_said_so() {
+    let w = world().await;
+    let o = olay(&w).await;
+    let a = real_photo(&w, "a", 1, o).await;
+    let logo_file = upload(&w, "logo-file", 9).await;
+    let logo = library::material_add(
+        &w.d,
+        &w.ctx,
+        input(json!({"request_key":"logo","file_id":logo_file,
+            "origin":{"kind":"ai_generated","generator":"some-model"},
+            "genel":true,"depicts":[],"share":"shareable","quality":"publishable"})),
+    )
+    .await
+    .unwrap()
+    .material;
+    // Not analysed yet: brand_set refuses it outright.
+    let tokens = json!({"background":"#f5f5f3","ink":"#171a1f","accent":"#f2b83c",
+        "muted":"#555b66","heading_font":"bricolage_grotesque","body_font":"figtree",
+        "brand_name":"Örnek","logo_material_id":logo.id});
+    let e = render::brand_set(
+        &w.d,
+        &w.ctx,
+        input(json!({"tokens":tokens,"expected_revision":0})),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "source_not_analysed");
+    analysed(&w, logo.id).await;
+    render::brand_set(
+        &w.d,
+        &w.ctx,
+        input(json!({"tokens":tokens,"expected_revision":0})),
+    )
+    .await
+    .unwrap();
+    // Its analysis is asked for again after the brand was set.
+    library::material_analysis_retry(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":logo.id,"expected_revision":material(&w, logo.id).revision})),
+    )
+    .await
+    .unwrap();
+    let out = render_from(&w, "no-logo", "cover", "framed_dark", a.id)
+        .await
+        .unwrap();
+    assert!(
+        out.brand_fallbacks
+            .iter()
+            .any(|f| f.token == "logo_material_id")
+    );
+    assert_eq!(
+        out.material.composition.as_ref().unwrap().sources,
+        vec![a.id]
+    );
+    assert!(!out.ai_generated);
+}

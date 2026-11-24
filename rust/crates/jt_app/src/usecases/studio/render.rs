@@ -388,20 +388,19 @@ async fn source(
     } else {
         None
     };
-    if reason.is_none() {
-        let row = r.studio_materials().get_intelligence(m.id).await?;
-        if !super::library::is_analysed(&m, row.as_ref(), now) {
-            // Its faces, names and marks are not known yet: drawing it would publish what no one
-            // checked. Retryable once the analysis is complete.
-            return Err(AppError {
-                message:
-                    "the material is not analysed yet; render it once its analysis is complete"
-                        .into(),
-                details: json!({"field": field, "reason": "source_not_analysed",
-                                "material_id": id, "retryable": true}),
-                ..conflict("source_not_analysed")
-            });
-        }
+    if reason.is_none()
+        && let Some(behind) = super::library::unanalysed_behind(r, &m, now).await?
+    {
+        // Its faces, names and marks (or those of a photo it was drawn from) are not known yet:
+        // drawing it would publish what no one checked. Retryable once the analysis is complete.
+        return Err(AppError {
+            message: "the material, or one it was drawn from, is not analysed yet; render it once                       the analysis is complete"
+                .into(),
+            details: json!({"field": field, "reason": "source_not_analysed",
+                            "material_id": id, "unanalysed_material_id": behind,
+                            "retryable": true}),
+            ..conflict("source_not_analysed")
+        });
     }
     match reason {
         Some((reason, message)) => Err(AppError::validation(

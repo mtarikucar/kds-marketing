@@ -57,8 +57,9 @@ Rules the renderer keeps:
 
 A photo slot takes `{material_id, focus_x?, focus_y?}`: a live, filed, **analysed** JPEG, PNG or
 WebP material (not `not_shareable`, at most 25 MB stored). A material whose analysis is not
-complete yet is refused with `CONFLICT` `source_not_analysed` (`details.retryable: true`): analyse
-it first (it is in your work list), then render again. What no one checked for faces, names and
+complete yet is refused with `CONFLICT` `source_not_analysed` (`details.retryable: true`;
+`details.unanalysed_material_id` names it): analyse it first (it is in your work list), then render
+again. For a rendered slide used as a photo, every photo it was drawn from must be analysed. What no one checked for faces, names and
 marks is never drawn into a post. A brand logo not analysed yet is left out of the brand chip,
 and the answer says so under `brand_fallbacks`. The focus (0 to 1 from the left and top) is the point a crop keeps in
 view; the middle by default. All photos bound to an olay must be the **same** olay; genel photos
