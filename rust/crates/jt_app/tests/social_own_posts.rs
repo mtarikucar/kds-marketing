@@ -372,27 +372,12 @@ async fn a_posts_image_is_handed_over_in_memory() {
 #[tokio::test]
 async fn another_workspaces_account_is_not_found() {
     let w = support::world().await;
-    let other = jt_tenancy::WorkspaceId::new_v7();
-    let mut c = Capability::new(
-        CapabilityId::new_v7(),
-        other,
-        NewCapability {
-            kind_key: "instagram".into(),
-            name: "Instagram".into(),
-            external_id: Some(IG.into()),
-            connector_public: json!({"access": {"scopes": ["instagram_manage_insights"], "expires_at": null}}),
-            ..Default::default()
-        },
-        FIXED_NOW,
-    )
-    .unwrap();
-    c.status = StoredStatus::Verified;
-    c.last_verified_at = Some(FIXED_NOW);
-    let mut r = w.uow.tenant(other).await.unwrap();
-    r.capabilities().insert(c.clone(), None).await.unwrap();
-    r.commit().await.unwrap();
+    // A second workspace of the same store, with a connected account of its own.
+    let other = jt_testkit::studio_contract::ready(&w.uow).await;
+    assert_ne!(other.ws, w.f.ws);
+    let foreign = other.slot.capability_id;
     let social = agent(&w, &[Permission::SocialWork]);
-    let e = own_posts(&w.d, &social, input(c.id, None, None))
+    let e = own_posts(&w.d, &social, input(foreign, None, None))
         .await
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::NotFound);
@@ -400,7 +385,7 @@ async fn another_workspaces_account_is_not_found() {
         &w.d,
         &social,
         OwnPostImageInput {
-            capability_id: c.id,
+            capability_id: foreign,
             post_id: "18000000000000002".into(),
             index: 0,
         },
