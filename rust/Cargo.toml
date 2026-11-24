@@ -32,6 +32,7 @@ members = [
     "crates/adapters/jt_claude",
     "crates/adapters/jt_mcp_client",
     "crates/adapters/jt_webhook",
+    "crates/adapters/jt_render",
     "crates/jt_testkit",
     "crates/jt_archtest",
     "bin/jeeta",
@@ -78,6 +79,7 @@ jt_wake = { path = "crates/adapters/jt_wake" }
 jt_claude = { path = "crates/adapters/jt_claude" }
 jt_mcp_client = { path = "crates/adapters/jt_mcp_client" }
 jt_webhook = { path = "crates/adapters/jt_webhook" }
+jt_render = { path = "crates/adapters/jt_render" }
 jt_testkit = { path = "crates/jt_testkit" }
 jt_archtest = { path = "crates/jt_archtest" }
 
@@ -141,6 +143,13 @@ aes-gcm = { version = "0.11", default-features = false, features = ["aes", "allo
 hkdf = "0.13"
 zeroize = "1.9"
 
+# The post renderer (`jt_render` only, archtest): raster drawing, text shaping over the bundled
+# fonts' outlines, and decoding/encoding of JPEG, PNG and WebP only (no other codec).
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
+# HarfBuzz ported to Rust (shaping) over read-fonts (outlines, variations, metrics).
+harfrust = "0.16"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+
 # Mail protocol libraries are private to jt_mail (architecture tests enforce this).
 lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "ring", "webpki-roots"] }
 async-imap = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
@@ -160,3 +169,24 @@ all = "warn"
 # `test` inherits from `dev`.
 [profile.dev]
 debug = "line-tables-only"
+
+# The post renderer's pixel work (`jt_render`) is optimised in test and dev builds too: unoptimised
+# drawing and resampling make each rendered test image take seconds.
+[profile.dev.package.tiny-skia]
+opt-level = 2
+[profile.dev.package.tiny-skia-path]
+opt-level = 2
+[profile.dev.package.image]
+opt-level = 2
+[profile.dev.package.zune-jpeg]
+opt-level = 2
+[profile.dev.package.png]
+opt-level = 2
+[profile.dev.package.fdeflate]
+opt-level = 2
+[profile.dev.package.image-webp]
+opt-level = 2
+[profile.dev.package.harfrust]
+opt-level = 2
+[profile.dev.package.read-fonts]
+opt-level = 2

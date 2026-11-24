@@ -104,7 +104,11 @@ pub fn studio_module(id: &str) -> Option<&'static str> {
         | "material_production_fail"
         | "calendar_list"
         | "calendar_set"
-        | "material_policy_set" => CONTENT,
+        | "material_policy_set"
+        | "post_templates"
+        | "post_render"
+        | "brand_get"
+        | "brand_set" => CONTENT,
         "project_publication"
         | "project_schedule"
         | "post_requests"

@@ -345,6 +345,12 @@ pub static CATALOG: &[UseCase] = &[
     panel_only("studio.material_delete", Exempt, ("POST", "/api/studio/materials/{material_id}/delete"), Destructive),
     panel_only("studio.calendar_set", Exempt, ("PUT", "/api/studio/calendar/{key}/{year}"), Write),
     panel_only("studio.material_policy_set", Exempt, ("PUT", "/api/studio/materials/policy"), Write),
+    // Composed posts (an agent renders slides and story frames from the library's photos; the
+    // brand tokens have no panel form yet).
+    mcp_only("studio.post_templates", Exempt, "jeeta.studio.post_templates", Read),
+    mcp_only("studio.post_render", Exempt, "jeeta.studio.post_render", Write),
+    mcp_only("studio.brand_get", Exempt, "jeeta.studio.brand_get", Read),
+    mcp_only("studio.brand_set", Exempt, "jeeta.studio.brand_set", Write),
     // Releasing a slot's caption findings (spec 2026-11-03 §7, D19): a human's, behind the
     // strategy gate as the slot's other writes are.
     panel_only("studio.material_check_release", GateMode::Gated, ("POST", "/api/studio/slots/{slot_id}/material-check/release"), Write),

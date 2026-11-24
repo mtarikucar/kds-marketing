@@ -657,6 +657,7 @@ pub async fn material_add(
         created_at: ctx.now,
         erased_at: None,
         upload_for: None,
+        composition: None,
     };
     material.validate().map_err(invalid)?;
     let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
@@ -860,6 +861,10 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
     r.studio_materials()
         .update_material(m.clone(), i.expected_revision)
         .await?;
+    // A marker added after a render reaches the slides and stories drawn from this material.
+    if marked {
+        super::propagate_markers(r.as_mut(), &m).await?;
+    }
     if reviewer.is_some() {
         let manual_fields: Vec<_> = fields
             .iter()

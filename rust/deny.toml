@@ -83,6 +83,10 @@ deny = [
   { crate = "attohttpc" },
   { crate = "curl" },
   { crate = "sqlx", wrappers = ["jt_pg", "jt_testkit", "jeeta"] },
+  # Drawing, text shaping and image codecs belong to the post renderer alone.
+  { crate = "tiny-skia", wrappers = ["jt_render"] },
+  { crate = "harfrust", wrappers = ["jt_render"] },
+  { crate = "image", wrappers = ["jt_render"] },
   # AI / media / speech provider crates: never, anywhere (spec §4.2). One exception to the rule
   # behind it, not to this list (spec addendum C, 2026-11-21): the inbox's automatic replies call
   # the Claude API through `jt_claude`, as raw HTTP over `jt_outbound`; no SDK crate is added.

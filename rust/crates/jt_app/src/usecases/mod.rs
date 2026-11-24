@@ -99,6 +99,8 @@ pub struct Deps {
     pub connectors: Arc<dyn ConnectorRegistry>,
     /// Keeps each scheduled job ([`jobs`]) to one runner across the server's instances.
     pub job_lock: Arc<dyn JobLock>,
+    /// Draws the slides and story frames `studio.post_render` composes (`jt_render`).
+    pub compositor: Arc<dyn crate::ports::compose::Compositor>,
 }
 
 impl Deps {

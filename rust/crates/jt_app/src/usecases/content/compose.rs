@@ -237,6 +237,7 @@ async fn attach(
             created_at: ctx.now,
             erased_at: None,
             upload_for: Some(upload.clone()),
+            composition: None,
         };
         material.validate().map_err(library::invalid)?;
         r.studio_materials()

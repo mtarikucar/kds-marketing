@@ -81,6 +81,7 @@ impl World {
                 bank_instructions: "Synthetic bank instructions".into(),
             },
             job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
+            compositor: Arc::new(jt_app::ports::compose::UnavailableCompositor),
         };
         let (ws, owner) = db.seed_workspace("alpha").await;
         let state = McpState::new(deps.clone(), Arc::new(PgStrategyGate::new(db.pool.clone())));

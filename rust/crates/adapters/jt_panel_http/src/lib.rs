@@ -216,6 +216,7 @@ mod tests {
                 bank_instructions: "Synthetic bank instructions".into(),
             },
             job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
+            compositor: Arc::new(jt_app::ports::compose::UnavailableCompositor),
         }
     }
 

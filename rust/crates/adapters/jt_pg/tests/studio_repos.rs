@@ -12,6 +12,7 @@ async fn studio_schema_exact_table_delta() {
         [
             "studio_adset_bindings",
             "studio_arms",
+            "studio_brand",
             "studio_budget_moves",
             "studio_calendar_entries",
             "studio_control",
@@ -50,12 +51,13 @@ async fn studio_schema_exact_table_delta() {
     // snapshots (0037_social_accounts), the ad campaigns (0040_ads_campaigns), the agents'
     // wake rows (0045_agent_wake), the knowledge base (0046_knowledge_base) and the automatic
     // replies' queue and runs (0047_inbox_auto_reply), the owner's notices (0049_owner_notices)
-    // and the automatic replies' orders (0050_auto_reply_orders), less the three commission tables
-    // of 0008
-    // that 0033_drop_commissions drops.
+    // and the automatic replies' orders (0050_auto_reply_orders) and the brand tokens
+    // (0053_studio_brand), less the three commission tables of 0008 that 0033_drop_commissions
+    // drops.
     assert_eq!(
         count,
-        48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1 + 3 + 1 + 1 + 1 + 1 + 5 + 2 + 1 + 1 - 3
+        48 + 14 + 5 + 4 + 1 + 2 + 3 + 5 + 7 + 3 + 4 + 3 + 1 + 3 + 1 + 1 + 1 + 1 + 5 + 2 + 1 + 1 + 1
+            - 3
     );
 }
 
@@ -169,6 +171,28 @@ async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     let uow = PgUnitOfWork::new(db.pool.clone());
     let a = jt_testkit::studio_contract::ready(&uow).await;
     let b = jt_testkit::studio_contract::ready(&uow).await;
+    // The brand tokens table starts empty: a row of workspace `a` makes its check below real.
+    {
+        use jt_app::ports::compose::BrandRecord;
+        let mut r = uow.tenant(a.ws).await.unwrap();
+        r.studio_materials()
+            .save_brand(BrandRecord {
+                tokens: jt_studio::compose::BrandTokens::default(),
+                revision: 1,
+                updated_at: time::OffsetDateTime::now_utc(),
+            })
+            .await
+            .unwrap();
+        r.commit().await.unwrap();
+        let mut tx = TenantTx::begin(&db.pool, a.ws).await.unwrap();
+        let own: i64 =
+            sqlx::query_scalar("select count(*) from studio_brand where workspace_id=$1")
+                .bind(a.ws.0)
+                .fetch_one(tx.conn())
+                .await
+                .unwrap();
+        assert_eq!(own, 1, "the workspace reads its own brand tokens");
+    }
     let tables: Vec<String> = sqlx::query_scalar(
         "select tablename from pg_tables where schemaname='public' and tablename like 'studio_%'",
     )
@@ -177,8 +201,9 @@ async fn studio_rls_and_composite_fks_reject_cross_tenant() {
     .unwrap();
     // 14 Studio tables, the materials library's seven (0021_studio_materials) and the three of
     // olay-driven publishing (0022_studio_posts), intelligence (0029), productions (0030),
-    // and production projects (0031). The module registry is outside the studio_ namespace.
-    assert_eq!(tables.len(), 14 + 7 + 3 + 3);
+    // production projects (0031) and the brand tokens (0053). The module registry is outside
+    // the studio_ namespace.
+    assert_eq!(tables.len(), 14 + 7 + 3 + 3 + 1);
     for table in tables {
         let forced: bool = sqlx::query_scalar(
             "select relrowsecurity and relforcerowsecurity from pg_class where relname=$1",

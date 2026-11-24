@@ -338,6 +338,7 @@ fn a_material_changes_when_added_and_when_its_permission_is_set() {
         created_at: now(),
         erased_at: None,
         upload_for: None,
+        composition: None,
     };
     assert_eq!(material_changed_at(&m), now());
     m.share = Some(ShareDecision {

@@ -362,6 +362,7 @@ pub fn deps(uow: Arc<dyn UnitOfWork>) -> Deps {
             bank_instructions: "Synthetic bank instructions".into(),
         },
         job_lock: Arc::new(FakeJobLock::new()),
+        compositor: Arc::new(jt_app::ports::compose::UnavailableCompositor),
     }
 }
 

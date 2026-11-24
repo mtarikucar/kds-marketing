@@ -225,6 +225,7 @@ fn material(n: u128, binding: Binding) -> Material {
         created_at: datetime!(2025-01-01 0:00 UTC),
         erased_at: None,
         upload_for: None,
+        composition: None,
     }
 }
 

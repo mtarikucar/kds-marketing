@@ -220,6 +220,16 @@ pub trait MaterialRepo: Send + Sync {
     async fn material_policy(&mut self) -> Result<MaterialPolicy, AppError>;
     async fn save_material_policy(&mut self, policy: MaterialPolicy) -> Result<(), AppError>;
 
+    /// The workspace's brand tokens for composed posts (`studio.brand_set`); `None` when it never
+    /// set them (the neutral defaults apply).
+    async fn brand(&mut self) -> Result<Option<crate::ports::compose::BrandRecord>, AppError>;
+    /// Stores the workspace's brand tokens, replacing the ones there. The record's revision is
+    /// one more than the stored one's (1 for the first); `CONFLICT` otherwise.
+    async fn save_brand(
+        &mut self,
+        record: crate::ports::compose::BrandRecord,
+    ) -> Result<(), AppError>;
+
     /// Stores the release of its slot and revision, replacing the one there.
     async fn save_release(&mut self, release: MaterialRelease) -> Result<(), AppError>;
     async fn get_release(

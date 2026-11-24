@@ -461,7 +461,7 @@ fn every_studio_use_case_has_a_module_or_is_listed_cross_module() {
         groups,
         BTreeMap::from([
             ("materials", 28),
-            ("content", 16),
+            ("content", 20),
             ("social", 12),
             ("ads", 3),
             ("none", 10),

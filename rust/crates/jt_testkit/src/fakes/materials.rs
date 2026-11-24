@@ -26,6 +26,7 @@ pub struct MemMaterials {
     pub shoot_requests: Vec<ShootRequest>,
     pub policies: Vec<(WorkspaceId, MaterialPolicy)>,
     pub releases: Vec<(WorkspaceId, MaterialRelease)>,
+    pub brands: Vec<(WorkspaceId, jt_app::ports::compose::BrandRecord)>,
 }
 
 fn conflict(message: &str) -> AppError {
@@ -523,6 +524,43 @@ impl MaterialRepo for MemTenant {
             this.tx.write(move |s| {
                 s.materials.policies.retain(|(w, _)| *w != ws);
                 s.materials.policies.push((ws, policy));
+            });
+            Ok(())
+        })
+    }
+
+    async fn brand(&mut self) -> Result<Option<jt_app::ports::compose::BrandRecord>, AppError> {
+        let ws = self.ws;
+        Ok(self
+            .lib()
+            .brands
+            .iter()
+            .find(|(w, _)| *w == ws)
+            .map(|(_, b)| b.clone()))
+    }
+
+    async fn save_brand(
+        &mut self,
+        record: jt_app::ports::compose::BrandRecord,
+    ) -> Result<(), AppError> {
+        self.call(|this| {
+            let ws = this.ws;
+            let stored = this
+                .lib()
+                .brands
+                .iter()
+                .find(|(w, _)| *w == ws)
+                .map_or(0, |(_, b)| b.revision);
+            if record.revision != stored + 1 {
+                return Err(conflict("brand revision changed"));
+            }
+            record
+                .tokens
+                .validate()
+                .map_err(|e| AppError::internal(format!("studio_brand check: {e:?}")))?;
+            this.tx.write(move |s| {
+                s.materials.brands.retain(|(w, _)| *w != ws);
+                s.materials.brands.push((ws, record.clone()));
             });
             Ok(())
         })

@@ -19,6 +19,10 @@ use std::{collections::BTreeSet, fs, sync::Arc};
 use syn::visit::Visit;
 
 const ACTIONS: &[&str] = &[
+    "post_templates",
+    "post_render",
+    "brand_get",
+    "brand_set",
     "project_list",
     "project_create",
     "project_get",
@@ -123,6 +127,11 @@ const EXEMPT: &[&str] = &[
     "calendar_set",
     "material_policy_set",
     "material_intelligence_update",
+    // Composed posts: rendering the library's photos publishes nothing.
+    "post_templates",
+    "post_render",
+    "brand_get",
+    "brand_set",
     "material_production_request",
 ];
 /// The TikTok posting screen: panel routes without an MCP tool, since only a human passes it
@@ -156,7 +165,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 69);
+    assert_eq!(rows.len(), 73);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -197,7 +206,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 255);
+    assert_eq!(jt_mcp::registry().len(), 259);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -226,10 +235,11 @@ async fn studio_exact_catalog_and_gate_set() {
     // the ad campaigns of 0040_ads_campaigns, the agents' wake rows of 0045_agent_wake, and the
     // five knowledge base tables of 0046_knowledge_base, and the automatic replies' queue and runs
     // of 0047_inbox_auto_reply, and the owner's notices of 0049_owner_notices, and the automatic
-    // replies' orders of 0050_auto_reply_orders.
-    assert_eq!(all_tables.len(), 116);
+    // replies' orders of 0050_auto_reply_orders, and the brand tokens of 0053_studio_brand.
+    assert_eq!(all_tables.len(), 117);
 
-    // All 26 Studio tables are tenant-scoped, including intelligence and productions.
+    // All 28 Studio tables are tenant-scoped, including intelligence, productions and the brand
+    // tokens.
     assert_eq!(
         set(tables
             .iter()
@@ -262,7 +272,8 @@ async fn studio_exact_catalog_and_gate_set() {
             "studio_material_releases",
             "studio_package_requests",
             "studio_posts",
-            "studio_posting_policy"
+            "studio_posting_policy",
+            "studio_brand"
         ])
     );
 }
@@ -384,6 +395,13 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
                 "calendar_list" => &[jt_tenancy::Permission::ContentWork][..],
                 "calendar_set" => &[jt_tenancy::Permission::ContentWork][..],
                 "material_policy_set" => &[jt_tenancy::Permission::ContentWork][..],
+                "post_templates" => &[jt_tenancy::Permission::ContentWork][..],
+                "post_render" => &[jt_tenancy::Permission::ContentWork][..],
+                "brand_get" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::ContentManage,
+                ][..],
+                "brand_set" => &[jt_tenancy::Permission::ContentManage][..],
                 "project_publication" => &[jt_tenancy::Permission::SocialWork][..],
                 "post_requests" => &[jt_tenancy::Permission::SocialWork][..],
                 "posts_propose" => &[jt_tenancy::Permission::SocialWork][..],
@@ -622,6 +640,17 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
         (
             "shoot_resolve",
             json!({"request_id":jt_studio::ShootRequestId::new_v7(),"status":"done"}),
+        ),
+        (
+            "post_render",
+            json!({"request_key":"render","role":"cover","variant":"full_bottom",
+                "texts":{"heading":"Örnek başlık"},"photos":{"photo":{"material_id":w.material().id}}}),
+        ),
+        (
+            "brand_set",
+            json!({"tokens":{"background":"#f5f5f3","ink":"#171a1f","accent":"#f2b83c",
+                "muted":"#555b66","heading_font":"figtree","body_font":"figtree"},
+                "expected_revision":0}),
         ),
         (
             "posts_propose",

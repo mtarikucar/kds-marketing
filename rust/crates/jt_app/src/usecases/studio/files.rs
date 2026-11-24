@@ -341,9 +341,11 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     // A material's file is the owner's library, not a publication's leftover (spec 2026-11-03
     // D14): kept while the material lives; an erased (or deleted) material's file goes as soon as no
     // queued, sending or uncertain publication still needs it, after this transaction (D43).
-    let mut materials = r.studio_materials().list_materials().await?;
+    let materials = r.studio_materials().list_materials().await?;
     // Retention (spec D16, §9.3): a material that shows people is erased 24 months after its
     // olay's last day (a genel one after it was added); its file goes below, as any erased one's.
+    // What was made of it goes with it (a production's output, a composed slide or story, and
+    // theirs in turn): a derivative never outlives a source the retention rule erased.
     let olays = r.studio_materials().list_olays().await?;
     let system = Ctx {
         workspace_id: ws,
@@ -355,28 +357,47 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
         now,
         agent_connection_id: None,
     };
-    for m in materials.iter_mut() {
-        let end = m
-            .olay_id()
-            .and_then(|id| olays.iter().find(|o| o.id == id))
-            .map(|o| o.ends_on);
-        if m.retention_due(end, now) {
-            let erased = m.redacted(now);
-            r.studio_materials()
-                .update_material(erased.clone(), m.revision)
-                .await?;
-            r.ledger()
-                .append(ledger_entry(
-                    &system,
-                    "studio.material.erased",
-                    "studio_material",
-                    erased.id,
-                    json!({"file_id":erased.file_id,"reason":"retention"}),
-                )?)
-                .await?;
-            *m = erased;
+    let due: Vec<_> = materials
+        .iter()
+        .filter(|m| {
+            let end = m
+                .olay_id()
+                .and_then(|id| olays.iter().find(|o| o.id == id))
+                .map(|o| o.ends_on);
+            m.retention_due(end, now)
+        })
+        .map(|m| m.id)
+        .collect();
+    for id in due {
+        // Re-read: an earlier cascade may have redacted it already.
+        let Some(m) = r.studio_materials().get_material(id).await? else {
+            continue;
+        };
+        if m.erased_at.is_some() {
+            continue;
         }
+        let erased = m.redacted(now);
+        r.studio_materials()
+            .update_material(erased.clone(), m.revision)
+            .await?;
+        r.ledger()
+            .append(ledger_entry(
+                &system,
+                "studio.material.erased",
+                "studio_material",
+                erased.id,
+                json!({"file_id":erased.file_id,"reason":"retention"}),
+            )?)
+            .await?;
+        crate::usecases::studio::library::invalidate_material_productions(
+            r.as_mut(),
+            erased.id,
+            now,
+            true,
+        )
+        .await?;
     }
+    let materials = r.studio_materials().list_materials().await?;
     // An erased material's file: its bytes go once this transaction is committed (D43), so a
     // crash before leaves an erased material whose file the next run deletes, never a live one
     // without bytes.

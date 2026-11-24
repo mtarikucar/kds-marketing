@@ -314,6 +314,7 @@ pub(crate) fn ports(pool: PgPool, config: &Config) -> (Deps, Arc<Egress>) {
             config.auto_reply.as_ref(),
         ),
         job_lock,
+        compositor: Arc::new(jt_render::Renderer::new(jt_render::Limits::default())),
         apps,
     };
     (deps, egress)
@@ -584,6 +585,7 @@ mod tests {
                 bank_instructions: "Synthetic bank instructions".into(),
             },
             job_lock: Arc::new(FakeJobLock::new()),
+            compositor: Arc::new(jt_app::ports::compose::UnavailableCompositor),
         }
     }
 
