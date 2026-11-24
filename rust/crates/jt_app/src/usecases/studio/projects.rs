@@ -279,7 +279,29 @@ pub(crate) async fn save(
         .await?;
     Ok(p)
 }
-pub(crate) async fn available_material_ids(
+/// The workspace's current brand logo, if it set one.
+pub(crate) async fn brand_logo(r: &mut dyn TenantRepos) -> Result<Option<MaterialId>, AppError> {
+    Ok(r.studio_materials()
+        .brand()
+        .await?
+        .and_then(|b| b.tokens.logo_material_id))
+}
+
+/// The content sources of a composition that are not among an area's materials (`available`):
+/// one rule for rendering for an area (`studio.post_render` with `project_id`) and for the area's
+/// derived membership ([`available_material_ids`]).
+pub(crate) fn missing_from_area(
+    sources: &[MaterialId],
+    available: &BTreeSet<MaterialId>,
+) -> Vec<MaterialId> {
+    sources
+        .iter()
+        .copied()
+        .filter(|s| !available.contains(s))
+        .collect()
+}
+
+pub async fn available_material_ids(
     r: &mut dyn TenantRepos,
     p: &ProductionProject,
 ) -> Result<BTreeSet<MaterialId>, AppError> {
@@ -291,6 +313,29 @@ pub(crate) async fn available_material_ids(
             && let Some(output) = row.production.output_material_id
         {
             ids.insert(output);
+        }
+    }
+    // A slide or story the server drew from the area's materials only is the area's too, for as
+    // long as each of them is: it is derived, never attached, so it leaves with its sources. The
+    // brand logo drawn in it is the workspace's, never the area's: it is no content source.
+    let brand_logo = brand_logo(r).await?;
+    let composites: Vec<_> = r
+        .studio_materials()
+        .list_materials()
+        .await?
+        .into_iter()
+        .filter(|m| m.erased_at.is_none())
+        .filter_map(|m| m.composition.map(|c| (m.id, c.content_sources(brand_logo))))
+        .collect();
+    loop {
+        let before = ids.len();
+        for (id, sources) in &composites {
+            if !sources.is_empty() && missing_from_area(sources, &ids).is_empty() {
+                ids.insert(*id);
+            }
+        }
+        if ids.len() == before {
+            break;
         }
     }
     Ok(ids)

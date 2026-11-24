@@ -52,8 +52,8 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0053_studio_brand`.
-const MIGRATIONS: i64 = 53;
+/// Migrations `0001_foundation` through `0054_composed_material_analysis`.
+const MIGRATIONS: i64 = 54;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
@@ -271,6 +271,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0054_composed_material_analysis",
         "0053_studio_brand",
         "0052_knowledge_proposal_card_key",
         "0051_auto_reply_reenter",
@@ -1386,6 +1387,7 @@ async fn studio_migration_up_down_up() {
         include_str!("../../../../migrations/0051_auto_reply_reenter.up.sql"),
         include_str!("../../../../migrations/0052_knowledge_proposal_card_key.up.sql"),
         include_str!("../../../../migrations/0053_studio_brand.up.sql"),
+        include_str!("../../../../migrations/0054_composed_material_analysis.up.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
@@ -1422,6 +1424,7 @@ async fn project_tables_down(pool: &PgPool) {
     // tables after them), the lane approval record on `studio_control`, then the account snapshots
     // (they reference `capabilities`) and the pause columns on the posting policy.
     for down in [
+        include_str!("../../../../migrations/0054_composed_material_analysis.down.sql"),
         include_str!("../../../../migrations/0053_studio_brand.down.sql"),
         include_str!("../../../../migrations/0052_knowledge_proposal_card_key.down.sql"),
         include_str!("../../../../migrations/0051_auto_reply_reenter.down.sql"),

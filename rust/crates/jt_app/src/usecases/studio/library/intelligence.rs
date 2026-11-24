@@ -209,6 +209,142 @@ fn legacy_record(material: &Material, now: OffsetDateTime) -> MaterialAnalysisRe
     row
 }
 
+/// The fields a composed material's analysis keeps as its own: nothing an analysis would write
+/// may replace what it took from its sources.
+const COMPOSED_FIELDS: [&str; 6] = [
+    "title",
+    "labels",
+    "quality",
+    "captured_at",
+    "description",
+    "group_name",
+];
+
+/// The analysis of a composed material (a slide or story the server drew), complete when it is
+/// created: its tags, people, `depicts` and permission are its sources' (each analysed, see
+/// `studio.post_render`), so no agent analyses it again and no analysis can widen it. Its group
+/// is its sources' when they all share one.
+pub(crate) fn composed_record(
+    material: &Material,
+    sources: &[Option<MaterialAnalysisRecord>],
+    now: OffsetDateTime,
+) -> MaterialAnalysisRecord {
+    let groups: BTreeSet<Option<String>> = sources
+        .iter()
+        .map(|r| r.as_ref().and_then(|r| r.intelligence.group_name.clone()))
+        .collect();
+    let group_name = match groups.into_iter().collect::<Vec<_>>().as_slice() {
+        [Some(only)] => Some(only.clone()),
+        _ => None,
+    };
+    let mut row = MaterialAnalysisRecord::pending(material.id, now, DateSource::Unknown);
+    row.intelligence.status = AnalysisStatus::Completed;
+    row.intelligence.description = format!(
+        "Composed by the server from {} source material(s).",
+        sources.len()
+    );
+    row.intelligence.group_name = group_name;
+    row.intelligence.analyzed_revision = Some(material.revision);
+    row.intelligence.analyzed_at = Some(now);
+    row.intelligence.manual_fields = COMPOSED_FIELDS.iter().map(|f| (*f).to_owned()).collect();
+    row
+}
+
+/// Whether `material` has been analysed (its record is complete; a material from before the
+/// analysis records reads as pending).
+pub(crate) fn is_analysed(
+    material: &Material,
+    row: Option<&MaterialAnalysisRecord>,
+    now: OffsetDateTime,
+) -> bool {
+    intelligence_of(material, row, now).status == AnalysisStatus::Completed
+}
+
+/// The first material behind `material` whose analysis is not complete, if any: the material
+/// itself, or for a composed material every material it was drawn from, and theirs in turn (a
+/// composed material's own record never stands in for its sources'). A source that is gone
+/// counts as not analysed. Cycles are visited once.
+pub(crate) async fn unanalysed_behind(
+    r: &mut dyn TenantRepos,
+    material: &Material,
+    now: OffsetDateTime,
+) -> Result<Option<MaterialId>, AppError> {
+    let mut stack = vec![material.clone()];
+    let mut seen = BTreeSet::new();
+    while let Some(m) = stack.pop() {
+        if !seen.insert(m.id) {
+            continue;
+        }
+        match &m.composition {
+            Some(c) => {
+                for id in &c.sources {
+                    match r.studio_materials().get_material(*id).await? {
+                        Some(source) if source.erased_at.is_none() => stack.push(source),
+                        _ => return Ok(Some(*id)),
+                    }
+                }
+            }
+            None => {
+                let row = r.studio_materials().get_intelligence(m.id).await?;
+                if !is_analysed(&m, row.as_ref(), now) {
+                    return Ok(Some(m.id));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Completes the analysis of each live composed material drawn (directly or through other
+/// composed materials) from `source` whose record is not complete yet, once nothing behind it is
+/// unanalysed: a composed material made before its sources were analysed becomes usable when
+/// they are. Called where an analysis completes.
+pub(crate) async fn complete_composites(
+    r: &mut dyn TenantRepos,
+    source: MaterialId,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    let mut queue = vec![source];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = queue.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        for m in r.studio_materials().list_materials().await? {
+            let drawn_from = m
+                .composition
+                .as_ref()
+                .is_some_and(|c| c.sources.contains(&id));
+            if !drawn_from || m.id == id || m.erased_at.is_some() {
+                continue;
+            }
+            queue.push(m.id);
+            let row = r.studio_materials().get_intelligence(m.id).await?;
+            if is_analysed(&m, row.as_ref(), now) || unanalysed_behind(r, &m, now).await?.is_some()
+            {
+                continue;
+            }
+            let c = m.composition.as_ref().expect("drawn from a source");
+            let mut rows = Vec::new();
+            for s in &c.sources {
+                rows.push(r.studio_materials().get_intelligence(*s).await?);
+            }
+            r.studio_materials()
+                .save_intelligence(composed_record(&m, &rows, now))
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// `CONFLICT` `composed_material`: a composed material is never analysed by an agent.
+fn composed(material: &Material) -> Result<(), AppError> {
+    if material.composition.is_some() {
+        return Err(conflict("composed_material"));
+    }
+    Ok(())
+}
+
 /// The public analysis of `material`: its record's, or what a material from before the analysis
 /// records reads as (pending, its filled fields kept as a person's).
 pub(crate) fn intelligence_of(
@@ -320,6 +456,7 @@ pub async fn material_analysis_claim(
     let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let material = live(r.as_mut(), i.material_id, Some(i.expected_revision)).await?;
+    composed(&material)?;
     let mut row = record(r.as_mut(), &material, ctx.now).await?;
     if !row.claimable(ctx.now) {
         return Err(conflict("analysis_not_pending"));
@@ -601,6 +738,7 @@ pub async fn material_analysis_complete(
     if !locked.contains("labels") {
         material.tags.labels = labels;
     }
+    let quality_before = material.tags.quality;
     if !locked.contains("quality")
         && let Some(quality) = i.quality
     {
@@ -665,9 +803,11 @@ pub async fn material_analysis_complete(
         .update_material(material.clone(), i.expected_revision)
         .await?;
     r.studio_materials().save_intelligence(row.clone()).await?;
-    if marked {
+    if marked || material.tags.quality != quality_before {
         super::propagate_markers(r.as_mut(), &material).await?;
     }
+    // Compositions drawn from it before it was analysed may be usable now.
+    complete_composites(r.as_mut(), material.id, ctx.now).await?;
     if share_cleared {
         super::invalidate_material_productions(r.as_mut(), material.id, ctx.now, false).await?;
         // A person's file for a post waits for `İzin ver` again where it is still used (§3.4.4).
@@ -776,6 +916,7 @@ pub async fn material_analysis_retry(
     let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;
     r.studio_control().lock_control().await?;
     let material = live(r.as_mut(), i.material_id, Some(i.expected_revision)).await?;
+    composed(&material)?;
     let mut row = record(r.as_mut(), &material, ctx.now).await?;
     if row
         .lease

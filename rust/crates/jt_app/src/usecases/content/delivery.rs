@@ -190,7 +190,28 @@ async fn held_versions(
         let mut shown = Vec::new();
         for id in &v.material_ids {
             if !available.contains(id) {
-                findings.push(json!({"code":"material_not_in_area","material_id":id}));
+                let mut finding = json!({"code":"material_not_in_area","material_id":id});
+                if let Some(c) = r
+                    .studio_materials()
+                    .get_material(*id)
+                    .await?
+                    .and_then(|m| m.composition)
+                {
+                    // A rendered slide is the area's when every photo it was drawn from is (the
+                    // brand logo aside, which is never the area's).
+                    let logo = projects::brand_logo(r).await?;
+                    finding["composed"] = json!(true);
+                    finding["missing_sources"] = json!(projects::missing_from_area(
+                        &c.content_sources(logo),
+                        &available
+                    ));
+                    finding["hint"] = json!(concat!(
+                        "render it from the area's own materials (jeeta.studio.post_render with ",
+                        "project_id), or add the missing sources to the area first ",
+                        "(jeeta.studio.project_materials {project_id, expected_revision, add: [ids]})"
+                    ));
+                }
+                findings.push(finding);
                 continue;
             }
             match r.studio_materials().get_material(*id).await? {
@@ -198,7 +219,8 @@ async fn held_versions(
                 Some(m) => shown.push(m),
             }
         }
-        if let Some(kind) = channel {
+        // The media type is judged on what is shown; a missing material is its own finding.
+        if let Some(kind) = channel.filter(|_| shown.len() == v.material_ids.len()) {
             let mimes: Vec<_> = shown.iter().map(|m| m.mime.as_str()).collect();
             if !jt_studio::media_types_ok(v.format, &kind, &mimes) {
                 findings.push(json!({"code":"media_type"}));

@@ -391,7 +391,10 @@ pub(crate) async fn calendar_for(
         .list_materials()
         .await?
         .into_iter()
-        .filter(|m| m.erased_at.is_none() && !blocked_derivatives.contains(&m.id))
+        // A slide or story the server drew is never a new material of its olay.
+        .filter(|m| {
+            m.erased_at.is_none() && m.composition.is_none() && !blocked_derivatives.contains(&m.id)
+        })
         .collect();
     let slots = r
         .studio()
@@ -685,7 +688,13 @@ impl Triggers<'_> {
             .list_materials()
             .await?
             .into_iter()
-            .filter(|m| m.erased_at.is_none() && !blocked_derivatives.contains(&m.id))
+            // A slide or story the server drew is never a new material of its olay: it would ask
+            // for content made of itself.
+            .filter(|m| {
+                m.erased_at.is_none()
+                    && m.composition.is_none()
+                    && !blocked_derivatives.contains(&m.id)
+            })
             .collect();
         let settings = r.studio_posts().posting_settings().await?;
         let policy = settings.policy;

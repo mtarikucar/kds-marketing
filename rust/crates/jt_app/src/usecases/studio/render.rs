@@ -100,6 +100,11 @@ pub struct PostRenderInput {
     /// The material's title; "`role` · `variant`" by default.
     #[serde(default)]
     pub title: Option<String>,
+    /// The content area (`project_id`) this image is for: every photo must be one of its
+    /// materials (`CONFLICT` `source_not_in_area` otherwise), and the image is then the area's,
+    /// deliverable with `jeeta.content.area_deliver`.
+    #[serde(default)]
+    pub project_id: Option<uuid::Uuid>,
 }
 
 /// `studio.post_render`'s answer: what the next call needs.
@@ -298,7 +303,7 @@ pub async fn brand_set(d: &Deps, ctx: &Ctx, i: BrandSetInput) -> Result<BrandOut
     super::chain::active(r.as_mut()).await?;
     if let Some(logo) = i.tokens.logo_material_id {
         let blocked = super::library::blocked_derivatives(r.as_mut()).await?;
-        source(r.as_mut(), logo, "logo_material_id", &blocked).await?;
+        source(r.as_mut(), logo, "logo_material_id", &blocked, ctx.now).await?;
     }
     let stored = r.studio_materials().brand().await?;
     let revision = stored.as_ref().map_or(0, |b| b.revision);
@@ -340,6 +345,7 @@ async fn source(
     id: MaterialId,
     field: &str,
     blocked: &BTreeSet<MaterialId>,
+    now: OffsetDateTime,
 ) -> Result<Material, AppError> {
     let m = r
         .studio_materials()
@@ -387,6 +393,20 @@ async fn source(
     } else {
         None
     };
+    if reason.is_none()
+        && let Some(behind) = super::library::unanalysed_behind(r, &m, now).await?
+    {
+        // Its faces, names and marks (or those of a photo it was drawn from) are not known yet:
+        // drawing it would publish what no one checked. Retryable once the analysis is complete.
+        return Err(AppError {
+            message: "the material, or one it was drawn from, is not analysed yet; render it once the analysis is complete"
+                .into(),
+            details: json!({"field": field, "reason": "source_not_analysed",
+                            "material_id": id, "unanalysed_material_id": behind,
+                            "retryable": true}),
+            ..conflict("source_not_analysed")
+        });
+    }
     match reason {
         Some((reason, message)) => Err(AppError::validation(
             message,
@@ -658,6 +678,7 @@ async fn sources(
     i: &PostRenderInput,
     brand: &BrandTokens,
     notes: &mut Vec<BrandFallback>,
+    now: OffsetDateTime,
 ) -> Result<(Vec<(String, Material)>, Option<Material>), AppError> {
     let blocked = super::library::blocked_derivatives(r).await?;
     let mut photos = Vec::new();
@@ -665,12 +686,12 @@ async fn sources(
         if let Some(p) = i.photos.get(slot.key) {
             photos.push((
                 slot.key.to_owned(),
-                source(r, p.material_id, slot.key, &blocked).await?,
+                source(r, p.material_id, slot.key, &blocked, now).await?,
             ));
         }
     }
     let logo = match brand.logo_material_id {
-        Some(id) => match source(r, id, "logo_material_id", &blocked).await {
+        Some(id) => match source(r, id, "logo_material_id", &blocked, now).await {
             Ok(m) => Some(m),
             Err(_) => {
                 notes.push(BrandFallback {
@@ -780,10 +801,11 @@ pub async fn post_render(
     let stored = r.studio_materials().brand().await?;
     let tokens = stored.map(|b| b.tokens).unwrap_or_default();
     let (brand, mut fallbacks) = tokens.effective();
-    let (photos, logo) = sources(r.as_mut(), &t, &i, &brand, &mut fallbacks).await?;
+    let (photos, logo) = sources(r.as_mut(), &t, &i, &brand, &mut fallbacks, ctx.now).await?;
     check_variety(r.as_mut(), &t, &i).await?;
     let photo_materials: Vec<Material> = photos.iter().map(|(_, m)| m.clone()).collect();
     derive(&photo_materials, logo.as_ref())?;
+    in_area(r.as_mut(), &i, &photo_materials).await?;
     drop(r);
 
     // A turn to render first: a render waiting for its turn holds no source in memory.
@@ -838,6 +860,34 @@ pub async fn post_render(
     .await;
     stage.compensate(d, ctx.workspace_id).await;
     result
+}
+
+/// With `project_id`: every photo is one of the area's materials (`CONFLICT` `source_not_in_area`
+/// naming the others). The image is then the area's by derivation (`available_material_ids`).
+async fn in_area(
+    r: &mut dyn TenantRepos,
+    i: &PostRenderInput,
+    photos: &[Material],
+) -> Result<(), AppError> {
+    let Some(project_id) = i.project_id else {
+        return Ok(());
+    };
+    let p = super::projects::load(r, project_id, None, true).await?;
+    let available = super::projects::available_material_ids(r, &p).await?;
+    // The photos are the content sources; the brand logo is never the area's.
+    let photo_ids: Vec<MaterialId> = photos.iter().map(|m| m.id).collect();
+    let missing = super::projects::missing_from_area(&photo_ids, &available);
+    if !missing.is_empty() {
+        return Err(AppError {
+            message: "every photo of an area's image is one of the area's materials; add them to \
+                      the area first (jeeta.studio.project_materials) or choose the area's own"
+                .into(),
+            details: json!({"field":"photos","reason":"source_not_in_area",
+                            "project_id": project_id, "missing": missing}),
+            ..conflict("source_not_in_area")
+        });
+    }
+    Ok(())
 }
 
 /// A cover in the variant of the workspace's last rendered cover is refused unless the caller
@@ -898,7 +948,7 @@ async fn store(
     let tokens = stored.map(|b| b.tokens).unwrap_or_default();
     let (brand, _) = tokens.effective();
     let mut notes = Vec::new();
-    let (photos, logo) = sources(r.as_mut(), t, i, &brand, &mut notes).await?;
+    let (photos, logo) = sources(r.as_mut(), t, i, &brand, &mut notes, ctx.now).await?;
     // The logo drawn must be the logo recorded: an AI logo never leaves the provenance.
     if logo.as_ref().map(|m| m.id) != drawn_logo {
         return Err(AppError {
@@ -907,6 +957,8 @@ async fn store(
         });
     }
     check_variety(r.as_mut(), t, i).await?;
+    let photo_now: Vec<Material> = photos.iter().map(|(_, m)| m.clone()).collect();
+    in_area(r.as_mut(), i, &photo_now).await?;
     let receipt = |material_id, reused| RenderReceipt {
         material_id,
         width: composed.width,
@@ -991,6 +1043,7 @@ async fn store(
             variant: t.variant.to_owned(),
             frame: t.frame,
             sources: sources_ids.clone(),
+            logo: logo.as_ref().map(|m| m.id),
         }),
     };
     if material.validate().is_err() {
@@ -1007,6 +1060,18 @@ async fn store(
     r.studio().save_file(file.clone()).await?;
     r.studio_materials()
         .insert_material(material.clone())
+        .await?;
+    // Created analysed: it shows what its analysed sources show, and no agent analyses it again.
+    let mut source_rows = Vec::new();
+    for id in &sources_ids {
+        source_rows.push(r.studio_materials().get_intelligence(*id).await?);
+    }
+    r.studio_materials()
+        .save_intelligence(super::library::composed_record(
+            &material,
+            &source_rows,
+            ctx.now,
+        ))
         .await?;
     r.ledger()
         .append(ledger_entry(
@@ -1076,6 +1141,7 @@ pub fn schema(action: &str) -> Option<Value> {
                 "output":{"enum":["jpeg","png"]},
                 "allow_repeat":{"type":"boolean"},
                 "title":{"type":["string","null"],"minLength":1,"maxLength":120},
+                "project_id":{"type":["string","null"],"format":"uuid"},
             }),
             &["request_key", "role", "variant"],
         ),

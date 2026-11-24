@@ -747,6 +747,23 @@ pub struct Composition {
     pub variant: String,
     pub frame: Frame,
     pub sources: Vec<MaterialId>,
+    /// The brand logo drawn in its chip, also listed in `sources` (for provenance, the AI flag
+    /// and the cascades); absent without a logo, and on a composition stored before this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<MaterialId>,
+}
+
+impl Composition {
+    /// What it was drawn from as content: its sources less the brand logo, which is the
+    /// workspace's, never content. For a composition stored before `logo` was recorded, a source
+    /// equal to the workspace's current logo (`brand_logo`) is taken for the logo.
+    pub fn content_sources(&self, brand_logo: Option<MaterialId>) -> Vec<MaterialId> {
+        self.sources
+            .iter()
+            .copied()
+            .filter(|s| Some(*s) != self.logo && (self.logo.is_some() || Some(*s) != brand_logo))
+            .collect()
+    }
 }
 
 /// The variant a cover should take after `last` (the workspace's last rendered cover's): the next

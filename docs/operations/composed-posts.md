@@ -55,8 +55,13 @@ Rules the renderer keeps:
 
 ## Photos
 
-A photo slot takes `{material_id, focus_x?, focus_y?}`: a live, filed JPEG, PNG or WebP material
-(not `not_shareable`, at most 25 MB stored). The focus (0 to 1 from the left and top) is the point a crop keeps in
+A photo slot takes `{material_id, focus_x?, focus_y?}`: a live, filed, **analysed** JPEG, PNG or
+WebP material (not `not_shareable`, at most 25 MB stored). A material whose analysis is not
+complete yet is refused with `CONFLICT` `source_not_analysed` (`details.retryable: true`;
+`details.unanalysed_material_id` names it): analyse it first (it is in your work list), then render
+again. For a rendered slide used as a photo, every photo it was drawn from must be analysed. What no one checked for faces, names and
+marks is never drawn into a post. A brand logo not analysed yet is left out of the brand chip,
+and the answer says so under `brand_fallbacks`. The focus (0 to 1 from the left and top) is the point a crop keeps in
 view; the middle by default. All photos bound to an olay must be the **same** olay; genel photos
 may join them.
 
@@ -67,7 +72,12 @@ the library as a material in the same call, so the answer already holds what the
 needs:
 
 - `file.id`: a piece's medium (`jeeta.studio.piece_submit`), in slide order for a carousel.
-- `material.id`: a post proposal's material (`jeeta.studio.posts_propose`).
+- `material.id`: a post proposal's material (`jeeta.studio.posts_propose`), or a content area
+  version's material (`jeeta.content.area_deliver`), see [The three paths](#the-three-paths).
+
+A rendered image is never a "new material" of its olay: it opens no content area, answers no
+shoot request and fills no season prompt (otherwise each render would ask for content made of
+itself).
 
 The material's origin is decided by the server, never by the caller. `material.composition`
 records the renderer, role, variant and the source materials. If **any** source (a photo or the
@@ -83,6 +93,12 @@ The same request key answers the same render again (another input under the same
 `CONFLICT`; a render erased since is `CONFLICT` `render_erased`). Rendering byte-identical output
 again with a new key answers the earlier material with `reused: true`. If the brand logo changes
 while a render is drawn, the render is refused (`CONFLICT` `brand_logo_changed`): call again.
+
+A rendered material is created analysed: it takes its labels, quality, people, `depicts` and
+permission from its (analysed) sources, its analysis keeps them as its own, and it never appears
+as a `studio_material_analysis` item in your work list. `jeeta.studio.material_analysis_claim`
+and `material_analysis_retry` refuse it (`CONFLICT` `composed_material`), so no analysis can make
+it more shareable than its sources.
 
 ### A composition follows its sources
 
@@ -142,6 +158,52 @@ brand name with a character no bundled font draws (`VALIDATION` `unsupported_cha
 
 If step 2 answers `text_overflow` for `heading`, shorten the heading and call again with a new
 request key. If it answers `cover_variant_repeats`, render the `details.next_variant` instead.
+
+## The three paths
+
+A rendered image is used exactly like an uploaded photo of the same olay, never more: it is
+eligible where its photos are, and the publication fence and the source cascades above still
+apply.
+
+**1. A content area** (work item `content_area`). Render from the area's own materials and name
+the area; the image is then the area's (for as long as every photo it was drawn from is), so it
+is delivered by its `material.id`. No separate attach step. The brand logo drawn in its chip is the
+workspace's and never needs to be one of the area's materials.
+
+```text
+jeeta.content.area_claim {project_id, expected_revision}             -> claim_token
+jeeta.studio.post_render {request_key, role, variant, texts,
+  photos: {photo: {material_id: <one of the area's materials>}},
+  project_id: <the area>}                                             -> material.id M
+jeeta.content.area_deliver {project_id, claim_token, request_key, summary,
+  versions: [{format, text, material_ids: [M], hypothesis_id, ...}]}   -> the package waits for the owner
+```
+
+A photo that is not the area's is refused before drawing: `CONFLICT` `source_not_in_area`,
+`details.missing` names it. Either add it first with
+`jeeta.studio.project_materials {project_id, expected_revision, add: [<material ids>]}` (the area's
+current `revision` from `jeeta.studio.project_get`), or choose one of the area's materials. A
+delivery that names a rendered image of other photos is refused with `material_not_in_area`,
+`composed: true`, `missing_sources` and a `hint`; fix it before the next delivery (three refused
+deliveries hold the area for the owner).
+
+**2. A post request** (`jeeta.studio.post_requests`).
+
+```text
+jeeta.studio.post_render {...}                                        -> material.id M
+jeeta.studio.posts_propose {request_id, request_key,
+  posts: [{format, capability_id, publish_at, material_ids: [M], subject, hypothesis_id}]}
+```
+
+**3. A planned slot** (`jeeta.studio.pending`, feed post, carousel or story).
+
+```text
+jeeta.studio.post_render {...}                                        -> file.id F (one per slide)
+jeeta.studio.piece_submit {slot_id, expected_revision, request_key, text,
+  media: [{"kind": "file", "id": F}, ...]}                             -> the slot is ready for the owner
+```
+
+A story takes one JPEG image (the default output). A carousel takes 2 to 10 images in order.
 
 ## Limits on the server
 
