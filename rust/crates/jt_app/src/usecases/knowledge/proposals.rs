@@ -7,10 +7,13 @@
 //! until the owner adds it; it closes by itself after 14 days (60 for the system's own). A new
 //! card may name the well-known card it makes (`card_key`, one of `WELL_KNOWN_CARDS`, such as
 //! the brand scan's `visual_style`); its title is then the well-known one unless the agent gives
-//! one. While the workspace has a card of that key (live or removed: the owner removed it), the
-//! proposal is refused (`CONFLICT` `card_exists`, naming the card: propose a `card_edit` of it),
-//! and while another proposal for that key waits, `CONFLICT` `proposal_exists`. Accepting it
-//! makes the card with its key; one of that key made meanwhile supersedes it.
+//! one. While the workspace has a live card of that key, the proposal is refused (`CONFLICT`
+//! `card_exists`, naming the card: propose a `card_edit` of it), and while another proposal for
+//! that key waits, `CONFLICT` `proposal_exists`. A card of that key the owner removed does not
+//! refuse it. Accepting it makes the card with its key; a live one of that key made meanwhile
+//! supersedes it. When the owner had removed the card of that key, accepting restores that card
+//! with the proposal's title and text as its next revision (one card a key: its earlier text
+//! stays in its history, where the owner can read it back).
 //!
 //! Refusals at create: `CONFLICT` `too_many_proposals` (20 pending, the system's not counted),
 //! `CONFLICT` `proposal_rate` (10 a day from one connection), `CONFLICT` `proposal_exists` (the
@@ -129,13 +132,13 @@ pub async fn proposal_create(
             .cards()
             .await?
             .into_iter()
-            .find(|c| c.key.as_deref() == Some(card_key))
+            .find(|c| c.is_live() && c.key.as_deref() == Some(card_key))
     {
         return Err(refused(
             ErrorCode::Conflict,
             "card_exists",
             "the workspace has this card: propose a card_edit of it",
-            json!({ "card_id": card.id, "archived": !card.is_live() }),
+            json!({ "card_id": card.id }),
         ));
     }
     let pending = r
@@ -234,36 +237,67 @@ pub async fn proposal_accept(
     match p.kind {
         ProposalKind::CardNew => {
             let cards = r.knowledge().cards().await?;
-            if p.card_key.is_some() && cards.iter().any(|c| c.key == p.card_key) {
+            if p.card_key.is_some() && cards.iter().any(|c| c.is_live() && c.key == p.card_key) {
                 return close(r, ctx, p, ProposalStatus::Superseded, "proposal_superseded").await;
             }
             if live(&cards) >= MAX_LIVE_CARDS {
                 return Err(too_many_cards());
             }
-            let card = Card {
-                id: KnowledgeCardId(deps.ids.uuid()),
-                key: p.card_key.clone(),
-                title: p.title.clone().unwrap_or_default(),
-                body: p.body.clone(),
-                attachments: Vec::new(),
-                position: next_position(&cards),
-                revision: 1,
-                created_at: ctx.now,
-                created_by: ctx.actor.clone(),
-                updated_at: ctx.now,
-                updated_by: ctx.actor.clone(),
-                archived_at: None,
-            };
-            r.knowledge().insert_card(&card).await?;
-            let (posting, prospecting) = moves(None, &card);
-            let c = accepted(
-                &p,
-                person,
-                Subject::Card,
-                Some(&card),
-                (posting, prospecting),
-            );
-            kb.record(r.as_mut(), deps, ctx, c).await?;
+            // The owner removed the card of this key: it comes back with the proposal's text.
+            let removed = cards
+                .iter()
+                .find(|c| p.card_key.is_some() && c.key == p.card_key)
+                .map(|c| c.id);
+            if let Some(removed) = removed {
+                let before = r
+                    .knowledge()
+                    .lock_card(removed)
+                    .await?
+                    .ok_or_else(|| AppError::internal("a card just listed is gone"))?;
+                let mut card = before.clone();
+                card.title = p.title.clone().unwrap_or(card.title);
+                card.body = p.body.clone();
+                card.position = next_position(&cards);
+                card.archived_at = None;
+                card.revision += 1;
+                card.updated_at = ctx.now;
+                card.updated_by = ctx.actor.clone();
+                r.knowledge().save_card(&card).await?;
+                let c = accepted(
+                    &p,
+                    person,
+                    Subject::Card,
+                    Some(&card),
+                    moves(Some(&before), &card),
+                );
+                kb.record(r.as_mut(), deps, ctx, c).await?;
+                supersede_edits(r.as_mut(), card.id, ctx.now).await?;
+            } else {
+                let card = Card {
+                    id: KnowledgeCardId(deps.ids.uuid()),
+                    key: p.card_key.clone(),
+                    title: p.title.clone().unwrap_or_default(),
+                    body: p.body.clone(),
+                    attachments: Vec::new(),
+                    position: next_position(&cards),
+                    revision: 1,
+                    created_at: ctx.now,
+                    created_by: ctx.actor.clone(),
+                    updated_at: ctx.now,
+                    updated_by: ctx.actor.clone(),
+                    archived_at: None,
+                };
+                r.knowledge().insert_card(&card).await?;
+                let (posting, prospecting) = moves(None, &card);
+                let c = accepted(
+                    &p,
+                    person,
+                    Subject::Card,
+                    Some(&card),
+                    (posting, prospecting),
+                );
+                kb.record(r.as_mut(), deps, ctx, c).await?;
+            }
         }
         ProposalKind::CardEdit => {
             let card_id = p

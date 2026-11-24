@@ -275,14 +275,17 @@ async fn connect_page_granting(scopes: &[&str]) -> (Mock, Vec<Capability>) {
         ok(json!({ "id": "1234567890", "name": "Test Kahve" })),
     );
     let apps = Arc::new(TestApps::default());
+    let egress = egress(&mock);
     let meta = Arc::new(MetaConnector::new(
-        egress(&mock),
+        egress.clone(),
         bases(&mock),
         apps.clone(),
     ));
     let mut deps = deps(Arc::new(InMemoryUow::new()));
     deps.apps = apps;
     deps.connectors = Arc::new(MetaRegistry(meta));
+    // The production tenant host registry: every host the adapter names passes its check.
+    deps.hosts = Arc::new(jt_outbound::EgressTenantHosts::new(egress));
     let session = auth::register(
         &deps,
         RegisterInput {
@@ -373,6 +376,16 @@ async fn a_page_connected_through_facebook_login_subscribes_leadgen_only_with_it
         }
         for c in &connected {
             let public = &c.connector_public;
+            // The real adapter's host list passes the tenant registry; its wildcard entries (the
+            // media CDN, fixed tier only) are neither allowed there nor stored.
+            let hosts: Vec<&str> = public["hosts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert!(hosts.contains(&"graph.facebook.com"), "{public}");
+            assert!(hosts.iter().all(|h| !h.contains('*')), "{public}");
             assert_eq!(public["subscribed"], true, "{public}");
             assert_eq!(public["leadgen"], leadgen, "{public}");
             assert!(

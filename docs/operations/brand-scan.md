@@ -9,6 +9,11 @@ proposals on the knowledge page ("Bilgi bankası", "Ajanın önerileri") and in 
 This page is written for the agent that runs the scan, and for every content agent that reads its
 result. Nothing on it is specific to one business: everything about a brand is workspace data.
 
+**Permissions.** The agent that runs the scan needs `social.work` (to list the accounts and read
+their posts: `jeeta.social.accounts_list`, `jeeta.social.own_posts`,
+`jeeta.social.own_post_image`), `materials.work` for the photo materials, and a work permission
+such as `content.work` to propose cards. A content agent without `social.work` cannot run it.
+
 ## Rules
 
 1. **Once per workspace.** Run the scan once, and again only when the owner asks for it (a note
@@ -72,8 +77,8 @@ newest first, those made before the account was connected to Jeeta included: Ins
 Each post has `post_id`, `permalink`, `kind` (image, carousel, video, reel), `caption`,
 `published_at` and `numbers` {likes, comments, reach, saves, shares, views}.
 
-- Read up to about 100 posts: 30 a page by default (`limit` at most 50), following `next_cursor`
-  until it is `null`.
+- Read at most 100 posts: two pages of `limit: 50`, following `next_cursor` once (stop earlier
+  when it is `null`). Older posts say little about the account's voice today.
 - A number the platform does not give is `null`, never zero; `unavailable` names each number the
   page lacks and why (`permission_not_granted`: the grant lacks the insights permission, and a
   reconnection asks for it; `not_given`: the platform has none for these posts). Rank by what is
@@ -109,9 +114,11 @@ and makes no second one):
    - three to five example sentences, each quoted exactly from one of the account's posts and
      followed by that post's permalink;
    - the owner's words already on the card that still hold, kept word for word.
-2. **Visual style**: when the workspace has no `visual_style` card, `kind: card_new` with
-   `card_key: visual_style` (the title defaults to "Görsel stil"); when it has one,
-   `kind: card_edit` of it (a `card_new` is then refused with `card_exists` and the card's id).
+2. **Visual style**: when the workspace has a live `visual_style` card, `kind: card_edit` of it
+   (a `card_new` is then refused with `card_exists` and the card's id). When it has none, or the
+   owner removed it, `kind: card_new` with `card_key: visual_style` (the title defaults to
+   "Görsel stil"); if the owner had removed the card, adding the proposal brings that card back
+   with the new text, its earlier text kept in its history.
    `body`: the photo style to keep and to avoid (background, light, angle, framing), and the
    recurring formats that worked and that did not, each with the permalinks it is drawn from.
 
@@ -131,6 +138,8 @@ knowledge page.
 | | `CONFLICT capability_unavailable`, `access_expired` | the connection needs the owner: say so in the proposal's reason, or stop |
 | | `VALIDATION` with `provider_error: auth` | the platform no longer accepts the login: the owner reconnects the account |
 | | `UPSTREAM_UNAVAILABLE` (`retry_after_s`) | the platform is busy: wait and try again later |
-| `strategy.proposal_create` | `CONFLICT card_exists` | propose a `card_edit` of the card it names |
+| | `VALIDATION not_a_cursor`, or `VALIDATION` with `provider_error: permanent` on a call with a `cursor` | the cursor is not one the platform takes (it may have expired): list again from the first page, without a cursor |
+| | `FORBIDDEN` (`social.work`) | the key lacks `social.work`: the scan cannot run with it; tell the owner |
+| `strategy.proposal_create` | `CONFLICT card_exists` | the card is live: propose a `card_edit` of the card it names |
 | | `CONFLICT proposal_exists` | the same proposal already waits for the owner: stop |
 | | `CONFLICT too_many_proposals`, `proposal_rate` | the owner has many proposals to decide: stop |

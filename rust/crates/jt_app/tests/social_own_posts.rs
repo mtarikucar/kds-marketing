@@ -108,7 +108,7 @@ fn page() -> OwnPostsPage {
 }
 
 #[tokio::test]
-async fn a_content_agent_reads_a_page_of_the_accounts_own_posts() {
+async fn a_social_agent_reads_a_page_of_the_accounts_own_posts() {
     let w = support::world().await;
     let id = instagram(
         &w,
@@ -119,7 +119,7 @@ async fn a_content_agent_reads_a_page_of_the_accounts_own_posts() {
     w.ads.push_own_posts(Ok(Some(page())));
     let out = own_posts(
         &w.d,
-        &agent(&w, &[Permission::ContentWork]),
+        &agent(&w, &[Permission::SocialWork]),
         input(id, None, None),
     )
     .await
@@ -149,7 +149,7 @@ async fn a_content_agent_reads_a_page_of_the_accounts_own_posts() {
         json!({"reach": "permission_not_granted"})
     );
 
-    // A social agent too, with the next page's cursor and its own limit.
+    // The next page, from its cursor, with its own limit.
     w.ads.push_own_posts(Ok(Some(OwnPostsPage::default())));
     own_posts(
         &w.d,
@@ -177,12 +177,12 @@ async fn every_read_passes_the_permission_and_the_connector_check() {
         json!({}),
     )
     .await;
-    let content = agent(&w, &[Permission::ContentWork]);
+    let content = agent(&w, &[Permission::SocialWork]);
 
     // Neither a content nor a social permission: refused before anything is read.
     let e = own_posts(
         &w.d,
-        &agent(&w, &[Permission::InboxWork]),
+        &agent(&w, &[Permission::ContentWork]),
         input(id, None, None),
     )
     .await
@@ -254,7 +254,7 @@ async fn a_providers_refusal_is_the_connectors_error_mapping() {
         json!({}),
     )
     .await;
-    let content = agent(&w, &[Permission::ContentWork]);
+    let content = agent(&w, &[Permission::SocialWork]);
     // An expired token: the platform no longer accepts the login.
     w.ads.push_own_posts(Err(ConnectorError::auth(
         "(#190) Error validating access token",
@@ -320,7 +320,7 @@ async fn a_posts_image_is_handed_over_in_memory() {
         json!({}),
     )
     .await;
-    let content = agent(&w, &[Permission::ContentWork]);
+    let content = agent(&w, &[Permission::SocialWork]);
     let bytes = b"\x89PNG\r\n\x1a\nimage".to_vec();
     w.ads.push_own_post_image(Ok(Some(Media {
         mime: "image/png".into(),
@@ -367,4 +367,81 @@ async fn a_posts_image_is_handed_over_in_memory() {
         .unwrap_err();
         assert_eq!(e.code, ErrorCode::Validation, "{post_id} {index}");
     }
+}
+
+#[tokio::test]
+async fn another_workspaces_account_is_not_found() {
+    let w = support::world().await;
+    let other = jt_tenancy::WorkspaceId::new_v7();
+    let mut c = Capability::new(
+        CapabilityId::new_v7(),
+        other,
+        NewCapability {
+            kind_key: "instagram".into(),
+            name: "Instagram".into(),
+            external_id: Some(IG.into()),
+            connector_public: json!({"access": {"scopes": ["instagram_manage_insights"], "expires_at": null}}),
+            ..Default::default()
+        },
+        FIXED_NOW,
+    )
+    .unwrap();
+    c.status = StoredStatus::Verified;
+    c.last_verified_at = Some(FIXED_NOW);
+    let mut r = w.uow.tenant(other).await.unwrap();
+    r.capabilities().insert(c.clone(), None).await.unwrap();
+    r.commit().await.unwrap();
+    let social = agent(&w, &[Permission::SocialWork]);
+    let e = own_posts(&w.d, &social, input(c.id, None, None))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    let e = own_post_image(
+        &w.d,
+        &social,
+        OwnPostImageInput {
+            capability_id: c.id,
+            post_id: "18000000000000002".into(),
+            index: 0,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    assert!(w.ads.own_posts_calls().is_empty());
+    assert!(w.ads.own_post_image_calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_long_caption_is_cut_on_a_character_and_says_so() {
+    use jt_app::usecases::social::own_posts::MAX_CAPTION_CHARS;
+    let w = support::world().await;
+    let id = instagram(
+        &w,
+        &["instagram_basic", "instagram_manage_insights"],
+        json!({}),
+    )
+    .await;
+    let mut long = page();
+    // Multi-byte characters: a cut on a byte would split one.
+    long.posts[0].caption = Some("ğ".repeat(MAX_CAPTION_CHARS + 5));
+    let mut short = page().posts.remove(0);
+    short.id = "18000000000000003".into();
+    long.posts.push(short);
+    w.ads.push_own_posts(Ok(Some(long)));
+    let out = own_posts(
+        &w.d,
+        &agent(&w, &[Permission::SocialWork]),
+        input(id, None, None),
+    )
+    .await
+    .unwrap();
+    let cut = out.posts[0].caption.as_deref().unwrap();
+    assert_eq!(cut.chars().count(), MAX_CAPTION_CHARS);
+    assert!(out.posts[0].caption_truncated);
+    assert_eq!(
+        out.posts[1].caption.as_deref(),
+        Some("Yeni ürünümüz hazır.")
+    );
+    assert!(!out.posts[1].caption_truncated);
 }

@@ -2553,3 +2553,96 @@ async fn the_brand_scan_proposes_its_cards_and_only_the_owner_writes_them() {
         "Beyaz zemin, gün ışığı."
     );
 }
+
+/// A visual style card the owner removed does not lock the brand scan out: a new keyed proposal
+/// is taken, and accepting it brings the same card back with the proposal's text (its earlier
+/// text stays in its history). A card of the key that appears while a proposal waits
+/// supersedes the proposal.
+#[tokio::test]
+async fn a_removed_visual_style_card_comes_back_and_a_new_one_supersedes() {
+    let w = world().await;
+    seed::ensure(&w.deps, &w.owner_ctx).await.unwrap();
+    let agent = w.agent(&["content.work"]).await;
+    let keyed = |key: &str, text: &str| ProposalCreateInput {
+        request_key: key.into(),
+        kind: ProposalKind::CardNew,
+        card_id: None,
+        card_key: Some("visual_style".into()),
+        title: None,
+        body: text.into(),
+        reason: "Marka taraması: gerçek fotoğraflardan.".into(),
+    };
+    let first = proposal_create(&w.deps, &agent, keyed("s-1", "Açık zemin."))
+        .await
+        .unwrap();
+    proposal_accept(&w.deps, &w.owner_ctx, first.id)
+        .await
+        .unwrap();
+    let card = card_of(&w, "visual_style").await;
+    card_archive(
+        &w.deps,
+        &w.owner_ctx,
+        card.id,
+        CardArchiveInput {
+            expected_revision: 1,
+            archived: true,
+        },
+    )
+    .await
+    .unwrap();
+    // Removed: a new proposal of the key is taken, not refused.
+    let again = proposal_create(&w.deps, &agent, keyed("s-2", "Doğal ışık, ahşap masa."))
+        .await
+        .unwrap();
+    proposal_accept(&w.deps, &w.owner_ctx, again.id)
+        .await
+        .unwrap();
+    let back = card_of(&w, "visual_style").await;
+    assert_eq!(back.id, card.id, "one card a key");
+    assert!(back.is_live());
+    assert_eq!(back.body, "Doğal ışık, ahşap masa.");
+    assert_eq!(back.revision, 3);
+    let history = revisions(&w, Subject::Card, Some(card.id)).await;
+    assert!(
+        history.iter().any(|r| r.content["body"] == "Açık zemin."),
+        "the earlier text stays in the history"
+    );
+
+    // A card of the key appears while a proposal waits (removed and proposed again, then the
+    // owner restores the removed one): the proposal is superseded, the card left as it is.
+    card_archive(
+        &w.deps,
+        &w.owner_ctx,
+        card.id,
+        CardArchiveInput {
+            expected_revision: 3,
+            archived: true,
+        },
+    )
+    .await
+    .unwrap();
+    let waiting = proposal_create(&w.deps, &agent, keyed("s-3", "Koyu zemin."))
+        .await
+        .unwrap();
+    card_archive(
+        &w.deps,
+        &w.owner_ctx,
+        card.id,
+        CardArchiveInput {
+            expected_revision: 4,
+            archived: false,
+        },
+    )
+    .await
+    .unwrap();
+    let e = err(proposal_accept(&w.deps, &w.owner_ctx, waiting.id).await);
+    assert_eq!(
+        (e.code, reason(&e)),
+        (ErrorCode::Conflict, "proposal_superseded")
+    );
+    assert_eq!(status_of(&w, waiting.id).await, ProposalStatus::Superseded);
+    assert_eq!(
+        card_of(&w, "visual_style").await.body,
+        "Doğal ışık, ahşap masa."
+    );
+}

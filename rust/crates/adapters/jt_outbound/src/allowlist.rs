@@ -263,6 +263,8 @@ impl Allowlist {
                     .get(name)
                     .is_some_and(|entries| entries_match(entries, &host, url))
                     || (matches!(parsed, Host::Domain(_))
+                        && url.scheme() == "https"
+                        && url.port_or_known_default() == Some(443)
                         && self.fixed_suffixes.get(name).is_some_and(|suffixes| {
                             suffixes
                                 .iter()

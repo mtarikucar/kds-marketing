@@ -19,13 +19,7 @@ fn social_tools_are_exact_strict_and_agent_work_scoped() {
         ]
     );
     for t in &tools {
-        // The account's own posts are read by content agents too (the brand scan).
-        let expected: &[Permission] = if t.name.starts_with("jeeta.social.own_") {
-            &[Permission::ContentWork, Permission::SocialWork]
-        } else {
-            &[Permission::SocialWork]
-        };
-        assert_eq!(t.permissions, expected, "{}", t.name);
+        assert_eq!(t.permissions, &[Permission::SocialWork], "{}", t.name);
         assert_eq!(
             t.input_schema.as_value()["additionalProperties"],
             false,

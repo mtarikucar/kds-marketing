@@ -4,7 +4,8 @@
 //! - the list: `GET /{ig}/media?fields=…&limit&after` ([`MEDIA_FIELDS`], and with the insights
 //!   permission [`MEDIA_INSIGHTS`] as a field expansion, so one call reads a page and its
 //!   counters);
-//! - one post's image: `GET /{media}?fields=media_type,media_url,thumbnail_url,children{…}`, then
+//! - one post's image: `GET /{media}?fields=media_type,media_url,thumbnail_url,owner{id},username,
+//!   children{…}` (a post whose owner is not the connected account is refused), then
 //!   the image itself from Meta's media CDN (`*.cdninstagram.com`, `*.fbcdn.net`), without a
 //!   token (its addresses are signed and expire, which is why it is read again each time).
 //!
@@ -14,9 +15,10 @@
 //!
 //! **Counters.** `like_count` and `comments_count` come with the post (the basic permission);
 //! `reach`, `saved`, `shares` and `views` need the insights permission. A page read without it,
-//! or whose insights Meta refuses (`Permission`, or `Permanent` for a metric it does not give for
-//! these posts, as it does for posts made before the account became a professional one), is read
-//! again without them, and the page says which counters it lacks and why
+//! or whose insights Meta refuses (`Permission`, or `Permanent` naming the insights or a metric
+//! it does not give for these posts, as it does for posts made before the account became a
+//! professional one), is read again without them; any other refusal (a cursor Graph does not
+//! take, say) is answered at once, and the page says which counters it lacks and why
 //! ([`OwnPostsPage::unavailable`]): a missing counter is never a zero.
 
 use std::collections::BTreeMap;
@@ -44,8 +46,7 @@ pub(crate) const MEDIA_INSIGHTS: &str = "insights.metric(reach,saved,shares,view
 pub(crate) const MEDIA_INSIGHTS_NO_VIEWS: &str = "insights.metric(reach,saved,shares)";
 
 /// The fields one post's image is found with.
-pub(crate) const IMAGE_FIELDS: &str =
-    "media_type,media_url,thumbnail_url,children{media_type,media_url,thumbnail_url}";
+pub(crate) const IMAGE_FIELDS: &str = "media_type,media_url,thumbnail_url,owner{id},username,children{media_type,media_url,thumbnail_url}";
 
 /// The most posts one page asks for (Graph's own maximum for media is higher).
 pub const MAX_OWN_POSTS_PAGE: u32 = 50;
@@ -97,6 +98,35 @@ fn via<'a>(cred: &'a Credential, public: &Value) -> Result<Option<Via<'a>>, Conn
         MetaCred::WhatsApp { .. } => Err(ConnectorError::permanent(
             "a WhatsApp credential cannot list an account's posts on Meta",
         )),
+    }
+}
+
+/// Whether Graph's refusal `e` of a read with the insights expansion is about the insights: a
+/// permission it lacks, or an insights field or metric it does not take. Any other refusal is
+/// not tried again without them.
+fn about_insights(e: &ConnectorError) -> bool {
+    match e {
+        ConnectorError::Permission { .. } => true,
+        ConnectorError::Permanent { reason, .. } => {
+            let reason = reason.to_ascii_lowercase();
+            reason.contains("insight") || reason.contains("metric")
+        }
+        _ => false,
+    }
+}
+
+/// Whether the post `answer` (its `owner` and `username`) is the connected account's: its owner
+/// is the capability's account (`external_id`), or, when Graph names no owner id, its username
+/// is the capability's (`username`).
+fn owned(answer: &Value, public: &Value) -> bool {
+    let account = account_of(public);
+    match text(&answer["owner"]["id"]) {
+        Some(owner) => account == Some(owner.as_str()),
+        None => {
+            let name = |v: &Value| v.as_str().map(str::trim).filter(|n| !n.is_empty());
+            matches!((name(&answer["username"]), name(&public["username"])),
+                (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
+        }
     }
 }
 
@@ -200,9 +230,7 @@ pub(crate) async fn own_posts(
         }
         let answer = match via.get(connector, &[account, "media"], &params).await {
             Ok(answer) => answer,
-            Err(e @ (ConnectorError::Permission { .. } | ConnectorError::Permanent { .. }))
-                if expansion.is_some() =>
-            {
+            Err(e) if expansion.is_some() && about_insights(&e) => {
                 let permission = matches!(e, ConnectorError::Permission { .. });
                 refused_by = Some(refused_by == Some(true) || permission);
                 last_error = Some(e);
@@ -284,6 +312,11 @@ pub(crate) async fn own_post_image(
     let answer = via
         .get(connector, &[node(post_id)?], &[("fields", IMAGE_FIELDS)])
         .await?;
+    if !owned(&answer, public) {
+        return Err(ConnectorError::permanent(
+            "the post is not the connected account's",
+        ));
+    }
     let item = if answer["media_type"].as_str() == Some("CAROUSEL_ALBUM") {
         answer["children"]["data"]
             .as_array()

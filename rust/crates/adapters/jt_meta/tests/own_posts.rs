@@ -344,6 +344,7 @@ async fn a_posts_image_is_read_from_the_cdn_without_a_token() {
         node,
         ok(json!({
             "media_type": "CAROUSEL_ALBUM",
+            "owner": {"id": IG},
             "children": {"data": [
                 {"media_type": "IMAGE", "media_url": cdn("one.jpg")},
                 {"media_type": "VIDEO", "media_url": cdn("two.mp4"), "thumbnail_url": cdn("two.jpg")}
@@ -375,7 +376,10 @@ async fn a_posts_image_is_read_from_the_cdn_without_a_token() {
     assert_graph_auth(&found, PAGE_TOKEN);
     assert_eq!(
         found.param("fields"),
-        Some("media_type,media_url,thumbnail_url,children{media_type,media_url,thumbnail_url}")
+        Some(
+            "media_type,media_url,thumbnail_url,owner{id},username,\
+             children{media_type,media_url,thumbnail_url}"
+        )
     );
     // A video's cover; the type is what the bytes are, not what the header says.
     let fetched = r.mock.request("GET", "/cdn/two.jpg");
@@ -406,7 +410,7 @@ async fn a_posts_image_is_read_from_the_cdn_without_a_token() {
     r.mock.set(
         "GET",
         node,
-        ok(json!({"media_type": "IMAGE", "media_url": cdn("one.jpg")})),
+        ok(json!({"media_type": "IMAGE", "media_url": cdn("one.jpg"), "owner": {"id": IG}})),
     );
     let e = r
         .meta
@@ -446,4 +450,197 @@ async fn a_posts_image_is_read_from_the_cdn_without_a_token() {
         .await
         .unwrap_err();
     assert!(matches!(e, ConnectorError::Permanent { .. }), "{e:?}");
+}
+
+/// An image a single post names at `media_url`, owned by `owner`.
+fn single(owner: &str, media_url: &str) -> Reply {
+    ok(json!({"media_type": "IMAGE", "media_url": media_url, "owner": {"id": owner}}))
+}
+
+const NODE: &str = "/fb/v19.0/18000000000000002";
+
+async fn image_of(
+    r: &Rig,
+    max_bytes: usize,
+) -> Result<Option<jt_app::ports::connectors::Media>, ConnectorError> {
+    r.meta
+        .own_post_image(
+            &page_cred(),
+            &public("instagram"),
+            "18000000000000002",
+            0,
+            max_bytes,
+        )
+        .await
+}
+
+#[tokio::test]
+async fn another_accounts_post_and_addresses_off_the_cdn_are_refused() {
+    let r = rig().await;
+    let cdn = format!("{}/gif", r.mock.base("/cdn"));
+    r.mock.on("GET", "/cdn/gif", raw(200, GIF));
+    // Another account's post: refused before its image is read.
+    r.mock.set("GET", NODE, single("17841400000000999", &cdn));
+    let e = image_of(&r, 1 << 20).await.unwrap_err();
+    assert!(matches!(e, ConnectorError::Permanent { .. }), "{e:?}");
+    // No owner at all, and no username to match: refused too.
+    r.mock.set(
+        "GET",
+        NODE,
+        ok(json!({"media_type": "IMAGE", "media_url": cdn})),
+    );
+    assert!(image_of(&r, 1 << 20).await.is_err());
+    assert!(r.mock.requests("GET", "/cdn/gif").is_empty());
+    // Without an owner id, the username the connection recorded identifies the account.
+    r.mock.set(
+        "GET",
+        NODE,
+        ok(json!({"media_type": "IMAGE", "media_url": cdn, "username": "Test_Atolye"})),
+    );
+    let mut named = public("instagram");
+    named["username"] = json!("test_atolye");
+    let image = r
+        .meta
+        .own_post_image(&page_cred(), &named, "18000000000000002", 0, 1 << 20)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(image.mime, "image/gif");
+
+    // An address off Meta's hosts, plain http to the CDN, another port: never reached.
+    for url in [
+        "https://images.example/1.jpg",
+        "http://scontent.cdninstagram.com/1.jpg",
+        "https://scontent.cdninstagram.com:8443/1.jpg",
+    ] {
+        r.mock.set("GET", NODE, single(IG, url));
+        let e = image_of(&r, 1 << 20).await.unwrap_err();
+        assert!(
+            matches!(e, ConnectorError::Permanent { .. }),
+            "{url}: {e:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_cdn_redirect_is_refused_not_followed() {
+    let r = rig().await;
+    let moved = format!("{}/moved", r.mock.base("/cdn"));
+    r.mock.set(
+        "GET",
+        NODE,
+        single(IG, &format!("{}/gif", r.mock.base("/cdn"))),
+    );
+    r.mock.on(
+        "GET",
+        "/cdn/gif",
+        raw(302, "").with_header("location", &moved),
+    );
+    r.mock.on("GET", "/cdn/moved", raw(200, GIF));
+    let e = image_of(&r, 1 << 20).await.unwrap_err();
+    assert!(matches!(e, ConnectorError::Permanent { .. }), "{e:?}");
+    assert!(r.mock.requests("GET", "/cdn/moved").is_empty());
+}
+
+/// A server that answers every request with a chunked body (no `Content-Length`) of `size` bytes
+/// starting as a GIF does.
+async fn chunked_server(size: usize) -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buf = [0; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match socket.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let mut out = b"HTTP/1.1 200 OK\r\ncontent-type: image/gif\r\n\
+                    transfer-encoding: chunked\r\nconnection: close\r\n\r\n"
+                    .to_vec();
+                let mut body = b"GIF89a".to_vec();
+                body.resize(size, b'x');
+                for chunk in body.chunks(1000) {
+                    out.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+                    out.extend_from_slice(chunk);
+                    out.extend_from_slice(b"\r\n");
+                }
+                out.extend_from_slice(b"0\r\n\r\n");
+                let _ = socket.write_all(&out).await;
+            });
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn the_size_cap_holds_without_a_content_length() {
+    let mock = Mock::start().await;
+    let cdn = chunked_server(10_000).await;
+    let egress = std::sync::Arc::new(
+        jt_outbound::Egress::new(jt_outbound::FIXED_HOSTS)
+            .with_test_hosts([("meta", mock.host()), ("meta", cdn.to_string())]),
+    );
+    let meta = jt_meta::MetaConnector::new(
+        egress,
+        bases(&mock),
+        std::sync::Arc::new(TestApps::default()),
+    );
+    mock.set("GET", NODE, single(IG, &format!("http://{cdn}/gif")));
+    let read = |max: usize| {
+        meta.own_post_image(
+            &page_cred(),
+            &public("instagram"),
+            "18000000000000002",
+            0,
+            max,
+        )
+    };
+    // Over the cap: refused while it is read, never whole in memory.
+    let e = read(4_096).await.unwrap_err();
+    assert!(matches!(e, ConnectorError::Permanent { .. }), "{e:?}");
+    // Within it: read whole.
+    let image = read(1 << 20).await.unwrap().unwrap();
+    assert_eq!(image.data.len(), 10_000);
+    assert_eq!(image.mime, "image/gif");
+}
+
+#[tokio::test]
+async fn a_cursor_graph_refuses_is_not_tried_again_without_insights() {
+    let r = rig().await;
+    r.mock.set(
+        "GET",
+        MEDIA,
+        graph_error(100, "(#100) The after cursor is invalid"),
+    );
+    let e = r
+        .meta
+        .own_posts(
+            &page_cred(),
+            &public("instagram"),
+            &query(30, Some("QVFIUmFh"), true),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, ConnectorError::Permanent { .. }), "{e:?}");
+    assert_eq!(r.mock.requests("GET", MEDIA).len(), 1);
+    // A metric Meta does not give is: read again without views, then it answers.
+    r.mock.clear();
+    r.mock.set(
+        "GET",
+        MEDIA,
+        graph_error(100, "(#100) The metric views is not supported"),
+    );
+    r.mock.on("GET", MEDIA, ok(json!({"data": []})));
+    r.meta
+        .own_posts(&page_cred(), &public("instagram"), &query(30, None, true))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(r.mock.requests("GET", MEDIA).len(), 2);
 }

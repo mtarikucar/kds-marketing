@@ -206,6 +206,7 @@ mod tests {
             "https://evilcdninstagram.com/",
             "https://fbcdn.net.evil.example/",
             "http://scontent.cdninstagram.com/",
+            "https://scontent.cdninstagram.com:8443/",
             // Plain http to an https-only provider host.
             "http://graph.facebook.com/v21.0/me",
             "http://api.x.com/2/tweets",

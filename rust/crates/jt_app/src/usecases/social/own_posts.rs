@@ -47,11 +47,15 @@ pub const MAX_OWN_POSTS: u32 = 50;
 pub const MAX_CURSOR_CHARS: usize = 512;
 /// The largest image read, in bytes (an Instagram image is well under it).
 pub const MAX_OWN_POST_IMAGE_BYTES: usize = 5 << 20;
+/// The longest caption returned, in characters (Instagram's own limit is 2,200); a longer one is
+/// cut on a character boundary and says so (`caption_truncated`).
+pub const MAX_CAPTION_CHARS: usize = 2_200;
 /// The last item index of a carousel (Instagram holds at most 20).
 pub const MAX_ITEM_INDEX: u32 = 19;
 
-/// Who may read an account's own posts: a content or a social agent (or person).
-pub const OWN_POSTS_PERMISSIONS: &[Permission] = &[Permission::ContentWork, Permission::SocialWork];
+/// Who may read an account's own posts: `social.work`, as every other `social.*` read (the
+/// accounts are listed with `jeeta.social.accounts_list`, which needs it too).
+pub const OWN_POSTS_PERMISSIONS: &[Permission] = &[Permission::SocialWork];
 
 /// `social.own_posts`'s input.
 #[derive(Clone, Debug, Deserialize)]
@@ -87,6 +91,8 @@ pub struct OwnPostOut {
     pub permalink: Option<Url>,
     pub kind: OwnPostKind,
     pub caption: Option<String>,
+    /// Whether `caption` was cut at [`MAX_CAPTION_CHARS`].
+    pub caption_truncated: bool,
     #[serde(with = "jt_studio::time_compat::option")]
     pub published_at: Option<OffsetDateTime>,
     /// A carousel's number of images or videos.
@@ -261,7 +267,14 @@ pub async fn own_posts(d: &Deps, ctx: &Ctx, i: OwnPostsInput) -> Result<OwnPosts
                 post_id: p.id.clone(),
                 permalink: p.permalink.clone(),
                 kind: p.kind,
-                caption: p.caption.clone(),
+                caption: p
+                    .caption
+                    .as_deref()
+                    .map(|c| c.chars().take(MAX_CAPTION_CHARS).collect()),
+                caption_truncated: p
+                    .caption
+                    .as_deref()
+                    .is_some_and(|c| c.chars().count() > MAX_CAPTION_CHARS),
                 published_at: p.published_at,
                 items: p.items,
                 numbers: numbers(p),

@@ -2912,9 +2912,15 @@ fn adapter(deps: &Deps, provider: Provider) -> Result<Arc<dyn Connector>, AppErr
 }
 
 /// The hosts `connector` reaches, each checked with the tenant host registry before anything is
-/// written.
+/// written. A wildcard entry (`*.<name>`, a provider's media CDN) belongs to the fixed tier
+/// alone: it is neither checked nor allowed in the tenant tier, nor stored with the capability.
 fn adapter_hosts(deps: &Deps, connector: &dyn Connector) -> Result<Vec<String>, AppError> {
-    let hosts: Vec<String> = connector.hosts().iter().map(|h| (*h).to_owned()).collect();
+    let hosts: Vec<String> = connector
+        .hosts()
+        .iter()
+        .filter(|h| !h.starts_with("*."))
+        .map(|h| (*h).to_owned())
+        .collect();
     for host in &hosts {
         deps.hosts.check(host)?;
     }
