@@ -11,7 +11,7 @@ use image::{ImageBuffer, Rgb, RgbImage};
 use jt_app::{
     ctx::Ctx,
     error::{AppError, ErrorCode},
-    usecases::studio::{files, library, render},
+    usecases::studio::{files, library, projects, render},
 };
 use jt_studio::compose::{BrandTokens, COMPOSED_AI_GENERATOR, Color};
 use jt_studio::*;
@@ -1268,4 +1268,142 @@ async fn an_unanalysed_logo_is_left_out_and_said_so() {
         vec![a.id]
     );
     assert!(!out.ai_generated);
+}
+
+/// A content area takes a composed image in one step: rendered with the area's `project_id` from
+/// the area's own photo, it is the area's and is delivered as a package that waits for the
+/// owner. A photo outside the area is refused before drawing; a composed image of one, delivered
+/// anyway, is refused with what to do.
+#[tokio::test]
+async fn a_content_area_takes_a_composed_image_of_its_own_photos() {
+    let w = world().await;
+    let o = olay(&w).await;
+    let inside = real_photo(&w, "inside", 1, o).await;
+    let outside = real_photo(&w, "outside", 2, o).await;
+    let p = projects::project_create(
+        &w.d,
+        &w.ctx,
+        input(json!({"request_key":"area","brief":"Masadan bir paylaşım hazırla"})),
+    )
+    .await
+    .unwrap();
+    let p = projects::project_materials(
+        &w.d,
+        &w.ctx,
+        input(json!({"project_id":p.id,"expected_revision":p.revision,"add":[inside.id]})),
+    )
+    .await
+    .unwrap();
+    // Refused before drawing: a photo that is not the area's.
+    let e = render::post_render(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"out","role":"cover","variant":"full_top",
+            "texts":{"heading":"Sabah ışığında küçük bir masa."},
+            "photos":{"photo":{"material_id":outside.id}},"project_id":p.id}),
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(reason(&e), "source_not_in_area");
+    assert_eq!(e.details["missing"], json!([outside.id]));
+    let cover = render::post_render(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"in","role":"cover","variant":"full_top",
+            "texts":{"heading":"Sabah ışığında küçük bir masa."},
+            "photos":{"photo":{"material_id":inside.id}},"project_id":p.id}),
+        ),
+    )
+    .await
+    .unwrap()
+    .material;
+    let stray = render_from(&w, "stray", "steps", "photo_top", outside.id)
+        .await
+        .unwrap()
+        .material;
+    // The agent takes the area and delivers.
+    let a = agent_of(&w);
+    let p = projects::project_get(&w.d, &w.ctx, projects::ProjectIdInput { project_id: p.id })
+        .await
+        .unwrap()
+        .project;
+    let claim = jt_app::usecases::content::area_claim(
+        &w.d,
+        &a,
+        input(json!({"project_id":p.id,"expected_revision":p.revision})),
+    )
+    .await
+    .unwrap();
+    let version = |m: &Material| {
+        json!({"format":"feed_post","text":"Masadan yeni bir düzen","material_ids":[m.id],
+            "hypothesis_id":w.f.slot.chain.hypothesis_id})
+    };
+    let e = jt_app::usecases::content::area_deliver(
+        &w.d,
+        &a,
+        input(
+            json!({"project_id":p.id,"claim_token":claim.claim_token,"request_key":"stray",
+            "summary":"Hazırlandı","versions":[version(&stray)]}),
+        ),
+    )
+    .await
+    .unwrap_err();
+    let findings = &e.details["versions"][0]["findings"];
+    let finding = findings
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["code"] == "material_not_in_area")
+        .expect("material_not_in_area");
+    assert_eq!(finding["composed"], json!(true));
+    assert_eq!(finding["missing_sources"], json!([outside.id]));
+    assert!(finding["hint"].as_str().unwrap().contains("project_id"));
+    assert!(
+        findings
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["code"] != "media_type")
+    );
+    let out = jt_app::usecases::content::area_deliver(
+        &w.d,
+        &a,
+        input(
+            json!({"project_id":p.id,"claim_token":claim.claim_token,"request_key":"cover",
+            "summary":"Hazırlandı","versions":[version(&cover)]}),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.project.packages.len(), 1);
+    assert_eq!(
+        out.project.packages[0].versions[0].material_ids,
+        vec![cover.id]
+    );
+    // The composed image is the area's only while its photo is.
+    projects::project_materials(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"project_id":p.id,"expected_revision":out.project.revision,
+            "remove":[inside.id]}),
+        ),
+    )
+    .await
+    .unwrap();
+    use jt_app::ports::UnitOfWork;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    let stored = r
+        .studio_projects()
+        .get_project(p.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let ids = projects::available_material_ids(r.as_mut(), &stored)
+        .await
+        .unwrap();
+    assert!(!ids.contains(&cover.id));
 }

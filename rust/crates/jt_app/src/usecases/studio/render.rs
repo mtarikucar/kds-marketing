@@ -100,6 +100,11 @@ pub struct PostRenderInput {
     /// The material's title; "`role` · `variant`" by default.
     #[serde(default)]
     pub title: Option<String>,
+    /// The content area (`project_id`) this image is for: every photo must be one of its
+    /// materials (`CONFLICT` `source_not_in_area` otherwise), and the image is then the area's,
+    /// deliverable with `jeeta.content.area_deliver`.
+    #[serde(default)]
+    pub project_id: Option<uuid::Uuid>,
 }
 
 /// `studio.post_render`'s answer: what the next call needs.
@@ -800,6 +805,7 @@ pub async fn post_render(
     check_variety(r.as_mut(), &t, &i).await?;
     let photo_materials: Vec<Material> = photos.iter().map(|(_, m)| m.clone()).collect();
     derive(&photo_materials, logo.as_ref())?;
+    in_area(r.as_mut(), &i, &photo_materials).await?;
     drop(r);
 
     // A turn to render first: a render waiting for its turn holds no source in memory.
@@ -854,6 +860,36 @@ pub async fn post_render(
     .await;
     stage.compensate(d, ctx.workspace_id).await;
     result
+}
+
+/// With `project_id`: every photo is one of the area's materials (`CONFLICT` `source_not_in_area`
+/// naming the others). The image is then the area's by derivation (`available_material_ids`).
+async fn in_area(
+    r: &mut dyn TenantRepos,
+    i: &PostRenderInput,
+    photos: &[Material],
+) -> Result<(), AppError> {
+    let Some(project_id) = i.project_id else {
+        return Ok(());
+    };
+    let p = super::projects::load(r, project_id, None, true).await?;
+    let available = super::projects::available_material_ids(r, &p).await?;
+    let missing: Vec<MaterialId> = photos
+        .iter()
+        .map(|m| m.id)
+        .filter(|id| !available.contains(id))
+        .collect();
+    if !missing.is_empty() {
+        return Err(AppError {
+            message: "every photo of an area's image is one of the area's materials; add them to \
+                      the area first (jeeta.studio.project_materials) or choose the area's own"
+                .into(),
+            details: json!({"field":"photos","reason":"source_not_in_area",
+                            "project_id": project_id, "missing": missing}),
+            ..conflict("source_not_in_area")
+        });
+    }
+    Ok(())
 }
 
 /// A cover in the variant of the workspace's last rendered cover is refused unless the caller
@@ -923,6 +959,8 @@ async fn store(
         });
     }
     check_variety(r.as_mut(), t, i).await?;
+    let photo_now: Vec<Material> = photos.iter().map(|(_, m)| m.clone()).collect();
+    in_area(r.as_mut(), i, &photo_now).await?;
     let receipt = |material_id, reused| RenderReceipt {
         material_id,
         width: composed.width,
@@ -1104,6 +1142,7 @@ pub fn schema(action: &str) -> Option<Value> {
                 "output":{"enum":["jpeg","png"]},
                 "allow_repeat":{"type":"boolean"},
                 "title":{"type":["string","null"],"minLength":1,"maxLength":120},
+                "project_id":{"type":["string","null"],"format":"uuid"},
             }),
             &["request_key", "role", "variant"],
         ),

@@ -1822,7 +1822,10 @@ fn day_lines(f: &Facts, v: &Viewer, policy_lead: u16) -> (Vec<SpecialDayLine>, B
         let usable = olays.iter().any(|o| {
             let subject = Subject::Olay { olay_id: o.id };
             f.materials.values().any(|m| {
-                m.olay_id() == Some(o.id) && check_use(m, UseRole::Anchor, &subject, &cx).is_ok()
+                // A drawn slide never stands for the season's own photos.
+                m.olay_id() == Some(o.id)
+                    && m.composition.is_none()
+                    && check_use(m, UseRole::Anchor, &subject, &cx).is_ok()
             })
         });
         if usable {

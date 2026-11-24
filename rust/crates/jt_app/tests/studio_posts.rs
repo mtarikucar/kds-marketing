@@ -1302,3 +1302,117 @@ async fn quiet_hours_take_each_posts_own_offset() {
     .unwrap();
     assert_eq!(out.posts.len(), 1);
 }
+
+/// A real, decodable photo of `olay`, analysed, as the renderer draws it.
+async fn drawable_photo(w: &World, olay: &Olay, at: OffsetDateTime) -> Material {
+    let img: image::RgbImage = image::ImageBuffer::from_fn(320, 240, |x, y| {
+        image::Rgb([(x % 256) as u8, (y % 256) as u8, 77])
+    });
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    let file: StoredFile =
+        w.d.files
+            .put(
+                w.f.ws,
+                FileId::new_v7(),
+                MediaUpload {
+                    bytes: bytes.into_inner(),
+                    mime: "image/png".into(),
+                    filename: "photo.png".into(),
+                },
+            )
+            .await
+            .unwrap();
+    let mut m = jt_testkit::studio_contract::eligible_material(olay, file.id);
+    m.mime = "image/png".into();
+    m.created_at = at;
+    let mut row = jt_app::ports::materials::MaterialAnalysisRecord::pending(
+        m.id,
+        at,
+        jt_app::ports::materials::DateSource::Unknown,
+    );
+    row.intelligence.status = jt_app::ports::materials::AnalysisStatus::Completed;
+    row.intelligence.analyzed_revision = Some(m.revision);
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio().save_file(file).await.unwrap();
+    r.studio_materials()
+        .insert_material(m.clone())
+        .await
+        .unwrap();
+    r.studio_materials().save_intelligence(row).await.unwrap();
+    r.commit().await.unwrap();
+    m
+}
+
+/// A slide the server draws from an olay's photo is never a new material of that olay: the
+/// planner asks for no content made of it (which would render again, a loop). It still goes the
+/// whole way as a post's material: proposed for the request, then its file submitted as the
+/// slot's piece, which is ready for the owner.
+#[tokio::test]
+async fn a_composed_image_is_no_new_material_and_goes_through_a_post_request() {
+    let mut w = posting_world().await;
+    w.d.compositor = Arc::new(jt_render::Renderer::new(jt_render::Limits::default()));
+    let o = workshop(&w).await;
+    let photo = drawable_photo(&w, &o, FIXED_NOW).await;
+    plan(&w, minutes(31)).await;
+    let before = requests(&w);
+    assert_eq!(before.len(), 1, "the photo's request");
+    let q = before[0].id;
+    let composed = jt_app::usecases::studio::render::post_render(
+        &w.d,
+        &at(&w, minutes(40)),
+        serde_json::from_value(
+            json!({"request_key":"cover","role":"cover","variant":"full_top",
+            "texts":{"heading":"Sabah ışığında küçük bir masa."},
+            "photos":{"photo":{"material_id":photo.id}}}),
+        )
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(composed.material.olay_id(), Some(o.id));
+    // Long past the settling time: no request names the composed image.
+    plan(&w, minutes(200)).await;
+    let after = requests(&w);
+    assert_eq!(after.len(), 1, "no request for the composed image");
+    assert!(
+        after
+            .iter()
+            .all(|q| !q.material_ids.contains(&composed.material.id))
+    );
+    // Proposed by its material id, submitted by its file id.
+    let s = Subject::Olay { olay_id: o.id };
+    let out = propose(
+        &w,
+        NOW,
+        q,
+        "package",
+        vec![post(
+            datetime!(2026-10-24 07:00 UTC),
+            &[&composed.material],
+            s,
+            &w,
+        )],
+    )
+    .await
+    .unwrap();
+    let slot = out.posts[0].slot.id;
+    let done = piece_submit(
+        &w.d,
+        &at(&w, datetime!(2026-10-23 08:00 UTC)),
+        PieceInput {
+            slot_id: slot,
+            expected_revision: 0,
+            request_key: "piece".into(),
+            text: "Yeni düzen".into(),
+            media: vec![MediaAsset::File {
+                id: composed.file.id,
+            }],
+            adaptations: Default::default(),
+            subject: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(done.slot.state, SlotState::Ready);
+}

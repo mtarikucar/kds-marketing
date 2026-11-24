@@ -279,7 +279,7 @@ pub(crate) async fn save(
         .await?;
     Ok(p)
 }
-pub(crate) async fn available_material_ids(
+pub async fn available_material_ids(
     r: &mut dyn TenantRepos,
     p: &ProductionProject,
 ) -> Result<BTreeSet<MaterialId>, AppError> {
@@ -291,6 +291,27 @@ pub(crate) async fn available_material_ids(
             && let Some(output) = row.production.output_material_id
         {
             ids.insert(output);
+        }
+    }
+    // A slide or story the server drew from the area's materials only is the area's too, for as
+    // long as each of them is: it is derived, never attached, so it leaves with its sources.
+    let composites: Vec<_> = r
+        .studio_materials()
+        .list_materials()
+        .await?
+        .into_iter()
+        .filter(|m| m.erased_at.is_none())
+        .filter_map(|m| m.composition.map(|c| (m.id, c.sources)))
+        .collect();
+    loop {
+        let before = ids.len();
+        for (id, sources) in &composites {
+            if !sources.is_empty() && sources.iter().all(|s| ids.contains(s)) {
+                ids.insert(*id);
+            }
+        }
+        if ids.len() == before {
+            break;
         }
     }
     Ok(ids)

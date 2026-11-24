@@ -171,7 +171,9 @@ fn render_definitions() -> Vec<ToolDef> {
              (replayed): role, variant, texts {slot: text} drawn exactly as given (no casing \
              change; wrapped by words), photos {slot: {material_id, focus_x?, focus_y?}} (live, \
              filed JPEG/PNG/WebP materials; one olay at most), counter {index, total} on a \
-             slide, output jpeg (default) or png, allow_repeat, title. A text that does not \
+             slide, output jpeg (default) or png, allow_repeat, title, project_id (a content \
+             area: every photo must be one of its materials, else CONFLICT source_not_in_area; \
+             the image is then the area's, delivered by material.id). A text that does not \
              fit is VALIDATION text_overflow naming the slot, max_chars and max_lines: shorten \
              it. A cover in the variant of the workspace's last rendered cover is CONFLICT \
              cover_variant_repeats (details.next_variant) unless allow_repeat. The image is \
