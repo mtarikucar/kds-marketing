@@ -374,6 +374,16 @@ pub struct QueueRow {
     /// When the customer's messages were last looked at for a schedule (each customer message
     /// up to then is handled); the job's sweep schedules a newer one left without.
     pub handled_at: Option<OffsetDateTime>,
+    /// The last automatic hand-over (the automatic replies, the server or the response-time
+    /// job): the executor generation it wrote and when. While the conversation is still at that
+    /// generation and no person wrote since, a person does not hold it: the customer's next
+    /// message brings the assistant back. Written only by [`AutoReplyRepo::handover_mark`];
+    /// [`AutoReplyRepo::queue_save`] keeps it as stored.
+    pub auto_handed_generation: Option<u32>,
+    pub auto_handed_at: Option<OffsetDateTime>,
+    /// When the customer and the owner were last told of an automatic hand-over (the line, the
+    /// notice); kept like the two above.
+    pub told_at: Option<OffsetDateTime>,
 }
 
 impl QueueRow {
@@ -387,6 +397,9 @@ impl QueueRow {
             attempts: 0,
             handed_back_at: None,
             handled_at: None,
+            auto_handed_generation: None,
+            auto_handed_at: None,
+            told_at: None,
         }
     }
 
@@ -553,8 +566,19 @@ pub trait AutoReplyRepo: Send + Sync {
     async fn queue_lock(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError>;
     /// Conversation `id`'s queue row, without a lock.
     async fn queue_get(&mut self, id: ConversationId) -> Result<Option<QueueRow>, AppError>;
-    /// Inserts or replaces the queue row of its conversation.
+    /// Inserts or replaces the queue row of its conversation, but for its automatic hand-over and
+    /// told times, which stay as stored ([`AutoReplyRepo::handover_mark`]).
     async fn queue_save(&mut self, row: &QueueRow) -> Result<(), AppError>;
+    /// Records an automatic hand-over of conversation `id` at `at` to executor generation
+    /// `generation` (making its queue row when there is none), and with `told` that the customer
+    /// and the owner were told of it then.
+    async fn handover_mark(
+        &mut self,
+        id: ConversationId,
+        generation: u32,
+        at: OffsetDateTime,
+        told: bool,
+    ) -> Result<(), AppError>;
     /// Removes conversation `id`'s queue row, if any.
     async fn queue_delete(&mut self, id: ConversationId) -> Result<(), AppError>;
     /// The conversations a run may take at `now` ([`QueueRow::takeable`]), the longest waiting
@@ -658,6 +682,9 @@ mod tests {
             attempts: 0,
             handed_back_at: None,
             handled_at: None,
+            auto_handed_generation: None,
+            auto_handed_at: None,
+            told_at: None,
         }
     }
 

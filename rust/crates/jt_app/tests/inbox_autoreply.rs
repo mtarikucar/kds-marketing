@@ -4400,3 +4400,176 @@ async fn a_discount_after_the_summary_makes_the_old_yes_order_nothing() {
         json!(3930)
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// The assistant comes back first after an automatic hand-over
+// ---------------------------------------------------------------------------------------------
+
+fn hand_over_tool(reason: &str, line: &str) -> ModelResult {
+    tool(ModelTool::HandOver {
+        reason: reason.into(),
+        summary: "Özet.".into(),
+        text: Some(line.into()),
+    })
+}
+
+/// The first customer message, answered with a hand-over and its line.
+async fn handed_over_with_a_line(t: &T) {
+    inbound(t, 0, 0).await;
+    t.model.answer(hand_over_tool(
+        "not_covered",
+        "Ekibimizden biri size dönecek.",
+    ));
+    t.meta.push_send_text(accepted());
+    job(t, due(0)).await;
+    handed_to_a_person(t);
+}
+
+const HALF_HOUR: i64 = 30 * 60;
+
+#[tokio::test]
+async fn after_an_automatic_hand_over_the_customers_next_message_is_the_assistants_again() {
+    let t = setup().await;
+    handed_over_with_a_line(&t).await;
+    says(&t, "wamid.TEST-AGAIN-1", HALF_HOUR, "Bir sorum daha var.").await;
+    assert_eq!(
+        conversation(&t).executor,
+        Executor::Agent,
+        "back to the assistant"
+    );
+    assert_eq!(t.w.ledger("inbox.autoreply.reentered").len(), 1);
+    t.model.answer(reply("Elbette, buyurun."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(HALF_HOUR)).await;
+    assert_eq!(texts_sent(&t).last().unwrap(), "Elbette, buyurun.");
+    // It was told already: the model knows not to promise again.
+    let note = t.model.requests().last().unwrap().system_note.clone();
+    assert!(note.is_some_and(|n| n.contains("already told that a person")));
+}
+
+#[tokio::test]
+async fn back_after_a_hand_over_a_bargain_gets_the_preferred_step() {
+    let t = quoted(4_130).await;
+    says(&t, "wamid.TEST-BARGAIN-1", 60, "İndirim olur mu?").await;
+    t.model
+        .answer(hand_over_tool("payment_problem", "Ekibimiz size dönecek."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60)).await;
+    handed_to_a_person(&t);
+    says(
+        &t,
+        "wamid.TEST-BARGAIN-2",
+        60 + HALF_HOUR,
+        "Şimdi indirim yapabilir misiniz?",
+    )
+    .await;
+    t.model.answer(discount(""));
+    t.meta.push_send_text(accepted());
+    job(&t, due(60 + HALF_HOUR)).await;
+    assert_eq!(
+        texts_sent(&t).last().unwrap(),
+        "İndirimli fiyatımız: 3.930 TL."
+    );
+}
+
+#[tokio::test]
+async fn a_person_who_wrote_after_the_hand_over_holds_the_conversation() {
+    let t = setup().await;
+    handed_over_with_a_line(&t).await;
+    t.meta.push_send_text(accepted());
+    replies::reply(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(60)),
+        conversation(&t).id,
+        serde_json::from_value(json!({"text": "Ben ilgileniyorum.", "intent": "reply"})).unwrap(),
+    )
+    .await
+    .unwrap();
+    says(
+        &t,
+        "wamid.TEST-AGAIN-1",
+        HALF_HOUR,
+        "Teşekkürler, bir sorum daha var.",
+    )
+    .await;
+    job(&t, due(HALF_HOUR)).await;
+    assert!(matches!(conversation(&t).executor, Executor::Human { .. }));
+    assert_eq!(t.model.requests().len(), 1, "only the first message");
+}
+
+#[tokio::test]
+async fn an_explicit_take_over_holds_the_conversation() {
+    let t = setup().await;
+    handed_over_with_a_line(&t).await;
+    conversations::take_over(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(60)),
+        conversation(&t).id,
+    )
+    .await
+    .unwrap();
+    says(&t, "wamid.TEST-AGAIN-1", HALF_HOUR, "Bir sorum daha var.").await;
+    job(&t, due(HALF_HOUR)).await;
+    assert!(matches!(conversation(&t).executor, Executor::Human { .. }));
+    assert_eq!(t.model.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn a_second_hand_over_within_twelve_hours_is_silent() {
+    let mut t = setup().await;
+    let (mail, _) = with_mailbox(&mut t).await;
+    mail.push_mail(receipt());
+    handed_over_with_a_line(&t).await;
+    says(&t, "wamid.TEST-AGAIN-1", HALF_HOUR, "Bir sorum daha var.").await;
+    t.model.answer(hand_over_tool(
+        "not_covered",
+        "Ekibimizden biri size dönecek.",
+    ));
+    job(&t, due(HALF_HOUR)).await;
+    handed_to_a_person(&t);
+    assert_eq!(
+        texts_sent(&t),
+        ["Ekibimizden biri size dönecek."],
+        "one line"
+    );
+    assert_eq!(notices(&t).len(), 1, "one notice");
+    let entries = t.w.ledger("inbox.autoreply.handed_over");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].payload["silent"], true);
+    assert!(entries[0].payload.get("silent").is_none());
+}
+
+#[tokio::test]
+async fn the_response_time_job_leaves_a_hand_back_with_an_old_message_to_the_assistant() {
+    let t = setup().await;
+    handed_over_with_a_line(&t).await;
+    // Three days later a person hands it back; the customer's message is long outside the
+    // reply window.
+    let back = consumed_at(3 * 24 * 3_600);
+    conversations::hand_to_agent(&t.w.deps, &at(&t.w.owner_ctx, back), conversation(&t).id)
+        .await
+        .unwrap();
+    jobs::run_response_sla(&t.w.deps, back + Duration::seconds(30)).await;
+    assert_eq!(conversation(&t).executor, Executor::Agent, "not undone");
+    // The customer's next message is answered.
+    let next = 3 * 24 * 3_600 + 60;
+    says(&t, "wamid.TEST-AGAIN-1", next, "Merhaba, hâlâ bekliyorum.").await;
+    t.model.answer(reply("Hemen yardımcı olayım."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(next)).await;
+    assert_eq!(texts_sent(&t).last().unwrap(), "Hemen yardımcı olayım.");
+}
+
+#[tokio::test]
+async fn without_the_automatic_replies_the_response_time_job_and_people_are_unchanged() {
+    let t = setup_with(false, true).await;
+    inbound(&t, 0, 0).await;
+    // Past the response time, the job hands the conversation to a person as before.
+    jobs::run_response_sla(&t.w.deps, consumed_at(0) + Duration::hours(1)).await;
+    assert!(matches!(conversation(&t).executor, Executor::Human { .. }));
+    // The customer writing again does not bring anything back.
+    says(&t, "wamid.TEST-AGAIN-1", 2 * 3_600, "Bir sorum daha var.").await;
+    assert!(matches!(conversation(&t).executor, Executor::Human { .. }));
+    assert!(t.w.ledger("inbox.autoreply.reentered").is_empty());
+    assert!(t.w.uow.snapshot().auto_reply.queue.is_empty());
+}

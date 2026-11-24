@@ -2660,6 +2660,9 @@ pub async fn auto_reply_rows(uow: Arc<dyn UnitOfWork>) {
         attempts: 0,
         handed_back_at: Some(at(-5)),
         handled_at: Some(at(-1)),
+        auto_handed_generation: None,
+        auto_handed_at: None,
+        told_at: None,
     };
     let mut t = uow.tenant(f.ws).await.unwrap();
     t.auto_reply().queue_save(&row).await.unwrap();
@@ -2944,4 +2947,39 @@ pub async fn savepoint_undoes_only_what_follows(uow: Arc<dyn UnitOfWork>) {
     let mut t = uow.tenant(f.ws).await.unwrap();
     assert!(t.auto_reply().queue_get(kept).await.unwrap().is_some());
     assert!(t.auto_reply().queue_get(undone).await.unwrap().is_none());
+}
+
+/// An automatic hand-over's mark (`AutoReplyRepo::handover_mark`): made with its row when there
+/// is none, kept by a later `queue_save`, its told time moved only when told.
+pub async fn auto_reply_handover_mark(uow: Arc<dyn UnitOfWork>) {
+    use jt_app::ports::reply_model::QueueRow;
+    let f = Fixture::new(uow.clone()).await;
+    let id = ConversationId::new_v7();
+    let at = |s: i64| FIXED_NOW + Duration::seconds(s);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.auto_reply()
+        .handover_mark(id, 3, at(0), true)
+        .await
+        .unwrap();
+    let row = t.auto_reply().queue_get(id).await.unwrap().unwrap();
+    assert_eq!(
+        (row.auto_handed_generation, row.auto_handed_at, row.told_at),
+        (Some(3), Some(at(0)), Some(at(0)))
+    );
+    // A save of the row as read before keeps the mark.
+    let mut stale = QueueRow::idle(id, at(5));
+    stale.due_at = Some(at(10));
+    t.auto_reply().queue_save(&stale).await.unwrap();
+    t.auto_reply()
+        .handover_mark(id, 5, at(20), false)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    let row = t.auto_reply().queue_get(id).await.unwrap().unwrap();
+    assert_eq!(row.due_at, Some(at(10)));
+    assert_eq!(
+        (row.auto_handed_generation, row.auto_handed_at, row.told_at),
+        (Some(5), Some(at(20)), Some(at(0)))
+    );
 }

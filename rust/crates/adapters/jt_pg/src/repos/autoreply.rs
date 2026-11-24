@@ -66,6 +66,9 @@ struct QueueRecord {
     attempts: i32,
     handed_back_at: Option<OffsetDateTime>,
     handled_at: Option<OffsetDateTime>,
+    auto_handed_generation: Option<i64>,
+    auto_handed_at: Option<OffsetDateTime>,
+    told_at: Option<OffsetDateTime>,
 }
 
 impl QueueRecord {
@@ -79,6 +82,15 @@ impl QueueRecord {
                 .map_err(|_| AppError::internal("stored attempts are negative"))?,
             handed_back_at: self.handed_back_at,
             handled_at: self.handled_at,
+            auto_handed_generation: self
+                .auto_handed_generation
+                .map(|g| {
+                    u32::try_from(g)
+                        .map_err(|_| AppError::internal("stored generation is out of range"))
+                })
+                .transpose()?,
+            auto_handed_at: self.auto_handed_at,
+            told_at: self.told_at,
         })
     }
 }
@@ -208,7 +220,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
             "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at, \
-             handled_at from auto_reply_queue where workspace_id = $1 and conversation_id = $2 for update",
+             handled_at, auto_handed_generation, auto_handed_at, told_at from auto_reply_queue \
+             where workspace_id = $1 and conversation_id = $2 for update",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
@@ -222,7 +235,8 @@ impl AutoReplyRepo for PgTenantRepos {
         let ws = self.workspace_id();
         let record: Option<QueueRecord> = sqlx::query_as(
             "select conversation_id, first_at, due_at, lease_until, attempts, handed_back_at, \
-             handled_at from auto_reply_queue where workspace_id = $1 and conversation_id = $2",
+             handled_at, auto_handed_generation, auto_handed_at, told_at from auto_reply_queue \
+             where workspace_id = $1 and conversation_id = $2",
         )
         .bind(ws.as_uuid())
         .bind(id.as_uuid())
@@ -256,6 +270,34 @@ impl AutoReplyRepo for PgTenantRepos {
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "save an automatic reply's queue row"))?;
+        Ok(())
+    }
+
+    async fn handover_mark(
+        &mut self,
+        id: ConversationId,
+        generation: u32,
+        at: OffsetDateTime,
+        told: bool,
+    ) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        sqlx::query(
+            "insert into auto_reply_queue (workspace_id, conversation_id, first_at, attempts, \
+             auto_handed_generation, auto_handed_at, told_at) \
+             values ($1, $2, $4, 0, $3, $4, case when $5 then $4 end) \
+             on conflict (workspace_id, conversation_id) do update set \
+             auto_handed_generation = excluded.auto_handed_generation, \
+             auto_handed_at = excluded.auto_handed_at, \
+             told_at = case when $5 then $4 else auto_reply_queue.told_at end",
+        )
+        .bind(ws.as_uuid())
+        .bind(id.as_uuid())
+        .bind(i64::from(generation))
+        .bind(at)
+        .bind(told)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "mark an automatic hand-over"))?;
         Ok(())
     }
 

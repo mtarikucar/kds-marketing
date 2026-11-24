@@ -439,10 +439,36 @@ pub(crate) async fn mark_due(
     id: ConversationId,
     now: OffsetDateTime,
 ) -> Result<(), AppError> {
-    let Some((auto, c)) = served(deps, r, id).await? else {
+    let Some((auto, mut c)) = served(deps, r, id).await? else {
         return Ok(());
     };
     let existing = r.auto_reply().queue_lock(id).await?;
+    // The assistant answers first: a person holds the conversation only by their own act. After
+    // an automatic hand-over with no person's act since, the customer's new message brings the
+    // assistant back, as a hand-back would.
+    if let Some(row) = &existing
+        && reenters(r, &c, row).await?
+    {
+        let generation = r
+            .conversations()
+            .update_executor(c.id, Executor::Agent)
+            .await?;
+        let ctx = system_ctx(c.workspace_id, now);
+        record(
+            r,
+            &ctx,
+            "inbox.autoreply.reentered",
+            "conversation",
+            id,
+            json!({ "cause": "automatic_hand_over", "generation": generation }),
+        )
+        .await?;
+        c = r
+            .conversations()
+            .get(id)
+            .await?
+            .ok_or_else(|| AppError::internal("a conversation just written"))?;
+    }
     let mut row = existing.unwrap_or_else(|| QueueRow::idle(id, now));
     // The customer's messages up to now are handled, whatever comes of them (the job's sweep
     // looks only for newer ones).
@@ -1350,6 +1376,7 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 .conversations()
                 .update_executor(c.id, Executor::Human { user_id: owner })
                 .await?;
+            let silent = auto_handover(r.as_mut(), c.id, generation, ctx.now).await?;
             record(
                 r.as_mut(),
                 ctx,
@@ -1359,16 +1386,18 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
                 json!({ "run_id": null, "reason": "failed", "by": By::Server.key() }),
             )
             .await?;
-            super::notices::queue_best_effort(
-                deps,
-                ctx,
-                r.as_mut(),
-                NoticeKind::HandedOver,
-                c.id,
-                format!("handed_over:{}:{generation}", c.id),
-                Some("failed"),
-            )
-            .await?;
+            if !silent {
+                super::notices::queue_best_effort(
+                    deps,
+                    ctx,
+                    r.as_mut(),
+                    NoticeKind::HandedOver,
+                    c.id,
+                    format!("handed_over:{}:{generation}", c.id),
+                    Some("failed"),
+                )
+                .await?;
+            }
         }
         r.commit().await?;
         warn(Some(ctx.workspace_id), "give_up_failed");
@@ -1442,6 +1471,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     let Some(row) = r.auto_reply().queue_lock(id).await? else {
         return Ok(Prepared::Done(Worked::Skipped));
     };
+    let told_recently = row.told_at.is_some_and(|at| now - at < TOLD_QUIET);
     let c = r.conversations().lock(id).await?;
     let live = Live::read(r.as_mut()).await?;
     let auto = live.as_ref().and_then(|l| l.settings.auto_reply.clone());
@@ -1541,7 +1571,13 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     if let Some(policy) = bargaining_part(&auto) {
         system_workspace.push_str(&policy);
     }
-    let system_note = bargaining_note(&auto, bargain.as_ref(), human_priced);
+    let system_note = match (
+        bargaining_note(&auto, bargain.as_ref(), human_priced),
+        told_recently.then(|| TOLD_NOTE.to_owned()),
+    ) {
+        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
+        (a, b) => a.or(b),
+    };
     let snapshot = Snapshot {
         generation: c.executor_generation,
         activity_revision: r.conversations().send_state(id).await?.activity_revision,
@@ -2440,6 +2476,97 @@ struct HandOver<'a> {
     line_allowed: bool,
 }
 
+/// After the customer and the owner were told of an automatic hand-over, how long a repeat is
+/// silent (no line to the customer, no notice to the owner).
+const TOLD_QUIET: Duration = Duration::hours(12);
+/// What the model is told while the customer has been told, recently, that a person will get
+/// back to them.
+const TOLD_NOTE: &str = "The customer was already told that a person from the team will get \
+back to them. Answer what you can yourself, and do not repeat that promise.";
+
+/// Records an automatic hand-over of conversation `id` to executor generation `generation` at
+/// `now` (so the customer's next message brings the assistant back while no person acts), and
+/// answers whether it is silent: the customer and the owner were told of one less than
+/// [`TOLD_QUIET`] ago.
+async fn auto_handover(
+    r: &mut dyn TenantRepos,
+    id: ConversationId,
+    generation: u32,
+    now: OffsetDateTime,
+) -> Result<bool, AppError> {
+    let told = r.auto_reply().queue_get(id).await?.and_then(|q| q.told_at);
+    let silent = told.is_some_and(|at| now - at < TOLD_QUIET);
+    r.auto_reply()
+        .handover_mark(id, generation, now, !silent)
+        .await?;
+    Ok(silent)
+}
+
+/// Whether conversation `c` comes back to the assistant: a person is its executor only by an
+/// automatic hand-over (`row` holds the generation it wrote, and the conversation is still at
+/// it: no take-over, no hand-back since), and no person wrote to the customer after it.
+async fn reenters(
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    row: &QueueRow,
+) -> Result<bool, AppError> {
+    if !matches!(c.executor, Executor::Human { .. })
+        || row.auto_handed_generation != Some(c.executor_generation)
+    {
+        return Ok(false);
+    }
+    let Some(handed_at) = row.auto_handed_at else {
+        return Ok(false);
+    };
+    Ok(r.messages()
+        .person_last_at(c.id)
+        .await?
+        .is_none_or(|at| at <= handed_at))
+}
+
+/// For the response-time job: whether the customer's last message of served conversation `c` is
+/// not waiting on a person at `now`: it is outside the reply window, or the assistant already
+/// handled it (its queue row rests, having looked at it). `false` for a conversation the
+/// automatic replies do not serve, which keeps the job's rule.
+pub(crate) async fn not_waiting(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    now: OffsetDateTime,
+) -> Result<bool, AppError> {
+    let Some(at) = c.last_inbound_at else {
+        return Ok(false);
+    };
+    if served(deps, r, c.id).await?.is_none() {
+        return Ok(false);
+    }
+    if now - at >= REPLY_WINDOW {
+        return Ok(true);
+    }
+    Ok(r.auto_reply()
+        .queue_get(c.id)
+        .await?
+        .is_some_and(|q| q.is_idle() && q.handled_at.is_some_and(|h| h >= at)))
+}
+
+/// For the response-time job: its hand-over of served conversation `c` to executor generation
+/// `generation` is an automatic one (the customer's next message brings the assistant back).
+/// Nothing for a conversation the automatic replies do not serve.
+pub(crate) async fn handed_by_job(
+    deps: &Deps,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    generation: u32,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if served(deps, r, c.id).await?.is_some() {
+        r.auto_reply()
+            .handover_mark(c.id, generation, now, false)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Hands conversation `c` to a person (see the module docs), in the caller's transaction:
 /// answers the outbox row of the line to the customer, when one was queued.
 async fn hand_over(
@@ -2458,6 +2585,7 @@ async fn hand_over(
         .conversations()
         .update_executor(c.id, Executor::Human { user_id: owner })
         .await?;
+    let silent = auto_handover(r, c.id, generation, ctx.now).await?;
     if let Some(summary) = h.summary.map(str::trim).filter(|s| !s.is_empty())
         && let Some(journey) = super::active_or_latest_journey(r, c.person_id).await?
     {
@@ -2475,15 +2603,23 @@ async fn hand_over(
             })
             .await?;
     }
+    let mut payload = json!({ "run_id": h.run_id, "reason": h.reason, "by": h.by.key() });
+    if silent {
+        payload["silent"] = json!(true);
+    }
     record(
         r,
         ctx,
         "inbox.autoreply.handed_over",
         "conversation",
         c.id,
-        json!({ "run_id": h.run_id, "reason": h.reason, "by": h.by.key() }),
+        payload,
     )
     .await?;
+    // A repeat within the quiet time is silent: no line to the customer, no notice.
+    if silent {
+        return Ok(None);
+    }
     // The owner is told by email, once for this hand-over.
     super::notices::queue_best_effort(
         deps,

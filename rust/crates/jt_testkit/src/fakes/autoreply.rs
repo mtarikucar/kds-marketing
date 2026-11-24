@@ -70,13 +70,63 @@ impl AutoReplyRepo for MemTenant {
         self.call(|this| {
             let ws = this.ws;
             this.tx.write(move |s| {
+                let mut row = row.clone();
+                // The automatic hand-over and told times stay as stored (`handover_mark`).
+                if let Some((_, old)) = s
+                    .auto_reply
+                    .queue
+                    .iter()
+                    .find(|(w, r)| *w == ws && r.conversation_id == row.conversation_id)
+                {
+                    row.auto_handed_generation = old.auto_handed_generation;
+                    row.auto_handed_at = old.auto_handed_at;
+                    row.told_at = old.told_at;
+                } else {
+                    row.auto_handed_generation = None;
+                    row.auto_handed_at = None;
+                    row.told_at = None;
+                }
                 s.auto_reply
                     .queue
                     .retain(|(w, r)| !(*w == ws && r.conversation_id == row.conversation_id));
-                s.auto_reply.queue.push((ws, row.clone()));
+                s.auto_reply.queue.push((ws, row));
             });
             Ok(())
         })
+    }
+
+    async fn handover_mark(
+        &mut self,
+        id: ConversationId,
+        generation: u32,
+        at: OffsetDateTime,
+        told: bool,
+    ) -> Result<(), AppError> {
+        let ws = self.ws;
+        self.tx.write(move |s| {
+            match s
+                .auto_reply
+                .queue
+                .iter_mut()
+                .find(|(w, r)| *w == ws && r.conversation_id == id)
+            {
+                Some((_, row)) => {
+                    row.auto_handed_generation = Some(generation);
+                    row.auto_handed_at = Some(at);
+                    if told {
+                        row.told_at = Some(at);
+                    }
+                }
+                None => {
+                    let mut row = QueueRow::idle(id, at);
+                    row.auto_handed_generation = Some(generation);
+                    row.auto_handed_at = Some(at);
+                    row.told_at = told.then_some(at);
+                    s.auto_reply.queue.push((ws, row));
+                }
+            }
+        });
+        Ok(())
     }
 
     async fn queue_delete(&mut self, id: ConversationId) -> Result<(), AppError> {

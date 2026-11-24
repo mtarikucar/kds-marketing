@@ -94,6 +94,22 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   activity) drops its answer, at the run's end, at the send and at the approval of a held reply
   (`stale`), so the customer never gets two answers to one message; a take-over during a run
   refuses the send too. While it answers a conversation, agents are not offered it.
+- **Who holds a conversation.** A person holds it only by their own act: pressing take-over, or
+  writing to the customer (in the panel or from the Business App) after it was handed to people.
+  An automatic hand-over (the model's, the server's, an order's, or the response-time job's) is
+  recorded on the queue row with the executor generation it wrote (`auto_handed_generation`,
+  `auto_handed_at`, migration `0051_auto_reply_reenter`); while the conversation is still at that
+  generation and no person wrote since, the customer's next message brings the assistant back,
+  as a hand-back would (a new generation, ledger `inbox.autoreply.reentered`), on the normal
+  settle time. The line to the customer and the owner's notice of an automatic hand-over go out
+  at most once per conversation in 12 hours (`told_at`): a repeat is silent (the run and
+  `inbox.autoreply.handed_over` with `silent: true`, nothing to the customer or the owner), and
+  while the customer was told, the model is told so in the conversation's note, so it answers
+  what it can without repeating the promise. For a served conversation the response-time job
+  hands nothing over whose customer message is outside the 24-hour reply window or already
+  handled by the assistant (its queue row rests, having looked at it); conversations the
+  automatic replies do not serve, and every conversation with the feature off, keep the job's
+  rule as it was.
 - When a person on the team stated money in the current journey (an amount, a currency, a
   discount or payment word, or a bare number such as "3500 olur"), it never quotes in that
   journey: a quote becomes a hand-over (`human_quoted`), and the model is told so. Replies that
@@ -154,26 +170,35 @@ the endpoint's own host). The token should be able to do nothing else. Guards on
 `jeeta_ref` (the same draft for the same reference) is strongly advised, because Jeeta never retries
 a call whose outcome is unknown.
 
-**Connecting it (operator, two calls).** Run them on the server with `curl`, so the shop's token
-never passes through an AI agent's conversation: put the token in a root-only file first
+**Connecting it (operator, two calls).** Run them on the server, so the shop's token never
+passes through an AI agent's conversation: put the token in a root-only file first
 (`install -m 600 /dev/null /root/shop-token`, then paste it with an editor), and let the shell
-read it. The first call takes an API key with `capabilities.manage`; the second is a person's act
-and takes a signed-in owner's session (an API key or an MCP connection is refused,
-`403 person_only`). Invented example values:
+read it. The first call takes an API key with `capabilities.manage`, through the MCP tool
+`jeeta.connector.set_credentials` on `/mcp` (the panel's `/api` accepts only a signed-in panel
+session, not a key); the second is a person's act and takes a signed-in owner's session (an API
+key or an MCP connection is refused, `403 person_only`). Invented example values:
 
 ```sh
 KEY=$(cat /root/jeeta-key)      # a jt_live_… key with capabilities.manage, also from a file
 TOKEN=$(cat /root/shop-token)
-curl -s -X POST http://127.0.0.1:8080/api/connectors/credentials \
-  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+MCP=(-H "Authorization: Bearer $KEY" -H 'Content-Type: application/json'
+     -H 'Accept: application/json, text/event-stream')
+# Open an MCP session; its id comes back in the Mcp-Session-Id header.
+SESSION=$(curl -s -D - -o /dev/null -X POST http://127.0.0.1:8080/mcp "${MCP[@]}" -d \
+  '{"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2025-06-18",
+    "capabilities": {}, "clientInfo": {"name": "operator", "version": "1"}}}' \
+  | awk 'tolower($1) == "mcp-session-id:" {print $2}' | tr -d '\r')
+curl -s -X POST http://127.0.0.1:8080/mcp "${MCP[@]}" -H "Mcp-Session-Id: $SESSION" \
   -d @- <<JSON
-{"kind_key": "shop_mcp", "name": "shop.example.com",
- "credential": {"kind": "mcp_bearer", "endpoint": "https://shop.example.com/api/mcp", "token": "$TOKEN"}}
+{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+ "params": {"name": "jeeta.connector.set_credentials", "arguments": {
+   "kind_key": "shop_mcp", "name": "shop.example.com",
+   "credential": {"kind": "mcp_bearer", "endpoint": "https://shop.example.com/api/mcp", "token": "$TOKEN"}}}}
 JSON
 unset TOKEN
 ```
 
-The answer is the capability (`id`, `status`). The endpoint becomes its external id and its one
+The answer (a JSON-RPC result, possibly as one server-sent event) holds the capability (`id`, `status`). The endpoint becomes its external id and its one
 tenant host; the capability is probed at once (`initialize`, `tools/list`): it is `verified` when
 the shop lists its order tool (`call_api_operation` until a template names another). Then the
 owner (or the operator signed in as the owner) sets the template, with the capability's id:
