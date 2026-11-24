@@ -1280,6 +1280,31 @@ async fn a_content_area_takes_a_composed_image_of_its_own_photos() {
     let o = olay(&w).await;
     let inside = real_photo(&w, "inside", 1, o).await;
     let outside = real_photo(&w, "outside", 2, o).await;
+    // The workspace has a brand logo: drawn in every image, never one of an area's materials.
+    let logo_file = upload(&w, "logo-file", 9).await;
+    let logo = library::material_add(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"logo","file_id":logo_file,"origin":{"kind":"real"},
+            "genel":true,"share":"shareable","quality":"publishable"}),
+        ),
+    )
+    .await
+    .unwrap()
+    .material;
+    analysed(&w, logo.id).await;
+    render::brand_set(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"tokens":{"background":"#f5f5f3","ink":"#171a1f","accent":"#f2b83c",
+            "muted":"#555b66","heading_font":"bricolage_grotesque","body_font":"figtree",
+            "brand_name":"Örnek","logo_material_id":logo.id},"expected_revision":0}),
+        ),
+    )
+    .await
+    .unwrap();
     let p = projects::project_create(
         &w.d,
         &w.ctx,
@@ -1320,6 +1345,9 @@ async fn a_content_area_takes_a_composed_image_of_its_own_photos() {
     .await
     .unwrap()
     .material;
+    let drawn = cover.composition.clone().unwrap();
+    assert_eq!(drawn.logo, Some(logo.id));
+    assert_eq!(drawn.sources, vec![inside.id, logo.id]);
     let stray = render_from(&w, "stray", "steps", "photo_top", outside.id)
         .await
         .unwrap()
@@ -1383,6 +1411,36 @@ async fn a_content_area_takes_a_composed_image_of_its_own_photos() {
         out.project.packages[0].versions[0].material_ids,
         vec![cover.id]
     );
+    // A composition stored before the logo was recorded apart: the workspace's current logo
+    // among its sources is still taken for the logo, never as a missing area material.
+    {
+        use jt_app::ports::UnitOfWork;
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        let mut old = r
+            .studio_materials()
+            .get_material(cover.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let revision = old.revision;
+        old.composition.as_mut().unwrap().logo = None;
+        old.revision += 1;
+        r.studio_materials()
+            .update_material(old, revision)
+            .await
+            .unwrap();
+        let stored = r
+            .studio_projects()
+            .get_project(p.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let ids = projects::available_material_ids(r.as_mut(), &stored)
+            .await
+            .unwrap();
+        assert!(ids.contains(&cover.id));
+        r.commit().await.unwrap();
+    }
     // The composed image is the area's only while its photo is.
     projects::project_materials(
         &w.d,
@@ -1406,4 +1464,28 @@ async fn a_content_area_takes_a_composed_image_of_its_own_photos() {
         .await
         .unwrap();
     assert!(!ids.contains(&cover.id));
+}
+
+/// A source later judged not publishable makes what was drawn from it the same.
+#[tokio::test]
+async fn a_source_judged_unusable_makes_its_compositions_unusable() {
+    let w = world().await;
+    let o = olay(&w).await;
+    let s = real_photo(&w, "s", 1, o).await;
+    let c = render_from(&w, "c", "cover", "full_top", s.id)
+        .await
+        .unwrap()
+        .material;
+    assert_eq!(c.tags.quality, Some(Quality::Publishable));
+    library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":s.id,"expected_revision":material(&w, s.id).revision,
+            "quality":"unusable"})),
+    )
+    .await
+    .unwrap();
+    let after = material(&w, c.id);
+    assert_eq!(after.tags.quality, Some(Quality::Unusable));
+    assert_eq!(after.share, c.share, "a quality alone does not reopen the permission");
 }

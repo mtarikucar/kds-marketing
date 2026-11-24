@@ -862,7 +862,7 @@ pub async fn material_tag(d: &Deps, ctx: &Ctx, i: MaterialTagInput) -> Result<Ma
         .update_material(m.clone(), i.expected_revision)
         .await?;
     // A marker added after a render reaches the slides and stories drawn from this material.
-    if marked {
+    if marked || m.tags.quality != current.tags.quality {
         super::propagate_markers(r.as_mut(), &m).await?;
     }
     if reviewer.is_some() {

@@ -167,7 +167,8 @@ apply.
 
 **1. A content area** (work item `content_area`). Render from the area's own materials and name
 the area; the image is then the area's (for as long as every photo it was drawn from is), so it
-is delivered by its `material.id`. No separate attach step.
+is delivered by its `material.id`. No separate attach step. The brand logo drawn in its chip is the
+workspace's and never needs to be one of the area's materials.
 
 ```text
 jeeta.content.area_claim {project_id, expected_revision}             -> claim_token

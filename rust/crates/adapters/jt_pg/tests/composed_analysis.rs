@@ -35,6 +35,7 @@ async fn composite(
         mime: "image/jpeg".into(),
         title: "cover · full_top".into(),
         composition: Some(Composition {
+            logo: None,
             renderer: "jeeta-compose".into(),
             role: jt_studio::compose::Role::Cover,
             variant: "full_top".into(),

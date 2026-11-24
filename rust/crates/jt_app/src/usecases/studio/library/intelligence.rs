@@ -738,6 +738,7 @@ pub async fn material_analysis_complete(
     if !locked.contains("labels") {
         material.tags.labels = labels;
     }
+    let quality_before = material.tags.quality;
     if !locked.contains("quality")
         && let Some(quality) = i.quality
     {
@@ -802,7 +803,7 @@ pub async fn material_analysis_complete(
         .update_material(material.clone(), i.expected_revision)
         .await?;
     r.studio_materials().save_intelligence(row.clone()).await?;
-    if marked {
+    if marked || material.tags.quality != quality_before {
         super::propagate_markers(r.as_mut(), &material).await?;
     }
     // Compositions drawn from it before it was analysed may be usable now.

@@ -197,17 +197,19 @@ async fn held_versions(
                     .await?
                     .and_then(|m| m.composition)
                 {
-                    // A rendered slide is the area's when every photo it was drawn from is.
+                    // A rendered slide is the area's when every photo it was drawn from is (the
+                    // brand logo aside, which is never the area's).
+                    let logo = projects::brand_logo(r).await?;
                     finding["composed"] = json!(true);
-                    finding["missing_sources"] = json!(
-                        c.sources
-                            .iter()
-                            .filter(|s| !available.contains(s))
-                            .collect::<Vec<_>>()
-                    );
-                    finding["hint"] = json!(
-                        "render it from the area's own materials (jeeta.studio.post_render with                          project_id), or add the missing sources to the area first                          (jeeta.studio.project_materials {project_id, expected_revision, add: [ids]})"
-                    );
+                    finding["missing_sources"] = json!(projects::missing_from_area(
+                        &c.content_sources(logo),
+                        &available
+                    ));
+                    finding["hint"] = json!(concat!(
+                        "render it from the area's own materials (jeeta.studio.post_render with ",
+                        "project_id), or add the missing sources to the area first ",
+                        "(jeeta.studio.project_materials {project_id, expected_revision, add: [ids]})"
+                    ));
                 }
                 findings.push(finding);
                 continue;

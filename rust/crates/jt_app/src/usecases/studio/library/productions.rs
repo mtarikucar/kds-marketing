@@ -670,16 +670,24 @@ pub(crate) async fn propagate_markers(
                 .depicts
                 .difference(&composite.tags.depicts)
                 .count();
-            if people == 0 && depicts == 0 {
+            // A source judged not publishable makes what was drawn from it the same.
+            let quality = from.tags.quality != Some(jt_studio::Quality::Publishable)
+                && composite.tags.quality == Some(jt_studio::Quality::Publishable);
+            if people == 0 && depicts == 0 && !quality {
                 continue;
             }
             let revision = composite.revision;
-            composite.people.extend(from.people.iter().copied());
-            composite
-                .tags
-                .depicts
-                .extend(from.tags.depicts.iter().copied());
-            composite.share = None;
+            if quality {
+                composite.tags.quality = from.tags.quality;
+            }
+            if people > 0 || depicts > 0 {
+                composite.people.extend(from.people.iter().copied());
+                composite
+                    .tags
+                    .depicts
+                    .extend(from.tags.depicts.iter().copied());
+                composite.share = None;
+            }
             composite.tags_reviewed_by = None;
             composite.revision += 1;
             r.studio_materials()

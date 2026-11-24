@@ -399,7 +399,7 @@ async fn source(
         // Its faces, names and marks (or those of a photo it was drawn from) are not known yet:
         // drawing it would publish what no one checked. Retryable once the analysis is complete.
         return Err(AppError {
-            message: "the material, or one it was drawn from, is not analysed yet; render it once                       the analysis is complete"
+            message: "the material, or one it was drawn from, is not analysed yet; render it once the analysis is complete"
                 .into(),
             details: json!({"field": field, "reason": "source_not_analysed",
                             "material_id": id, "unanalysed_material_id": behind,
@@ -874,11 +874,9 @@ async fn in_area(
     };
     let p = super::projects::load(r, project_id, None, true).await?;
     let available = super::projects::available_material_ids(r, &p).await?;
-    let missing: Vec<MaterialId> = photos
-        .iter()
-        .map(|m| m.id)
-        .filter(|id| !available.contains(id))
-        .collect();
+    // The photos are the content sources; the brand logo is never the area's.
+    let photo_ids: Vec<MaterialId> = photos.iter().map(|m| m.id).collect();
+    let missing = super::projects::missing_from_area(&photo_ids, &available);
     if !missing.is_empty() {
         return Err(AppError {
             message: "every photo of an area's image is one of the area's materials; add them to \
@@ -1045,6 +1043,7 @@ async fn store(
             variant: t.variant.to_owned(),
             frame: t.frame,
             sources: sources_ids.clone(),
+            logo: logo.as_ref().map(|m| m.id),
         }),
     };
     if material.validate().is_err() {
