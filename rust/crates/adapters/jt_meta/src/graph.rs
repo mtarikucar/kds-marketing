@@ -350,20 +350,25 @@ impl MetaConnector {
     }
 
     /// GET the media file at `url` (the address Graph names for a media id, on
-    /// `lookaside.fbsbx.com`: the egress allowlist keeps it to Meta's hosts) with `token` as the
-    /// bearer, and its content type and bytes: at most `max_bytes`, else `Permanent` before more
+    /// `lookaside.fbsbx.com`, or a post's image on Meta's media CDN: the egress allowlist keeps
+    /// it to Meta's hosts) with `token` as the bearer (none for the CDN, whose addresses are
+    /// signed), and its content type and bytes: at most `max_bytes`, else `Permanent` before more
     /// is read. A redirect is not followed. No error quotes the bytes.
     pub(crate) async fn download(
         &self,
         url: Url,
-        token: &str,
+        token: Option<&str>,
         max_bytes: usize,
     ) -> Result<(Option<String>, Vec<u8>), ConnectorError> {
         let too_large = || ConnectorError::permanent("the media file is too large");
-        let mut response = self
+        let request = self
             .egress
-            .prepare(Method::GET, without_params(&url, &["access_token"]))
-            .bearer(token)
+            .prepare(Method::GET, without_params(&url, &["access_token"]));
+        let request = match token {
+            Some(token) => request.bearer(token),
+            None => request,
+        };
+        let mut response = request
             .send(SCOPE)
             .await
             .map_err(|e| egress_error(e, true))?;

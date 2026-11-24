@@ -6,8 +6,8 @@ use jt_app::ports::connectors::{
     AccountMetrics, AdAccountLimits, AdBudgetWriter, AdCampaignWriter, AdDay, AdInsights, AdLevel,
     AdObjective, AdPlacement, AdSet, AdSetSpec, AdSpec, AdStatus, Asset, CampaignProviderState,
     CampaignSpec, Connector, CreativeSpec, InsightsReader, LeadFormSpec, OAuthApp, OAuthProvider,
-    PostMetrics, PublishReceipt, PublishRequest, PublishResolution, Publisher, RecentPost,
-    TiktokCreator,
+    OwnPostsPage, OwnPostsQuery, PostMetrics, PublishReceipt, PublishRequest, PublishResolution,
+    Publisher, RecentPost, TiktokCreator,
 };
 use jt_connector::{ConnectorError, Credential, ProbeResult, Provider};
 use serde_json::Value;
@@ -135,6 +135,20 @@ impl InsightsReader for TiktokConnector {
         limit: u32,
     ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
         insights::recent_posts(self, cred, public, limit)
+            .await
+            .map(Some)
+    }
+
+    /// Always `Some`: a page of the account's own public videos (`video.list`). TikTok gives a
+    /// video's cover only as a browser address, so no image is read here (`own_post_image` is
+    /// the default `None`).
+    async fn own_posts(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        query: &OwnPostsQuery,
+    ) -> Result<Option<OwnPostsPage>, ConnectorError> {
+        insights::own_posts(self, cred, public, query)
             .await
             .map(Some)
     }

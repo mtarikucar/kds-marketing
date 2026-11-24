@@ -105,6 +105,38 @@ pub(crate) fn to_json<T: Serialize>(value: &T) -> Result<Value, AppError> {
     serde_json::from_slice(&text).map_err(failed)
 }
 
+/// The key of a tool output under which an image travels to the handler
+/// ([`crate::handler`] takes it out of the structured answer and adds it as image content). No
+/// use case's output has a key of this shape.
+pub(crate) const IMAGE_KEY: &str = "$image";
+
+/// `facts` with an image (`data`, base64, of type `mime_type`) for the handler to hand over as
+/// MCP image content beside them.
+pub(crate) fn with_image(mut facts: Value, data: String, mime_type: &str) -> Value {
+    if let Some(map) = facts.as_object_mut() {
+        map.insert(
+            IMAGE_KEY.to_owned(),
+            json!({ "data": data, "mime_type": mime_type }),
+        );
+    }
+    facts
+}
+
+/// The answer of a tool that succeeded with `output`: its structured content and its text, and
+/// the image [`with_image`] put in it, as image content (out of the structured answer).
+pub(crate) fn success(mut output: Value) -> rmcp::model::CallToolResult {
+    let image = output.as_object_mut().and_then(|map| map.remove(IMAGE_KEY));
+    let mut result = rmcp::model::CallToolResult::structured(output);
+    if let Some(image) = image
+        && let (Some(data), Some(mime)) = (image["data"].as_str(), image["mime_type"].as_str())
+    {
+        result
+            .content
+            .push(rmcp::model::ContentBlock::image(data, mime));
+    }
+    result
+}
+
 /// `{ key: items }`, for a tool whose output is a list.
 pub(crate) fn listed<T: Serialize>(key: &str, items: &[T]) -> Result<Value, AppError> {
     Ok(json!({ key: to_json(&items)? }))
@@ -127,6 +159,25 @@ pub(crate) fn permission_keys_schema(_: &mut schemars::SchemaGenerator) -> Schem
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_image_goes_out_as_image_content_not_as_structured_text() {
+        let out = success(with_image(
+            json!({"post_id": "1"}),
+            "aGk=".into(),
+            "image/png",
+        ));
+        assert_eq!(out.structured_content, Some(json!({"post_id": "1"})));
+        assert_eq!(out.content.len(), 2);
+        let wire = serde_json::to_value(&out.content).unwrap();
+        assert_eq!(wire[1]["type"], "image");
+        assert_eq!(wire[1]["data"], "aGk=");
+        assert_eq!(wire[1]["mimeType"], "image/png");
+        assert!(!wire[0]["text"].as_str().unwrap().contains("aGk="));
+        // Without an image, the answer is the structured output alone.
+        let plain = success(json!({"ok": true}));
+        assert_eq!(plain.content.len(), 1);
+    }
 
     #[test]
     fn outputs_read_as_the_panel_writes_them() {

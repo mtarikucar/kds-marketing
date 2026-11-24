@@ -18,6 +18,8 @@ const TOOLS: &[&str] = &[
     "jeeta.social.versions_waiting",
     "jeeta.social.accounts_list",
     "jeeta.social.account_get",
+    "jeeta.social.own_posts",
+    "jeeta.social.own_post_image",
     "jeeta.studio.adsets_list",
     "jeeta.studio.adset_bind",
     "jeeta.studio.budget_move",

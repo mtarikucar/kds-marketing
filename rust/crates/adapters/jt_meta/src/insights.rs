@@ -84,7 +84,7 @@ fn reader<'a>(cred: &MetaCred<'a>, public: &Value) -> Result<(bool, Reader<'a>),
 }
 
 /// `{name: value}` of an insights answer's `data` (each metric's last whole-number value).
-fn metrics_of(answer: &Value) -> PostMetrics {
+pub(crate) fn metrics_of(answer: &Value) -> PostMetrics {
     let mut out = PostMetrics::default();
     for row in answer["data"].as_array().into_iter().flatten() {
         let Some(name) = row["name"].as_str() else {

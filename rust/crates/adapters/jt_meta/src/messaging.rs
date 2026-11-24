@@ -267,7 +267,7 @@ pub(crate) async fn fetch_media(
     let url = text(&answer["url"]).ok_or_else(|| missing("media address"))?;
     let url = Url::parse(&url)
         .map_err(|_| ConnectorError::permanent("the media file's address is unreadable"))?;
-    let (kind, data) = connector.download(url, token, max_bytes).await?;
+    let (kind, data) = connector.download(url, Some(token), max_bytes).await?;
     let mime = text(&answer["mime_type"]).or(kind).unwrap_or_default();
     Ok(Some(Media { mime, data }))
 }

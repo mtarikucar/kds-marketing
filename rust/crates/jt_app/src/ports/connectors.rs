@@ -632,6 +632,71 @@ pub struct RecentPost {
     pub metrics: BTreeMap<String, i64>,
 }
 
+/// What one of an account's own posts is, as its platform published it ([`OwnPost::kind`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnPostKind {
+    Image,
+    Carousel,
+    Video,
+    Reel,
+}
+
+/// One of an account's own posts as its platform shows it, whoever posted it and whenever,
+/// before the account was connected included ([`InsightsReader::own_posts`]). Read on demand,
+/// never stored.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnPost {
+    /// The platform's id of the post.
+    pub id: String,
+    /// Its public page (a browser URL, never fetched).
+    pub permalink: Option<Url>,
+    pub kind: OwnPostKind,
+    /// Its caption as published; `None` when it has none.
+    pub caption: Option<String>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub published_at: Option<OffsetDateTime>,
+    /// How many images or videos a carousel holds; `None` for another kind.
+    pub items: Option<u32>,
+    /// Its counters under the port's names ([`OWN_POST_METRICS`]); a counter the platform did
+    /// not give is absent, never zero.
+    pub metrics: BTreeMap<String, i64>,
+}
+
+/// The counters an [`OwnPost`] may carry, by the port's own names: `likes`, `comments`, `reach`,
+/// `saves`, `shares` and `views` (plays of a video).
+pub const OWN_POST_METRICS: &[&str] = &["likes", "comments", "reach", "saves", "shares", "views"];
+
+/// Why a counter of [`OWN_POST_METRICS`] is missing from a whole page of own posts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unavailable {
+    /// The grant lacks the permission that reads it (a reconnection asks for it).
+    PermissionNotGranted,
+    /// The platform gives no such counter for these posts (or refused the read of it).
+    NotGiven,
+}
+
+/// What [`InsightsReader::own_posts`] asks for: at most `limit` posts (the provider may give
+/// fewer), after `cursor` (a page's [`OwnPostsPage::next_cursor`], opaque), and whether the
+/// counters that need the insights permission are asked for at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnPostsQuery {
+    pub limit: u32,
+    pub cursor: Option<String>,
+    pub insights: bool,
+}
+
+/// One page of an account's own posts, newest first: the posts, the cursor of the next page
+/// (`None` on the last), and each counter of [`OWN_POST_METRICS`] the page carries for no post,
+/// with why.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnPostsPage {
+    pub posts: Vec<OwnPost>,
+    pub next_cursor: Option<String>,
+    pub unavailable: BTreeMap<String, Unavailable>,
+}
+
 /// An ad set and its budget, in the ad account's currency's minor units.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdSet {
@@ -1339,6 +1404,32 @@ pub trait InsightsReader: Send + Sync {
         limit: u32,
     ) -> Result<Option<Vec<RecentPost>>, ConnectorError> {
         let _ = (cred, public, limit);
+        Ok(None)
+    }
+    /// One page of the account's own posts as the platform published them (see [`OwnPostsPage`]),
+    /// for a provider and a kind that list them. `None`, the default, for one that does not.
+    async fn own_posts(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        query: &OwnPostsQuery,
+    ) -> Result<Option<OwnPostsPage>, ConnectorError> {
+        let _ = (cred, public, query);
+        Ok(None)
+    }
+    /// The image of the account's own post `post_id` (of a carousel, its item `index`, from 0;
+    /// of a video, its cover), read now from the platform, in memory: at most `max_bytes`, else
+    /// an error before more is read. `Ok(None)`, the default, for a provider or a kind that gives
+    /// none; `Permanent` for a post or an item that has no image. Never stored or logged.
+    async fn own_post_image(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        post_id: &str,
+        index: u32,
+        max_bytes: usize,
+    ) -> Result<Option<Media>, ConnectorError> {
+        let _ = (cred, public, post_id, index, max_bytes);
         Ok(None)
     }
 }

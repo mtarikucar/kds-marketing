@@ -238,6 +238,7 @@ async fn seed_in(
                     .map(|c| c.id)
             });
             let proposal = Proposal {
+                card_key: None,
                 id: KnowledgeProposalId(stable_id(ws, &format!("knowledge.proposal:seed:{n}"))),
                 kind: p.kind,
                 card_id,

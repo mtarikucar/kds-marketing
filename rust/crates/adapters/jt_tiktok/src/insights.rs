@@ -2,11 +2,15 @@
 //! <https://developers.tiktok.com/doc/tiktok-api-v2-video-query>, scope `video.list`), of the
 //! account (`GET /v2/user/info/`, scope `user.info.stats`), and the account's recent public
 //! videos (`POST /v2/video/list/`, <https://developers.tiktok.com/doc/tiktok-api-v2-video-list>,
-//! scope `video.list`); see the crate docs, "Counters".
+//! scope `video.list`), page by page for the account's own posts (`cursor`, `has_more`); see the
+//! crate docs, "Counters".
 
 use std::collections::BTreeMap;
 
-use jt_app::ports::connectors::{AccountMetrics, PostMetrics, RecentPost};
+use jt_app::ports::connectors::{
+    AccountMetrics, OwnPost, OwnPostKind, OwnPostsPage, OwnPostsQuery, PostMetrics, RecentPost,
+    Unavailable,
+};
 use jt_connector::{ConnectorError, Credential};
 use jt_outbound::Method;
 use serde_json::{Value, json};
@@ -155,6 +159,99 @@ pub(crate) async fn recent_posts(
         .as_array()
         .ok_or_else(|| missing("video list"))?;
     Ok(videos.iter().filter_map(listed).collect())
+}
+
+/// The port's name of each of TikTok's post counters ([`POST_METRICS`]).
+const OWN_NAMES: &[(&str, &str)] = &[
+    ("like_count", "likes"),
+    ("comment_count", "comments"),
+    ("share_count", "shares"),
+    ("view_count", "views"),
+];
+
+/// One page of the account's own public videos, newest first: `POST /v2/video/list/
+/// {max_count, cursor}` with the listed fields and counters, at most [`MAX_LISTED_VIDEOS`] a
+/// page. TikTok gives no reach and no saves, which the page says. The cursor is TikTok's (a
+/// number, as text); a page whose `has_more` is false has none.
+pub(crate) async fn own_posts(
+    connector: &TiktokConnector,
+    cred: &Credential,
+    public: &Value,
+    query: &OwnPostsQuery,
+) -> Result<OwnPostsPage, ConnectorError> {
+    kind_of(public)?;
+    let token = token_of(cred, "list videos")?;
+    let cursor = match &query.cursor {
+        Some(cursor) => Some(
+            cursor
+                .parse::<i64>()
+                .ok()
+                .filter(|c| *c >= 0)
+                .ok_or_else(|| ConnectorError::permanent("not a valid page cursor"))?,
+        ),
+        None => None,
+    };
+    let fields = [LISTED_FIELDS, POST_METRICS].concat().join(",");
+    let url = connector.api_url(&["v2", "video", "list", ""], &[("fields", &fields)]);
+    let mut body = json!({ "max_count": query.limit.clamp(1, MAX_LISTED_VIDEOS) });
+    if let Some(cursor) = cursor {
+        body["cursor"] = json!(cursor);
+    }
+    let answer = connector
+        .call(
+            Method::POST,
+            url,
+            Auth::Bearer(token),
+            &Body::Json(body),
+            Endpoint::Api,
+            Effect::Read,
+        )
+        .await?;
+    let videos = answer["data"]["videos"]
+        .as_array()
+        .ok_or_else(|| missing("video list"))?;
+    let posts: Vec<OwnPost> = videos
+        .iter()
+        .filter_map(|video| {
+            let id = text(&video["id"]).filter(|id| video_id(id).is_ok())?;
+            Some(OwnPost {
+                id,
+                permalink: https(&video["share_url"]),
+                kind: OwnPostKind::Video,
+                caption: words(&video["video_description"])
+                    .or_else(|| words(&video["title"]))
+                    .map(str::to_owned),
+                published_at: video["create_time"]
+                    .as_i64()
+                    .and_then(|s| OffsetDateTime::from_unix_timestamp(s).ok()),
+                items: None,
+                metrics: OWN_NAMES
+                    .iter()
+                    .filter_map(|(field, name)| {
+                        video[*field].as_i64().map(|v| ((*name).to_owned(), v))
+                    })
+                    .collect(),
+            })
+        })
+        .collect();
+    let next_cursor = (answer["data"]["has_more"].as_bool() == Some(true))
+        .then(|| answer["data"]["cursor"].as_i64())
+        .flatten()
+        .map(|c| c.to_string());
+    let mut unavailable = BTreeMap::new();
+    for name in ["reach", "saves"] {
+        unavailable.insert(name.to_owned(), Unavailable::NotGiven);
+    }
+    for (_, name) in OWN_NAMES {
+        if !posts.is_empty() && posts.iter().all(|p| !p.metrics.contains_key(*name)) {
+            unavailable.insert((*name).to_owned(), Unavailable::NotGiven);
+        }
+    }
+    Ok(OwnPostsPage {
+        posts,
+        next_cursor,
+        unavailable,
+    })
 }
 
 /// The counters of the account itself.

@@ -113,6 +113,8 @@ const EXEMPT_IDS: &[&str] = &[
     "social.accounts_list",
     "social.account_get",
     "social.account_pause",
+    "social.own_posts",
+    "social.own_post_image",
     // Reading a campaign, a person's own decisions that need no strategy, the agent's hold and
     // a stop are exempt; whatever commits or spends is gated.
     "ads.campaigns_list",

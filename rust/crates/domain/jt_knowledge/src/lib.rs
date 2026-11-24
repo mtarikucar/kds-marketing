@@ -33,8 +33,8 @@ mod text;
 
 pub use card::{
     Attachment, AttachmentInput, Card, KnowledgeCardId, PAST_CONVERSATIONS, SEED_CARDS,
-    feeds_posting, feeds_prospecting, is_empty, is_knowledge_mime, valid_key, validate_body,
-    validate_link, validate_position, validate_title,
+    WELL_KNOWN_CARDS, feeds_posting, feeds_prospecting, is_empty, is_knowledge_mime, valid_key,
+    validate_body, validate_link, validate_position, validate_title, well_known_title,
 };
 pub use limits::*;
 pub use note::{
@@ -43,7 +43,7 @@ pub use note::{
 };
 pub use proposal::{
     BACKFILL_COMPONENT, KnowledgeProposalId, Proposal, ProposalDraft, ProposalKind, ProposalStatus,
-    Proposer, RESYNC_COMPONENT, validate_proposal,
+    Proposer, RESYNC_COMPONENT, validate_card_key, validate_proposal,
 };
 pub use revision::{Cause, KnowledgeRevisionId, Revision, Subject};
 pub use settings::{

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::Invalid;
-use crate::card::{KnowledgeCardId, validate_title};
+use crate::card::{KnowledgeCardId, validate_title, well_known_title};
 use crate::limits::{
     MAX_CARD_BODY_CHARS, MAX_GOAL_CHARS, MAX_PROHIBITION_CHARS, MAX_PROPOSAL_REASON_CHARS,
 };
@@ -115,6 +115,10 @@ pub struct Proposal {
     /// The card a `card_edit` rewrites.
     #[serde(default)]
     pub card_id: Option<KnowledgeCardId>,
+    /// The key of the well-known card a `card_new` makes ([`crate::WELL_KNOWN_CARDS`]); none
+    /// for an owner's own card.
+    #[serde(default)]
+    pub card_key: Option<String>,
     #[serde(default)]
     pub title: Option<String>,
     pub body: String,
@@ -149,6 +153,33 @@ impl Proposal {
     pub fn is_pending(&self) -> bool {
         self.status == ProposalStatus::Pending
     }
+}
+
+/// The well-known card key a proposal names, checked for its kind: only a `card_new` names one,
+/// and only a key of [`crate::WELL_KNOWN_CARDS`] (`not_allowed` naming `card_key` otherwise).
+pub fn validate_card_key(
+    kind: ProposalKind,
+    card_key: Option<&str>,
+) -> Result<Option<String>, Invalid> {
+    let Some(raw) = card_key else {
+        return Ok(None);
+    };
+    let key = raw.trim();
+    if kind != ProposalKind::CardNew {
+        return Err(Invalid::new(
+            "card_key",
+            "not_allowed",
+            format!("a {} proposal has no card_key", kind.key()),
+        ));
+    }
+    if well_known_title(key).is_none() {
+        return Err(Invalid::new(
+            "card_key",
+            "not_allowed",
+            "card_key names a well-known card that is not seeded (visual_style)",
+        ));
+    }
+    Ok(Some(key.to_owned()))
 }
 
 /// A proposal's text, checked for its kind ([`validate_proposal`]).

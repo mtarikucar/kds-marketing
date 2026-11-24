@@ -382,7 +382,7 @@ const MAX_POLL_MEDIA: usize = 50;
 const MAX_POLL_COMMENT_PAGES: usize = 25;
 
 /// A Graph time: RFC 3339, or Graph's `2026-10-20T10:00:00+0000` (no colon in the offset).
-fn graph_time(value: &Value) -> Option<OffsetDateTime> {
+pub(crate) fn graph_time(value: &Value) -> Option<OffsetDateTime> {
     let text = value.as_str().filter(|t| t.is_ascii())?;
     if let Ok(at) = OffsetDateTime::parse(text, &Rfc3339) {
         return Some(at);

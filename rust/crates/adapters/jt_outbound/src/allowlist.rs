@@ -17,8 +17,27 @@ use crate::fixed_hosts::allow_plain_http;
 pub struct AllowedHost {
     /// The connector that owns the host, matched against `EgressScope::Connector`.
     pub connector: &'static str,
-    /// A hostname or IP literal (IPv6 in brackets), optionally with `:<port>`.
+    /// A hostname or IP literal (IPv6 in brackets), optionally with `:<port>`; or, in the fixed
+    /// tier only, `*.` and a hostname without a port: every name under that one (a provider's
+    /// media CDN, whose hosts are numbered), never the name itself.
     pub host: &'static str,
+}
+
+/// The name under which a wildcard entry (`*.<name>`) allows every name, canonical and with its
+/// leading dot (`.cdninstagram.com`); `None` for an entry that is not one, or whose name is not
+/// a hostname of at least two labels without a port.
+pub(crate) fn wildcard_suffix(raw: &str) -> Option<String> {
+    let name = raw.trim().strip_prefix("*.")?;
+    let (host, port) = split_port(name)?;
+    if port.is_some() {
+        return None;
+    }
+    match Host::parse(host).ok()? {
+        Host::Domain(domain) if domain.contains('.') && !domain.contains('*') => {
+            Some(format!(".{}", domain.to_ascii_lowercase()))
+        }
+        _ => None,
+    }
 }
 
 /// Parses an allowlist entry (`host` or `host:port`) into its canonical form, or `None` when it
@@ -103,6 +122,8 @@ fn is_loopback(host: &Host<&str>) -> bool {
 #[derive(Clone, Debug)]
 pub(crate) struct Allowlist {
     fixed: Arc<HashMap<&'static str, HashSet<String>>>,
+    /// The fixed tier's wildcard entries, per connector: each a name's suffix with its dot.
+    fixed_suffixes: Arc<HashMap<&'static str, Vec<String>>>,
     tenant: Arc<RwLock<HashMap<WorkspaceId, HashSet<String>>>>,
 }
 
@@ -114,7 +135,18 @@ impl Allowlist {
     /// must stop the process at startup rather than silently allow or refuse a provider.
     pub(crate) fn new(fixed: &'static [AllowedHost]) -> Self {
         let mut by_connector: HashMap<&'static str, HashSet<String>> = HashMap::new();
+        let mut suffixes: HashMap<&'static str, Vec<String>> = HashMap::new();
         for entry in fixed {
+            if entry.host.trim().starts_with("*.") {
+                let suffix = wildcard_suffix(entry.host).unwrap_or_else(|| {
+                    panic!(
+                        "fixed egress host {:?} of connector {:?} is not a valid host",
+                        entry.host, entry.connector
+                    )
+                });
+                suffixes.entry(entry.connector).or_default().push(suffix);
+                continue;
+            }
             let host = canonical_entry(entry.host).unwrap_or_else(|| {
                 panic!(
                     "fixed egress host {:?} of connector {:?} is not a valid host",
@@ -128,6 +160,7 @@ impl Allowlist {
         }
         Allowlist {
             fixed: Arc::new(by_connector),
+            fixed_suffixes: Arc::new(suffixes),
             tenant: Arc::default(),
         }
     }
@@ -225,10 +258,17 @@ impl Allowlist {
             return Err(refused());
         }
         let allowed = match scope {
-            EgressScope::Connector(name) => self
-                .fixed
-                .get(name)
-                .is_some_and(|entries| entries_match(entries, &host, url)),
+            EgressScope::Connector(name) => {
+                self.fixed
+                    .get(name)
+                    .is_some_and(|entries| entries_match(entries, &host, url))
+                    || (matches!(parsed, Host::Domain(_))
+                        && self.fixed_suffixes.get(name).is_some_and(|suffixes| {
+                            suffixes
+                                .iter()
+                                .any(|s| host.len() > s.len() && host.ends_with(s.as_str()))
+                        }))
+            }
             EgressScope::Tenant(ws) => self
                 .tenant
                 .read()
@@ -299,10 +339,42 @@ mod tests {
     fn fixed_hosts_table_is_well_formed() {
         for entry in FIXED_HOSTS {
             assert!(!entry.connector.is_empty(), "{entry:?}");
-            assert!(canonical_entry(entry.host).is_some(), "{entry:?}");
+            assert!(
+                canonical_entry(entry.host).is_some() || wildcard_suffix(entry.host).is_some(),
+                "{entry:?}"
+            );
         }
         // Building the fixed tier panics on a bad entry; it must not for the real table.
         Allowlist::new(FIXED_HOSTS);
+    }
+
+    #[test]
+    fn wildcard_entries_name_a_hostname_without_a_port() {
+        assert_eq!(
+            wildcard_suffix("*.CDNInstagram.com").as_deref(),
+            Some(".cdninstagram.com")
+        );
+        for raw in [
+            "cdninstagram.com",
+            "*.",
+            "*.com",
+            "*.cdn.example:443",
+            "*.127.0.0.1",
+            "**.cdn.example",
+            "*.*.cdn.example",
+            "*.cdn.example/x",
+        ] {
+            assert_eq!(wildcard_suffix(raw), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a valid host")]
+    fn bad_wildcard_entry_panics_at_startup() {
+        Allowlist::new(&[AllowedHost {
+            connector: "meta",
+            host: "*.cdn.example:443",
+        }]);
     }
 
     #[test]

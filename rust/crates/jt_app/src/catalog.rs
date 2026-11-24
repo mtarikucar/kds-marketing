@@ -280,6 +280,10 @@ pub static CATALOG: &[UseCase] = &[
     twin("social.accounts_list", Exempt, "jeeta.social.accounts_list", ("GET", "/api/social/accounts"), Read),
     twin("social.account_get", Exempt, "jeeta.social.account_get", ("GET", "/api/social/accounts/{capability_id}"), Read),
     panel_only("social.account_pause", Exempt, ("POST", "/api/social/accounts/{capability_id}/pause"), Write),
+    // A connected account's own posts as its platform published them, read on demand for the
+    // brand scan (docs/operations/brand-scan.md); nothing is stored. Agent reads: no panel route.
+    mcp_only("social.own_posts", Exempt, "jeeta.social.own_posts", Read),
+    mcp_only("social.own_post_image", Exempt, "jeeta.social.own_post_image", Read),
     // Reklam yönetimi (design 2026-11-10 §8). A person's decisions are panel-only; an agent
     // proposes through its tool alone.
     twin("ads.campaigns_list", Exempt, "jeeta.ads.campaigns_list", ("GET", "/api/ads/campaigns"), Read),

@@ -238,6 +238,7 @@ pub(crate) async fn after(
         }) {
             r.knowledge()
                 .insert_proposal(&Proposal {
+                    card_key: None,
                     id: KnowledgeProposalId(deps.ids.uuid()),
                     kind: ProposalKind::CardEdit,
                     card_id: Some(card.id),

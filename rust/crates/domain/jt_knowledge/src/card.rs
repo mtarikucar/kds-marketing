@@ -32,6 +32,20 @@ pub const SEED_CARDS: [(&str, &str); 8] = [
     ("references", "Referanslar"),
 ];
 
+/// The well-known cards that are not seeded: each `(key, title)`. Such a card exists only once
+/// the owner adds an agent's `card_new` proposal that names its key (`Proposal::card_key`); the
+/// agents then find it by its key, whatever the owner renames it to. `visual_style`: the photo
+/// style and the formats that worked, from the brand scan (docs/operations/brand-scan.md).
+pub const WELL_KNOWN_CARDS: [(&str, &str); 1] = [("visual_style", "Görsel stil")];
+
+/// The title of the well-known card of `key` ([`WELL_KNOWN_CARDS`]), if `key` is one.
+pub fn well_known_title(key: &str) -> Option<&'static str> {
+    WELL_KNOWN_CARDS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, title)| *title)
+}
+
 /// The card the answers and notes of an approved strategy's consultation are kept in, after the
 /// seed cards: `(key, title)`.
 pub const PAST_CONVERSATIONS: (&str, &str) = ("past_conversations", "Önceki görüşmeler");

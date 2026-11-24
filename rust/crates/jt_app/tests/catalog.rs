@@ -53,6 +53,8 @@ fn mcp_only_use_cases_have_no_panel_route() {
         mcp_only,
         [
             "ads.campaign_propose",
+            "social.own_posts",
+            "social.own_post_image",
             "studio.material_production_claim",
             "studio.material_production_complete",
             "studio.material_production_fail",
@@ -218,6 +220,8 @@ fn catalog_is_the_release_table() {
         ("social.accounts_list", Some("jeeta.social.accounts_list"), Some(("GET", "/api/social/accounts")), false, Risk::Read),
         ("social.account_get", Some("jeeta.social.account_get"), Some(("GET", "/api/social/accounts/{capability_id}")), false, Risk::Read),
         ("social.account_pause", None, Some(("POST", "/api/social/accounts/{capability_id}/pause")), true, Risk::Write),
+        ("social.own_posts", Some("jeeta.social.own_posts"), None, false, Risk::Read),
+        ("social.own_post_image", Some("jeeta.social.own_post_image"), None, false, Risk::Read),
         ("ads.campaigns_list", Some("jeeta.ads.campaigns_list"), Some(("GET", "/api/ads/campaigns")), false, Risk::Read),
         ("ads.campaign_open", None, Some(("POST", "/api/ads/campaigns")), true, Risk::Spend),
         ("ads.campaign_get", Some("jeeta.ads.campaign_get"), Some(("GET", "/api/ads/campaigns/{campaign_id}")), false, Risk::Read),
