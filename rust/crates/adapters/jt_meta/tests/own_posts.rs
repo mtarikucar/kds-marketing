@@ -592,15 +592,8 @@ async fn the_size_cap_holds_without_a_content_length() {
         std::sync::Arc::new(TestApps::default()),
     );
     mock.set("GET", NODE, single(IG, &format!("http://{cdn}/gif")));
-    let read = |max: usize| {
-        meta.own_post_image(
-            &page_cred(),
-            &public("instagram"),
-            "18000000000000002",
-            0,
-            max,
-        )
-    };
+    let (cred, account) = (page_cred(), public("instagram"));
+    let read = |max: usize| meta.own_post_image(&cred, &account, "18000000000000002", 0, max);
     // Over the cap: refused while it is read, never whole in memory.
     let e = read(4_096).await.unwrap_err();
     assert!(matches!(e, ConnectorError::Permanent { .. }), "{e:?}");
