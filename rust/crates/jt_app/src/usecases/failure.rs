@@ -52,6 +52,26 @@ pub fn provider_code(reason: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
+/// TikTok's code for a direct post an app it has not audited may not make: the code an attempt
+/// stored before `Cause::AppNotAudited` existed quotes in its failure line (filed then as a
+/// permission failure).
+const UNAUDITED_CODE: &str = "unaudited_client_can_only_post_to_private_accounts";
+
+/// The closed category `stored` of a publish attempt as it reads now, given the attempt's failure
+/// line `reason`: as stored, except a `Permission` failure whose line quotes TikTok's unaudited
+/// code, stored before that refusal had its own category, which reads as `AppNotAudited`. Only the
+/// reading changes: history is never rewritten.
+pub fn publish_category(
+    stored: jt_studio::RedactedPublishError,
+    reason: Option<&str>,
+) -> jt_studio::RedactedPublishError {
+    use jt_studio::RedactedPublishError as E;
+    match stored {
+        E::Permission if reason.is_some_and(|r| r.contains(UNAUDITED_CODE)) => E::AppNotAudited,
+        other => other,
+    }
+}
+
 /// The HTTP status a failure line quotes as `HTTP <status>`, if any.
 pub fn http_status(reason: &str) -> Option<u16> {
     let rest = &reason[reason.find("HTTP ")? + 5..];
@@ -101,6 +121,20 @@ mod tests {
             failure_reason(Some(Provider::X), &ConnectorError::throttle(None)),
             "throttle: x"
         );
+    }
+
+    #[test]
+    fn an_unaudited_refusal_stored_as_a_permission_reads_as_its_own_category() {
+        use jt_studio::RedactedPublishError as E;
+        let old = "permission: tiktok: HTTP 403 unaudited_client_can_only_post_to_private_accounts: Please review our integration guidelines";
+        assert_eq!(publish_category(E::Permission, Some(old)), E::AppNotAudited);
+        // A real permission failure, or none quoted, stays one.
+        let scope = "permission: tiktok: HTTP 401 scope_not_authorized: no";
+        assert_eq!(publish_category(E::Permission, Some(scope)), E::Permission);
+        assert_eq!(publish_category(E::Permission, None), E::Permission);
+        // Only a permission failure is read again.
+        assert_eq!(publish_category(E::Permanent, Some(old)), E::Permanent);
+        assert_eq!(publish_category(E::AppNotAudited, None), E::AppNotAudited);
     }
 
     #[test]

@@ -133,9 +133,9 @@ pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
 /// business-recipient basis. Turned on only after the public unsubscribe links are deployed and
 /// the owner's lawyer answered.
 pub const OUTREACH_ENABLED: &str = "JEETA_OUTREACH_ENABLED";
-/// The platform switch for TikTok videos sent as `PULL_FROM_URL`: `1` or `true` turns it on,
-/// anything else unset or `0`/`false` keeps it off (the default, videos uploaded as
-/// `FILE_UPLOAD`). Turned on only once the file store's public host (`JEETA_PUBLIC_BASE_URL`'s)
+/// The platform switch for TikTok videos sent as `PULL_FROM_URL`: `1` or `true` turns it on;
+/// unset, blank, `0` or `false` keeps it off (the default, videos uploaded as `FILE_UPLOAD`); any
+/// other value is a configuration error and the server does not start. Turned on only once the file store's public host (`JEETA_PUBLIC_BASE_URL`'s)
 /// is verified for the TikTok app in TikTok's developer portal (`docs/operations/tiktok.md` §7).
 pub const TIKTOK_VIDEO_PULL: &str = "JEETA_TIKTOK_VIDEO_PULL";
 /// The platform's Claude API key, for the inbox's automatic replies (`usecases::inbox::autoreply`,

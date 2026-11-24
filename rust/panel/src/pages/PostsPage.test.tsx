@@ -428,16 +428,26 @@ describe('a post that did not go out', () => {
   });
 
   it('says TikTok has not audited the app, offers no reconnect and prepares it again', async () => {
-    const row = postRow('slot:f5', { title: 'Gitmeyen', status: 'failed', waits: [wait('failed', { reason: 'app_not_audited', kind: 'tiktok', recovered: false })], actions: { redo: { project_id: 'area-1', package_revision: 2 }, acknowledge: { slot_id: 'f5', expected_revision: 1 } } });
+    const row = postRow('slot:f5', { title: 'Gitmeyen', status: 'failed', waits: [wait('failed', { reason: 'app_not_audited', kind: 'tiktok', recovered: false, drafts: true })], actions: { redo: { project_id: 'area-1', package_revision: 2 }, acknowledge: { slot_id: 'f5', expected_revision: 1 } } });
     open('/posts?slot=f5', postsOut({ rows: [row] }));
     const p = await panel();
     expect(await within(p).findByTestId('wait-sentence')).toHaveTextContent(
-      "TikTok bu paylaşımı almadı: Jeeta'nın TikTok uygulaması henüz denetlenmediği için herkese açık hesaba doğrudan paylaşım yapılamıyor; yeniden hazırlatıp TikTok'a taslak olarak gönderebilirsin.",
+      "TikTok bu paylaşımı almadı: Jeeta'nın TikTok uygulaması henüz denetlenmediği için herkese açık hesaba doğrudan paylaşım yapılamıyor; yeniden hazırlatıp TikTok'a taslak olarak göndermeyi dene.",
     );
     expect(within(p).queryByText(/bağlantı yenilendi/)).not.toBeInTheDocument();
     expect(within(p).queryByRole('link', { name: P.actions.reconnect })).not.toBeInTheDocument();
     expect(within(p).queryByText(P.panel.managerReconnect)).not.toBeInTheDocument();
     expect(within(p).getByRole('button', { name: P.actions.retry })).toBeInTheDocument();
+  });
+
+  it('asks to reconnect TikTok first when the connection has no draft grant', async () => {
+    const row = postRow('slot:f6', { title: 'Gitmeyen', status: 'failed', waits: [wait('failed', { reason: 'app_not_audited', kind: 'tiktok', recovered: false, drafts: false })], actions: { redo: { project_id: 'area-1', package_revision: 2 }, reconnect: 'cap-tt' } });
+    open('/posts?slot=f6', postsOut({ rows: [row] }));
+    const p = await panel();
+    expect(await within(p).findByTestId('wait-sentence')).toHaveTextContent(
+      "TikTok bu paylaşımı almadı: Jeeta'nın TikTok uygulaması henüz denetlenmediği için herkese açık hesaba doğrudan paylaşım yapılamıyor; taslak izni için önce TikTok'u yeniden bağla, sonra yeniden hazırlatıp taslak olarak göndermeyi dene.",
+    );
+    expect(within(p).getByRole('link', { name: P.actions.reconnect })).toHaveAttribute('href', '/connect?capability=cap-tt');
   });
 
   it('says a renewed connection and offers to prepare it again', async () => {

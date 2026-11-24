@@ -945,7 +945,12 @@ async fn an_unaudited_app_is_its_own_failure_and_never_asks_to_reconnect() {
         .iter()
         .find(|b| b.reason == "publish_app_not_audited")
         .expect("its own blocker");
-    assert_eq!(blocker.next_action.as_deref(), Some("send_as_tiktok_draft"));
+    // This account was never granted drafts: TikTok is reconnected for them first (the TikTok
+    // screen's tests cover `send_as_tiktok_draft`).
+    assert_eq!(
+        blocker.next_action.as_deref(),
+        Some("reconnect_for_tiktok_drafts")
+    );
     assert!(
         p.blockers
             .iter()

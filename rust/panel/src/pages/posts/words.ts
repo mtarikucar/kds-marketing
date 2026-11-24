@@ -10,6 +10,7 @@ import {
   type SubState,
   type Wait,
   type WaitCode,
+  needsDraftGrant,
 } from '@/api/postsPage';
 import { wakeTime } from '@/lib/wake';
 import { findingText } from '../materials/MaterialsShared';
@@ -180,6 +181,7 @@ export function waitSentence(t: TFunction, wait: Wait, channel: ChannelRef | nul
         : t(`postsPage.waits.${wait.code}.plain`);
     case 'failed':
       if (f.recovered && (f.reason === 'auth' || f.reason === 'permission')) return t('postsPage.waits.failed.recovered', { channel: platform });
+      if (needsDraftGrant(f)) return t('postsPage.waits.failed.sentence', { channel: platform, reason: t('postsPage.reasons.app_not_audited_reconnect') });
       return t('postsPage.waits.failed.sentence', { channel: platform, reason: failReason(t, f.reason) });
     case 'no_account_for_platform':
     case 'media':

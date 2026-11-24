@@ -314,6 +314,25 @@ impl TiktokConnector {
         effect: Effect,
         taken: &[&str],
     ) -> Result<Value, ConnectorError> {
+        self.call_hiding(method, url, auth, body, endpoint, effect, taken, &[])
+            .await
+    }
+
+    /// [`TiktokConnector::call_taking`], also taking `hidden` out of any provider text quoted in
+    /// an error: a pulled medium's signed URL and its parts ([`url_secrets`]), which the body
+    /// carries and TikTok's message might quote.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn call_hiding(
+        &self,
+        method: Method,
+        url: Url,
+        auth: Auth<'_>,
+        body: &Body<'_>,
+        endpoint: Endpoint,
+        effect: Effect,
+        taken: &[&str],
+        hidden: &[&str],
+    ) -> Result<Value, ConnectorError> {
         let attempts = if effect == Effect::Read {
             READ_ATTEMPTS.max(1)
         } else {
@@ -323,6 +342,7 @@ impl TiktokConnector {
         if let Auth::Bearer(token) = auth {
             secrets.push(token);
         }
+        secrets.extend_from_slice(hidden);
         let mut attempt = 1;
         loop {
             let mut request = self

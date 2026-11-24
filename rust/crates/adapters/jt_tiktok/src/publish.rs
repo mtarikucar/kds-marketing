@@ -547,7 +547,7 @@ async fn post_pulled_video(
         "source_info": pull_from_url(url),
     });
     let init = connector.api_url(&["v2", "post", "publish", "video", "init", ""], &[]);
-    init_pulled(connector, token, init, body).await
+    init_pulled(connector, token, init, body, url).await
 }
 
 /// A video draft TikTok pulls from `url`: `POST /v2/post/publish/inbox/video/init/` with the
@@ -562,27 +562,47 @@ async fn draft_pulled_video(
         &["v2", "post", "publish", "inbox", "video", "init", ""],
         &[],
     );
-    init_pulled(connector, token, init, body).await
+    init_pulled(connector, token, init, body, url).await
 }
+
+/// The parts of signed media URLs (`parts`, [`crate::client::url_secrets`]) taken out of a quoted
+/// reason: those of at least [`MIN_HIDDEN_CHARS`] characters (the URL, its query, its signature,
+/// its ids and expiry), not a short value that would mask ordinary words.
+fn hidden_parts(parts: &[String]) -> Vec<&str> {
+    parts
+        .iter()
+        .map(String::as_str)
+        .filter(|p| p.chars().count() >= MIN_HIDDEN_CHARS)
+        .collect()
+}
+
+/// The shortest part of a signed media URL taken out of a quoted reason.
+const MIN_HIDDEN_CHARS: usize = 8;
 
 /// A pulled video's init at `init` with `body`, sent once: TikTok starts downloading the video
 /// when it accepts the init and posts it by itself once it has it, so the init may post
 /// (`Commit`: a lost answer is `Unknown`, never sent again, and never followed by an upload of the
-/// same video). A refused init posted nothing.
+/// same video). A refused init posted nothing. The video's signed URL is taken out of any reason
+/// quoting TikTok's message.
 async fn init_pulled(
     connector: &TiktokConnector,
     token: &str,
     init: Url,
     body: Value,
+    video: &Url,
 ) -> Result<String, ConnectorError> {
+    let owned = crate::client::url_secrets(video);
+    let hidden = hidden_parts(&owned);
     let answer = connector
-        .call(
+        .call_hiding(
             Method::POST,
             init,
             Auth::Bearer(token),
             &Body::Json(body),
             Endpoint::Api,
             Effect::Commit,
+            &[],
+            &hidden,
         )
         .await?;
     text(&answer["data"]["publish_id"])
@@ -720,14 +740,19 @@ async fn init_photos(
         },
     });
     let url = connector.api_url(&["v2", "post", "publish", "content", "init", ""], &[]);
+    // The photos' signed URLs are taken out of any reason quoting TikTok's message.
+    let owned: Vec<String> = urls.iter().flat_map(crate::client::url_secrets).collect();
+    let hidden = hidden_parts(&owned);
     let answer = connector
-        .call(
+        .call_hiding(
             Method::POST,
             url,
             Auth::Bearer(token),
             &Body::Json(body),
             Endpoint::Api,
             Effect::Commit,
+            &[],
+            &hidden,
         )
         .await?;
     text(&answer["data"]["publish_id"])
@@ -789,13 +814,19 @@ pub(crate) async fn resolve(
             url: None,
         }),
         "FAILED" => {
+            // TikTok's `fail_reason` is one of its codes; a URL in it (a pulled medium's signed
+            // one) is never kept.
             let why: String = words(&data["fail_reason"])
                 .unwrap_or("TikTok gave no reason")
+                .split_whitespace()
+                .map(|w| if w.contains("://") { "<url>" } else { w })
+                .collect::<Vec<_>>()
+                .join(" ")
                 .chars()
                 .take(120)
                 .collect();
             let reason = crate::client::scrub(&format!("publish failed: {why}"), &[token]);
-            PublishResolution::Failed(match why.as_str() {
+            PublishResolution::Failed(match why.split_whitespace().next().unwrap_or_default() {
                 "auth_removed" => ConnectorError::auth(reason),
                 // TikTok could not download the media from its URL within its hour: the file
                 // server or its URL, not the content. Nothing was posted.

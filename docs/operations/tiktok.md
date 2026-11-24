@@ -167,16 +167,26 @@ and the same post fails the same way until the audit passes:
 - the attempt's evidence is `app_not_audited`, the ledger's `studio.publish.failure` carries
   `provider_cause: app_not_audited` beside the failure line;
 - the pending work's blocker is `publish_app_not_audited` with `next_action: send_as_tiktok_draft`
-  (never `reconnect_capability`);
+  (never `reconnect_capability`), or `reconnect_for_tiktok_drafts` when the connection lacks the
+  draft grant (`video.upload`, a connection made before drafts existed);
 - Paylaşımlar says, in one sentence, that TikTok has not audited Jeeta's app yet so it cannot post
-  directly to a public account, and that the post can be prepared again and sent to TikTok as a
-  draft; its action is the usual "Tekrar hazırlat", never a reconnect;
-- the next posting screen of that account suggests "Send to TikTok as a draft" (it is selected,
-  with one line saying why) while the account's latest post TikTok answered was refused this way;
-  the human still chooses, and a post that went out since ends the suggestion.
+  directly to a public account, and to have it prepared again and try sending it to TikTok as a
+  draft; its action is the usual "Tekrar hazırlat". Without the draft grant it says to reconnect
+  TikTok first, and its action is "Yeniden bağla";
+- the account's posting screens suggest "Send to TikTok as a draft" (it is selected, with one line
+  saying why) while the latest **direct** post TikTok answered for the account was refused this way:
+  a draft that went out, or a direct post that failed for another reason, does not end it; only a
+  direct post that went out does. The human still chooses;
+- a post that failed before this release is stored as a `permission` failure; its failure line
+  quotes TikTok's code, so it reads as `app_not_audited` everywhere (nothing stored is rewritten).
+
+**Deploy forward only.** The stored evidence category is read strictly: once a release with this
+change has stored `app_not_audited` or `media_unfetched`, an earlier binary cannot read that
+workspace's publish attempts. Do not roll back past it; fix forward.
 
 TikTok's pages state the restriction for Direct Post only; a draft (the upload to the creator's
-inbox) is not documented to be refused this way, but TikTok does not confirm it either.
+inbox) is not documented to be refused this way, but TikTok does not confirm it either: hence
+"try" in the owner's words.
 
 To demonstrate posting, make the test account private in TikTok for the session (its privacy
 settings, "Private account") and public again afterwards.
@@ -219,6 +229,10 @@ How a pulled video can fail, and what Jeeta does (never sent again by itself, se
   could not download the media and can have it prepared again.
 - An accepted init whose answer is lost is `Unknown` (TikTok may be downloading it): never sent
   again, never followed by an upload.
+
+The signed URL is a credential for 24 hours: it never reaches a stored reason. The adapter takes
+the URL and its parts (query, signature, long path segments) out of any TikTok message it quotes
+from an init (videos and photos), and a status's `fail_reason` keeps no word that is a URL.
 
 A refused pull is **not** retried as `FILE_UPLOAD`: after an accepted init TikTok may still post the
 pulled video, so a second send could post twice; and an unverified URL means the switch is on too

@@ -185,6 +185,12 @@ pub(crate) async fn pending_in(
         }
         let target = ApprovalTarget::Slot(s.id);
         let attempts = r.studio().slot_evidence(s.id).await?.0;
+        let cap = r
+            .capabilities()
+            .find(s.capability_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("capability"))?;
+        let drafts = super::tiktok::drafts_granted(&cap);
         for a in &attempts {
             let category = match a.outcome() {
                 Some(
@@ -214,6 +220,7 @@ pub(crate) async fn pending_in(
                 _ => None,
             };
             if let Some(e) = category {
+                let e = crate::usecases::failure::publish_category(e, a.failure_reason());
                 let reason = serde_json::to_value(e)?
                     .as_str()
                     .unwrap_or("unknown")
@@ -222,7 +229,7 @@ pub(crate) async fn pending_in(
                     details: None,
                     target,
                     reason: format!("publish_{reason}"),
-                    next_action: Some(publish_next_action(e).into()),
+                    next_action: Some(publish_next_action(e, drafts).into()),
                 });
             }
         }
@@ -232,11 +239,6 @@ pub(crate) async fn pending_in(
             .get_arm(s.chain.arm_id)
             .await?
             .ok_or_else(|| AppError::not_found("arm"))?;
-        let cap = r
-            .capabilities()
-            .find(s.capability_id)
-            .await?
-            .ok_or_else(|| AppError::not_found("capability"))?;
 
         if control.is_braked(arm.key.lane) {
             out.blockers.push(Blocker {
@@ -569,11 +571,17 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
 /// same way until the audit passes); media the provider could not fetch is the file server's or
 /// its URL verification's to check; anything else is reviewed for a duplicate before it is sent
 /// again.
-pub(crate) fn publish_next_action(e: jt_studio::RedactedPublishError) -> &'static str {
+/// Without the draft grant (`drafts`, a connection made before drafts existed), an unaudited
+/// refusal first asks for a reconnection that grants it.
+pub(crate) fn publish_next_action(
+    e: jt_studio::RedactedPublishError,
+    drafts: bool,
+) -> &'static str {
     use jt_studio::RedactedPublishError as E;
     match e {
         E::Auth | E::Permission => "reconnect_capability",
-        E::AppNotAudited => "send_as_tiktok_draft",
+        E::AppNotAudited if drafts => "send_as_tiktok_draft",
+        E::AppNotAudited => "reconnect_for_tiktok_drafts",
         E::MediaUnfetched => "check_media_url_verification",
         _ => "review_publication_duplicate_risk",
     }

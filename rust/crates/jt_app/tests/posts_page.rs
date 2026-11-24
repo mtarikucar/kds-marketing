@@ -1503,12 +1503,30 @@ async fn failed_with(w: &World, key: &str, category: RedactedPublishError) -> Sl
 async fn a_post_refused_by_an_unaudited_app_is_told_as_such_not_as_a_reconnect() {
     let w = page_world().await;
     let slot = failed_with(&w, "req-a", RedactedPublishError::AppNotAudited).await;
+    // Without the draft grant, TikTok is reconnected first (drafts need `video.upload`).
     let page = read(&w, &w.ctx, json!({})).await;
     let r = row(&page, &format!("slot:{}", slot.id));
     assert_eq!(r.status, RowStatus::Failed);
     assert_eq!(r.waits[0].code, WaitCode::Failed);
     assert_eq!(r.waits[0].facts["reason"], "app_not_audited");
     assert_eq!(r.waits[0].facts["recovered"], false);
+    assert_eq!(r.waits[0].facts["drafts"], false);
+    assert_eq!(r.actions.reconnect, Some(slot.capability_id));
+    // With it: no reconnect, prepared again.
+    w.uow.edit(|s| {
+        for c in s
+            .capabilities
+            .iter_mut()
+            .filter(|c| c.capability.id == slot.capability_id)
+        {
+            c.capability.connector_public["access"]["scopes"] =
+                json!(["video.publish", "video.upload"]);
+        }
+    });
+    let page = read(&w, &w.ctx, json!({})).await;
+    let r = row(&page, &format!("slot:{}", slot.id));
+    assert_eq!(r.waits[0].facts["reason"], "app_not_audited");
+    assert_eq!(r.waits[0].facts["drafts"], true);
     assert!(r.actions.reconnect.is_none(), "{:?}", r.actions);
     assert!(r.actions.redo.is_some(), "prepared again: {:?}", r.actions);
 

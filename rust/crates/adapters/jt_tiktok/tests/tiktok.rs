@@ -1490,6 +1490,53 @@ async fn a_refused_pull_is_its_own_reason_and_is_never_uploaded_instead() {
     assert_eq!(r.mock.requests("POST", VIDEO_INIT).len(), 1);
     assert!(r.mock.requests("PUT", UPLOAD).is_empty());
     assert!(!format!("{e} {e:?}").contains("sig-SECRET-0"));
+    // A message quoting the signed URL keeps none of it.
+    r.mock.set(
+        "POST",
+        VIDEO_INIT,
+        api_error(
+            400,
+            "invalid_param",
+            &format!("cannot read video_url {VIDEO_URL}"),
+        ),
+    );
+    let e =
+        r.tt.publish(&cred(), &public(), &pulled_video_post("x"))
+            .await
+            .unwrap_err();
+    let text = format!("{e} {e:?}");
+    assert!(
+        !text.contains("sig-SECRET-0") && !text.contains("signature="),
+        "{text}"
+    );
+    r.mock.set(
+        "POST",
+        CONTENT_INIT,
+        api_error(
+            400,
+            "invalid_param",
+            "cannot read https://media.jeeta.test/p/0.jpg",
+        ),
+    );
+    let e =
+        r.tt.publish(&cred(), &public(), &photo_post("x", 1))
+            .await
+            .unwrap_err();
+    assert!(!format!("{e}").contains("media.jeeta.test/p/0.jpg"), "{e}");
+    r.mock.set(
+        "POST",
+        STATUS,
+        ok(json!({ "data": { "status": "FAILED", "fail_reason": format!("video_pull_failed {VIDEO_URL}") }, "error": { "code": "ok" } })),
+    );
+    let Some(PublishResolution::Failed(e)) =
+        r.tt.resolve(&cred(), &public(), &receipt(PUBLISH_ID))
+            .await
+            .unwrap()
+    else {
+        panic!("not failed");
+    };
+    assert_eq!(e.reason(), Some("publish failed: video_pull_failed <url>"));
+    assert_eq!(e.cause(), Some(Cause::MediaUnfetched));
 
     // An accepted init may have started the pull: a lost or unreadable answer is `Unknown`,
     // never followed by another init or an upload.
