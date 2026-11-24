@@ -8,7 +8,10 @@ standard goes to a person. This reverses the "no AI inside Jeeta" rule for inbox
 Code: `rust/crates/jt_app/src/usecases/inbox/autoreply.rs` (the use case), `rust/crates/domain/
 jt_inbox/src/autoreply.rs` (the server's rules), `rust/crates/adapters/jt_claude` (the API
 adapter), migrations `0047_inbox_auto_reply`, `0048_inbox_person_latest` (an index for the
-person's-hold lookup) and `0049_owner_notices` (the owner's email notices).
+person's-hold lookup), `0049_owner_notices` (the owner's email notices) and
+`0050_auto_reply_orders` (the orders, below; the use case's part is
+`usecases/inbox/autoreply/orders.rs`, the template rules `jt_inbox/src/order.rs`, the shop's MCP
+client `rust/crates/adapters/jt_mcp_client`).
 
 ## Configuration
 
@@ -137,6 +140,165 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   team managers are told by email (below).
 - While it answers a number's conversations, agents are not offered them in `work.pending`.
 
+## The order and its payment link
+
+With a shop connected, a customer who accepts the automatic quote and gives the order's details
+gets an order draft created in the workspace's own shop and its payment link, without a person.
+Without a shop nothing of this exists: the model is not offered the tool and its request is
+exactly as before.
+
+**What the shop must offer.** An MCP endpoint over streamable HTTP (`https` only), reached with a
+bearer token, with one tool that creates an order draft and answers its payment link (a page on
+the endpoint's own host). The token should be able to do nothing else. Guards on the shop's side
+(order total, line items, a daily cap) apply on top of Jeeta's; an idempotent replay on the order's
+`jeeta_ref` (the same draft for the same reference) is strongly advised, because Jeeta never retries
+a call whose outcome is unknown.
+
+**Connecting it (operator, two calls).** Run them on the server with `curl`, so the shop's token
+never passes through an AI agent's conversation: put the token in a root-only file first
+(`install -m 600 /dev/null /root/shop-token`, then paste it with an editor), and let the shell
+read it. The first call takes an API key with `capabilities.manage`; the second is a person's act
+and takes a signed-in owner's session (an API key or an MCP connection is refused,
+`403 person_only`). Invented example values:
+
+```sh
+KEY=$(cat /root/jeeta-key)      # a jt_live_… key with capabilities.manage, also from a file
+TOKEN=$(cat /root/shop-token)
+curl -s -X POST http://127.0.0.1:8080/api/connectors/credentials \
+  -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d @- <<JSON
+{"kind_key": "shop_mcp", "name": "shop.example.com",
+ "credential": {"kind": "mcp_bearer", "endpoint": "https://shop.example.com/api/mcp", "token": "$TOKEN"}}
+JSON
+unset TOKEN
+```
+
+The answer is the capability (`id`, `status`). The endpoint becomes its external id and its one
+tenant host; the capability is probed at once (`initialize`, `tools/list`): it is `verified` when
+the shop lists its order tool (`call_api_operation` until a template names another). Then the
+owner (or the operator signed in as the owner) sets the template, with the capability's id:
+
+```sh
+curl -s -c /root/jar -X POST http://127.0.0.1:8080/api/auth/login \
+  -H 'Content-Type: application/json' -H 'X-Requested-With: jeeta-panel' \
+  -d '{"email": "owner@example.com", "password": "…"}'
+curl -s -b /root/jar -X PUT http://127.0.0.1:8080/api/connectors/$CAPABILITY_ID/shop-order \
+  -H 'Content-Type: application/json' -H 'X-Requested-With: jeeta-panel' -d '{
+  "enabled": true, "tool": "call_api_operation", "currency": "TRY",
+  "arguments": {"id": "admin.orders.create", "confirm": true,
+    "body": {"customerName": "{{name}}", "email": "{{email}}",
+      "shippingAddress": {"adres": "{{street}}", "mahalle": "{{neighbourhood?}}", "ilce": "{{district}}",
+                          "il": "{{province}}", "postaKodu": "{{postcode?}}", "telefon": "{{phone}}"},
+      "lineItems": [{"description": "{{item}}", "unitPriceTry": "{{amount}}", "quantity": 1}],
+      "paymentMethod": "{{payment_method}}",
+      "attributes": [{"name": "jeeta_ref", "value": "{{ref}}"}]}},
+  "result": {"text_json": true, "ok": "/ok", "url": "/data/payUrl",
+             "reference": "/data/reference", "amount_minor": "/data/amountKurus"}}'
+rm /root/jar
+```
+
+The MCP twin of the first call is `jeeta.connector.set_credentials` (never pass the token through
+it); `jeeta.connector.set_shop_order` exists but refuses an agent, like the route under an API key.
+Template rules: a JSON string that is exactly `"{{var}}"` becomes the value (`amount` a number of
+whole units, `amount_minor` an integer, the rest strings), `"{{var?}}"` drops its key when empty,
+and nothing is interpolated inside a longer string. The variables are `ref` (the order's id,
+`jeeta_ref`), `amount`, `amount_minor`, `currency`, `name`, `email`, `phone`, `street`,
+`neighbourhood`, `district`, `province`, `postcode`, `payment_method` (`card` or `bank_transfer`)
+and `item`; `ref` and an amount must appear; at most 8 KiB and depth 8. `result` names JSON
+pointers into the tool's result (`content[0].text` read as JSON with `text_json`, else
+`structuredContent`): `ok` must be `true`; `url` and `amount_minor` (the order's amount in minor
+units) are required, and the amount must equal the quote's before anything is sent; `reference` is
+optional. Kurallar then shows "Sipariş: {host} üzerinden ödeme bağlantısı".
+
+**What happens.**
+
+- The tool is offered only when an order could pass: the journey's one quote, automatic, delivered,
+  unexpired and in the template's currency (or an order already created, whose link may be asked
+  for again).
+- The model calls `create_order` with the details, copied exactly from the customer's words, and a
+  short line. It has no amount (the order is always for the quote's) and no acceptance of its own.
+- The server checks, before anything goes to the shop: exactly one verified shop with an enabled
+  template (`order_unavailable`; a shop capability that requires approval hands over,
+  `order_needs_approval`); the journey's order (created: the same link is sent again, without a
+  call; calling, failed or unknown: `order_exists`); the quote (`no_auto_quote`, `quote_ambiguous`,
+  `quote_expired`, `order_currency`); the details: every word of the name, street, neighbourhood,
+  district, province and postcode a whole word the customer wrote in this journey (case,
+  punctuation and spacing aside), the email a whole address the customer wrote, a given phone a
+  whole number the customer wrote (country and trunk prefixes aside); no phone means the WhatsApp
+  number. Missing, malformed or unclear details are asked for once with a fixed message
+  ("Siparişi oluşturmak için şunlar eksik ya da net değil: e-posta adresiniz, ilçe. Yazar
+  mısınız?"); the second time the conversation goes to a person (`order_details`). At most 10
+  orders per shop per local day unless the shop capability's daily cap says otherwise
+  (`order_limit`, counted when the shop is asked: a summary never confirmed does not count).
+- **The customer confirms.** The first call sends the server's own summary and creates nothing at
+  the shop; the row (`confirming`) keeps only an HMAC of exactly what the shop would receive
+  (every detail as written, whitespace collapsed; the line items; the amount):
+
+  ```text
+  Siparişinizi oluşturmadan önce bilgilerinizi kontrol eder misiniz?
+  Ad soyad: {name}
+  E-posta: {email}
+  Telefon: {phone}
+  Adres: {street}, {neighbourhood}, {district} / {province}, {postcode}
+  Ürün: {item} x{quantity}
+  Ödeme: Kart | Havale / EFT
+  Tutar: 1.500 TRY
+
+  Bilgiler doğruysa siparişi onaylamak için “Evet” yazın.
+  ```
+
+  (In English: "Could you check your details before I create your order? Name … Email … Phone …
+  Address … Item: … x1. Payment: Card | Bank transfer. Amount: 1,500 TRY. If the details are right,
+  write “Evet” (yes) to confirm the order." The customer-facing text is Turkish, like every fixed
+  line.) The order goes ahead only when: the summary's send succeeded (one held for approval,
+  refused or still in the outbox confirms nothing); every customer message after that send is an
+  explicit yes; no person on the team wrote in the conversation after the summary, queued or sent
+  (`order_person_wrote`: the conversation goes to them); and the model calls `create_order` again
+  with exactly the same details (the same HMAC). An explicit yes is a whole message, in lower case
+  with only surrounding whitespace and emoji and a trailing `.`, `!` or `,` removed, equal to one of:
+  evet, evet doğru, evet onaylıyorum, evet onay, onaylıyorum, onay veriyorum, kabul ediyorum, evet
+  kabul ediyorum, doğru, doğrudur, evet tamam, tamam, tamamdır, olur, evet olur, evet lütfen, yes,
+  yes please, ok, okay, okey; a message with `?` is never one. Anything else (a no, a question, a
+  correction, other details) shows the summary again; after three summaries in all the
+  conversation goes to a person (`order_details`).
+- The order row (`calling`) then commits; the shop is asked with no lock held (15 s, never
+  retried); the answer is stored in a new transaction. The amount must be the quote's
+  (`order_amount_mismatch`), and the link a bare `https` URL (no whitespace or control character,
+  at most 300 characters) on the endpoint's own host (`order_link_host`); the link is sent as the
+  URL parser reads it. The shop's reference is kept and shown only when it is letters, digits, `-`
+  and `_`, at most 40.
+- On success the customer gets, in one message, the model's line (if any) and: "Siparişiniz
+  oluşturuldu. Ödemeyi kartla ya da havaleyle bu bağlantıdan yapabilirsiniz: {link}" ("Your order
+  has been created. You can pay by card or bank transfer at this link: {link}"). This text is the
+  server's and is not put through the reply rules. The quote becomes accepted (the journey
+  `Pending`), the team managers get the email "Jeeta: yeni sipariş oluşturuldu" with the amount and
+  the shop's reference, and the conversation stays with the assistant, which answers from the cards
+  only (a change, a cancellation or a payment question the cards do not answer goes to a person).
+  Marking the journey won stays a person's act: Jeeta sees no payment.
+- On a refusal, an outage, an unknown outcome or a failed check, the conversation goes to a person
+  (`order_rejected`, `order_auth`, `order_unavailable`, `order_unknown`, …), the customer gets
+  "Siparişinizi ekibimiz tamamlayacak, kısa süre içinde dönüş yapacağız." ("Our team will complete
+  your order; we will get back to you shortly."), and a journey note names the code and says to
+  look in the shop for `jeeta_ref {id}`. After the call, only the tool's own refusal counts as
+  "nothing was done"; any other status (`408`, `409`, `425`, `429`, a `5xx`, …), a timeout or a
+  broken connection is an unknown outcome. A take-over during the call, or a send fence's refusal,
+  sends nothing: the note holds the reference and the link (`order_link_unsent`). An order left
+  `calling` for two minutes (a crash) is handed over by the minute sweep (`order_interrupted`); its
+  line goes out only when the conversation is still the agent's under the same generation and no
+  person is active, otherwise only the note is left.
+
+**What is kept.** `auto_reply_orders`: the order's state, reason, amount, currency, an HMAC of
+the confirmed details, the summary message's id, the shop's reference and the payment link. The customer's name, email, phone and address exist in memory
+only, between the model's answer and the shop's call: never in the database, the runs, the
+ledger, a log or `Debug`. Erasing the person clears the link and keeps the reference and amount.
+
+**Data protection.** The details go only to the workspace's own shop, which belongs to the same
+controller (the owner's business). Erasing a person in Jeeta does not erase the shop's copy of the
+order: the owner erases it in the shop's own admin.
+
+**Turning it off.** `PUT /api/connectors/{id}/shop-order` with `"enabled": false`, or retire the
+shop capability: the tool is no longer offered and nothing else changes.
+
 ## The owner's email notices
 
 - When the automatic replies hand a conversation to a person, the workspace's team managers
@@ -171,8 +333,9 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
 
 - `auto_reply_runs`: one row per model call with codes and numbers (outcome, reason, tokens,
   cost in millionths of a dollar). Never in `messages.cost_minor`.
-- Ledger: `inbox.autoreply.{replied, quoted, refused, handed_over, skipped, failed}`,
-  `inbox.reply.held`, with codes and numbers only.
+- Ledger: `inbox.autoreply.{replied, quoted, ordered, refused, handed_over, skipped, failed}`,
+  `inbox.reply.held`, `connector.shop_order_set`, with codes and numbers only.
+- `auto_reply_orders`: see "The order and its payment link".
 - No customer text, model answer, quote basis or hand-over summary in logs or the ledger; logs
   name the job, the workspace, a code and Anthropic's `request-id`.
 - No photo anywhere: the feature never writes one to disk, the database, a log or the ledger. It

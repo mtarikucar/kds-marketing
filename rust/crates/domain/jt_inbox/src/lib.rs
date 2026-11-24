@@ -25,6 +25,7 @@ mod journey;
 mod merge;
 mod message;
 mod note;
+pub mod order;
 mod person;
 pub mod public;
 mod quote;

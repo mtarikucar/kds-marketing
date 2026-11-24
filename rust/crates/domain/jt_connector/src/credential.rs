@@ -100,12 +100,16 @@ pub enum Credential {
         password: String,
         brand_code: String,
     },
+    /// A bearer token for an endpoint the capability names (a shop's MCP endpoint, kept in
+    /// `connector_public.endpoint`). The token is private.
+    #[serde(rename = "bearer")]
+    Bearer { token: String },
 }
 
 impl Credential {
     /// The stable key of the variant, which is also the `kind` tag of the sealed form:
     /// `"mailbox"`, `"oauth"`, `"page_token"`, `"whatsapp_cloud"`, `"netgsm_sms"`,
-    /// `"netgsm_pbx"` or `"netgsm_iys"`.
+    /// `"netgsm_pbx"`, `"netgsm_iys"` or `"bearer"`.
     pub fn kind(&self) -> &'static str {
         match self {
             Credential::Mailbox { .. } => "mailbox",
@@ -115,6 +119,7 @@ impl Credential {
             Credential::NetgsmSms { .. } => "netgsm_sms",
             Credential::NetgsmPbx { .. } => "netgsm_pbx",
             Credential::NetgsmIys { .. } => "netgsm_iys",
+            Credential::Bearer { .. } => "bearer",
         }
     }
 
@@ -141,7 +146,8 @@ impl Credential {
     /// - `WhatsAppCloud`: `phone_number_id`, and `waba_id` and `expires_at` (RFC 3339) when known;
     /// - `NetgsmSms`: `usercode` and `msgheader`;
     /// - `NetgsmPbx`: `username`, and `trunk` and `pbxnum` when known;
-    /// - `NetgsmIys`: `usercode` and `brand_code`.
+    /// - `NetgsmIys`: `usercode` and `brand_code`;
+    /// - `Bearer`: nothing but its kind.
     ///
     /// Never a token, a refresh token, a login or a password.
     pub fn redact_for_public(&self) -> Value {
@@ -217,6 +223,7 @@ impl Credential {
                 put("usercode", json!(usercode));
                 put("brand_code", json!(brand_code));
             }
+            Credential::Bearer { .. } => {}
         }
         Value::Object(facts)
     }
@@ -312,6 +319,9 @@ impl fmt::Debug for Credential {
                 .field("password", &Masked)
                 .field("brand_code", brand_code)
                 .finish(),
+            Credential::Bearer { token: _ } => {
+                f.debug_struct("Bearer").field("token", &Masked).finish()
+            }
         }
     }
 }

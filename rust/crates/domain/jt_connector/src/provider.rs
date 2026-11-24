@@ -22,6 +22,9 @@ pub enum Provider {
     Linkedin,
     /// Ad campaigns in a Google Ads account.
     Google,
+    /// A workspace's own shop over MCP (streamable HTTP with a bearer token, a host the workspace
+    /// names): the order drafts of the inbox's automatic replies.
+    Mcp,
 }
 
 const ALL: &[Provider] = &[
@@ -32,6 +35,7 @@ const ALL: &[Provider] = &[
     Provider::Tiktok,
     Provider::Linkedin,
     Provider::Google,
+    Provider::Mcp,
 ];
 
 /// The capability kinds Meta serves.
@@ -85,6 +89,7 @@ impl Provider {
             Provider::Tiktok => "tiktok",
             Provider::Linkedin => "linkedin",
             Provider::Google => "google",
+            Provider::Mcp => "mcp",
         }
     }
 
@@ -108,6 +113,7 @@ impl Provider {
             Provider::Tiktok => TIKTOK_KINDS,
             Provider::Linkedin => LINKEDIN_KINDS,
             Provider::Google => &["google_ads"],
+            Provider::Mcp => &["shop_mcp"],
         }
     }
 }

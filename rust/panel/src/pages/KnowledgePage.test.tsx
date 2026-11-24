@@ -941,6 +941,21 @@ describe('KnowledgePage automatic replies', () => {
     });
   });
 
+  it('names the shop the orders go through', async () => {
+    const withShop = { ...onRules, auto_reply: { ...onRules.auto_reply, order: { available: true, host: 'shop.example.test', off_reason: null } } };
+    mockFetch(routes({}, { ...knowledge, rules: withShop }));
+    renderAt('/knowledge');
+    await page();
+    expect(within(screen.getByRole('region', { name: k.rules.title })).getByText('Sipariş: shop.example.test üzerinden ödeme bağlantısı')).toBeInTheDocument();
+  });
+
+  it('shows no order line without a shop', async () => {
+    mockFetch(routes({}, { ...knowledge, rules: onRules }));
+    renderAt('/knowledge');
+    await page();
+    expect(within(screen.getByRole('region', { name: k.rules.title })).queryByText(/Sipariş:/)).not.toBeInTheDocument();
+  });
+
   it('saves the bargaining discount from the two small fields', async () => {
     const user = userEvent.setup();
     const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': onRules }, { ...knowledge, rules: onRules }));

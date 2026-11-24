@@ -180,7 +180,7 @@ pub async fn accept(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<QuoteRow, AppErr
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.people().lock_workspace().await?;
     r.people().set_write_time(ctx.now).await?;
-    let mut row = r
+    let row = r
         .quotes()
         .get(id)
         .await?
@@ -202,6 +202,22 @@ pub async fn accept(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<QuoteRow, AppErr
         r.commit().await?;
         return Err(AppError::conflict("quote expired"));
     }
+    let row = accept_in(deps, ctx, r.as_mut(), row).await?;
+    r.commit().await?;
+    Ok(row)
+}
+
+/// Accepts quote `row` (sent, not expired) in the caller's transaction: its delivery must be
+/// confirmed (the journey event `quote:{id}:sent`), then the journey takes `QuoteAccepted`
+/// (`Pending`), the quote becomes `Accepted` and the ledger has `inbox.quote.accepted`. Shared by
+/// [`accept`] and the automatic replies' order (`autoreply`).
+pub(super) async fn accept_in(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    mut row: QuoteRow,
+) -> Result<QuoteRow, AppError> {
+    let id = row.id;
     if r.journeys()
         .event_by_key(&format!("quote:{id}:sent"))
         .await?
@@ -214,11 +230,11 @@ pub async fn accept(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<QuoteRow, AppErr
     {
         return Err(AppError::conflict("quote delivery is not confirmed"));
     }
-    lock_live_journey(r.as_mut(), row.quote.journey_id).await?;
+    lock_live_journey(r, row.quote.journey_id).await?;
     event_in(
         deps,
         ctx,
-        r.as_mut(),
+        r,
         row.quote.journey_id,
         format!("quote:{id}:accepted"),
         JourneyEventKind::QuoteAccepted,
@@ -228,7 +244,7 @@ pub async fn accept(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<QuoteRow, AppErr
     r.quotes().set_state(id, QuoteState::Accepted).await?;
     row.quote.state = QuoteState::Accepted;
     record(
-        r.as_mut(),
+        r,
         ctx,
         "inbox.quote.accepted",
         "quote",
@@ -236,7 +252,6 @@ pub async fn accept(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<QuoteRow, AppErr
         json!({"journey_id":row.quote.journey_id}),
     )
     .await?;
-    r.commit().await?;
     Ok(row)
 }
 

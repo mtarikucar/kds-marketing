@@ -54,6 +54,12 @@ export function autoReplyLine(t: TFunction, auto: AutoReplyView, language: strin
   });
 }
 
+/** "Sipariş: … üzerinden ödeme bağlantısı": while the automatic replies are on with a shop. */
+export function orderLine(t: TFunction, auto: AutoReplyView): string | null {
+  if (auto.capability_ids.length === 0 || !auto.order.available || !auto.order.host) return null;
+  return t('knowledge.rules.orderOn', { host: auto.order.host });
+}
+
 /** "E-posta bildirimi: …": while the automatic replies and their email notices are on. */
 export function notifyLine(t: TFunction, auto: AutoReplyView): string | null {
   if (auto.capability_ids.length === 0 || !auto.notify.available || !auto.notify.on || !auto.notify.from) return null;

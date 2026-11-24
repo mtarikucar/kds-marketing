@@ -201,6 +201,7 @@ const TOOLS: &[&str] = &[
     "jeeta.connector.reconnect",
     "jeeta.connector.hooks",
     "jeeta.connector.set_pbx_policy",
+    "jeeta.connector.set_shop_order",
     "jeeta.calls.policy_get",
     "jeeta.calls.policy_set",
     "jeeta.calls.place",
@@ -268,7 +269,7 @@ fn every_catalog_mcp_tool_is_registered_and_nothing_else() {
     // Every catalog tool is defined (M1b Task 8 defined the connection tools, Task 9 the hook
     // addresses and the inbound events).
     assert!(NOT_YET_DEFINED.is_empty());
-    assert_eq!(TOOLS.len(), 252);
+    assert_eq!(TOOLS.len(), 253);
     let catalog: BTreeSet<&str> = CATALOG
         .iter()
         .filter_map(|uc| uc.mcp_tool)
@@ -784,6 +785,11 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
                 &[Permission::CapabilitiesManage][..],
                 Risk::Write
             ),
+            (
+                "jeeta.connector.set_shop_order",
+                &[Permission::CapabilitiesManage][..],
+                Risk::Write
+            ),
         ]
     );
     // No tool completes an OAuth flow: only the owner's browser, on the panel, does.
@@ -832,7 +838,8 @@ fn connector_tools_change_with_capabilities_manage_and_probe_and_read_with_works
             "netgsm_sms",
             "netgsm_iys",
             "netgsm_pbx",
-            "meta_token"
+            "meta_token",
+            "mcp_bearer"
         ])
     );
     assert_eq!(

@@ -4,7 +4,7 @@ import { isKindKey } from './capabilities';
 /** Capability groups a requirement expression may name (`jt_capability::KindGroup`). */
 export const CAPABILITY_GROUPS = [
   'social_account', 'messaging', 'telephony', 'community', 'ads', 'calendar',
-  'device', 'agent_connection', 'computer_access', 'third_party',
+  'device', 'agent_connection', 'computer_access', 'third_party', 'commerce',
 ] as const;
 export type CapabilityGroupKey = (typeof CAPABILITY_GROUPS)[number];
 export function isGroupKey(key: string): key is CapabilityGroupKey {

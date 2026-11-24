@@ -10,8 +10,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use jt_app::ports::reply_model::{
-    Image, ImageType, JudgeRequest, ModelError, ModelRequest, ModelStop, ModelTool, Part,
-    ReplyModel, Speaker, Turn,
+    Image, ImageType, JudgeRequest, ModelError, ModelRequest, ModelStop, ModelTool, OrderOffer,
+    Part, ReplyModel, Speaker, Turn,
 };
 use jt_claude::{ApiKey, ClaudeBases, ClaudeModel, DEFAULT_MODEL};
 use jt_outbound::{Egress, FIXED_HOSTS, Url};
@@ -93,6 +93,7 @@ fn request() -> ModelRequest {
             },
         ],
         max_tokens: 2048,
+        order: None,
     }
 }
 
@@ -177,6 +178,82 @@ async fn a_request_sends_the_documented_headers_and_body() {
     assert_eq!(
         messages[2]["content"][0],
         json!({"type": "text", "text": "Tek kişi", "cache_control": {"type": "ephemeral"}})
+    );
+}
+
+#[tokio::test]
+async fn the_order_tool_is_sent_and_read_only_when_offered() {
+    // Not offered: the request is the three tools', and a stray call is no usable tool call.
+    let (model, seen) = mock(
+        200,
+        vec![],
+        include_str!("fixtures/messages_create_order_200.json"),
+    )
+    .await;
+    let answer = model.answer(&request()).await.unwrap();
+    assert_eq!(answer.stop, ModelStop::NoTool);
+    assert_eq!(answer.tool, None);
+    let plain: Value = serde_json::from_str(&seen.requests.lock().unwrap()[0].2).unwrap();
+    assert_eq!(plain["tools"], jt_claude::tools());
+    assert!(!plain.to_string().contains("create_order"));
+
+    // Offered: a fourth strict tool with no amount, and its call read with every field.
+    let (model, seen) = mock(
+        200,
+        vec![],
+        include_str!("fixtures/messages_create_order_200.json"),
+    )
+    .await;
+    let mut offered = request();
+    offered.order = Some(OrderOffer {
+        amount_minor: 350_000,
+        currency: "TRY".into(),
+        valid_until: time::OffsetDateTime::UNIX_EPOCH,
+        done: None,
+    });
+    let answer = model.answer(&offered).await.unwrap();
+    assert_eq!(answer.stop, ModelStop::ToolUse);
+    let Some(ModelTool::CreateOrder { fields, text }) = answer.tool.clone() else {
+        panic!("a create_order call");
+    };
+    assert_eq!(fields.email, "deneme@example.com");
+    assert_eq!(fields.district, "Merkez");
+    assert_eq!(fields.payment_method, "card");
+    assert_eq!(fields.phone, "");
+    assert_eq!(text, "Teşekkürler, siparişinizi hazırlıyorum.");
+    // Its details never print.
+    let printed = format!("{:?}", answer.tool);
+    assert!(
+        !printed.contains("example.com") && !printed.contains("Tamam"),
+        "{printed}"
+    );
+
+    let body: Value = serde_json::from_str(&seen.requests.lock().unwrap()[0].2).unwrap();
+    let tools = body["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["reply", "quote", "hand_over", "create_order"]);
+    let order = &tools[3];
+    assert_eq!(order["strict"], true);
+    let schema = &order["input_schema"];
+    assert_eq!(schema["additionalProperties"], false);
+    let props = schema["properties"].as_object().unwrap();
+    assert_eq!(props.len(), schema["required"].as_array().unwrap().len());
+    assert!(
+        props
+            .keys()
+            .all(|k| !k.contains("amount") && !k.contains("price"))
+    );
+    assert!(
+        props.get("acceptance").is_none(),
+        "the server judges the confirmation"
+    );
+    assert_eq!(
+        schema["properties"]["payment_method"]["enum"],
+        json!(["card", "bank_transfer"])
+    );
+    assert_eq!(
+        body["tool_choice"],
+        json!({ "type": "any", "disable_parallel_tool_use": true })
     );
 }
 
@@ -392,4 +469,51 @@ async fn the_discount_tool_is_offered_only_when_the_workspace_allows_one_and_nam
     let props: Vec<&String> = schema["properties"].as_object().unwrap().keys().collect();
     assert_eq!(props, ["text"], "no amount, step or percent");
     assert_eq!(schema["additionalProperties"], false);
+}
+
+#[test]
+fn the_discount_and_the_order_tools_compose_independently() {
+    let names = |r: &ModelRequest| -> Vec<String> {
+        jt_claude::request_body(DEFAULT_MODEL, r)["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let offer = || OrderOffer {
+        amount_minor: 350_000,
+        currency: "TRY".into(),
+        valid_until: time::OffsetDateTime::UNIX_EPOCH,
+        done: None,
+    };
+    // Neither: exactly the three tools, as before both existed.
+    let plain = request();
+    assert_eq!(
+        jt_claude::request_body(DEFAULT_MODEL, &plain)["tools"],
+        jt_claude::tools()
+    );
+    let mut discount = request();
+    discount.offer_discount = true;
+    assert_eq!(
+        names(&discount),
+        ["reply", "quote", "hand_over", "discount"]
+    );
+    assert_eq!(
+        jt_claude::request_body(DEFAULT_MODEL, &discount)["tools"],
+        jt_claude::tools_with_discount()
+    );
+    let mut order = request();
+    order.order = Some(offer());
+    assert_eq!(
+        names(&order),
+        ["reply", "quote", "hand_over", "create_order"]
+    );
+    let mut both = request();
+    both.offer_discount = true;
+    both.order = Some(offer());
+    assert_eq!(
+        names(&both),
+        ["reply", "quote", "hand_over", "discount", "create_order"]
+    );
 }

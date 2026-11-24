@@ -7,17 +7,17 @@
 //! blocks (the fixed instructions, then the workspace's part with a cache breakpoint: the tools
 //! and the system render first, so the whole stable prefix is cached), the three tools (`reply`,
 //! `quote`, `hand_over`, each `strict` with `additionalProperties: false` and every property
-//! required), [`tool_choice`], and the conversation as alternating `user` / `assistant` turns
-//! ending with the customer's, its last block carrying the second breakpoint. An image a customer
-//! sent is an `image` block with its bytes in base64 (`source.type: base64`), in the customer's
-//! turn; it is never logged. No sampling
-//! parameter (`temperature`, `top_p`, `top_k`), no thinking budget and no assistant prefill is
-//! ever sent.
+//! required; a fourth, `create_order` ([`create_order_tool`]), only when the request offers the
+//! order, [`tools_for`]), [`tool_choice`], and the conversation as alternating `user` /
+//! `assistant` turns ending with the customer's, its last block carrying the second breakpoint. An
+//! image a customer sent is an `image` block with its bytes in base64 (`source.type: base64`), in
+//! the customer's turn; it is never logged. No sampling parameter (`temperature`, `top_p`,
+//! `top_k`), no thinking budget and no assistant prefill is ever sent.
 //!
 //! The answer's content blocks are read by their `type` (a `thinking` block may come first): the
-//! first `tool_use` naming one of the three tools is the answer. `stop_reason` `refusal` and
-//! `max_tokens` are reported as such; an answer with no usable tool call is
-//! [`ModelStop::NoTool`]. The four usage counts are read by name (anything else in `usage` is
+//! first `tool_use` naming one of the tools is the answer (`create_order` only when it was
+//! offered). `stop_reason` `refusal` and `max_tokens` are reported as such; an answer with no
+//! usable tool call is [`ModelStop::NoTool`]. The four usage counts are read by name (anything else in `usage` is
 //! ignored) and priced at the model's rates ([`Prices`]): an unknown model has no prices, and
 //! [`ClaudeModel::new`] refuses it, so the feature stays off until its prices are added here.
 //!
@@ -37,7 +37,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use jt_app::ports::reply_model::{
     HAND_OVER_REASONS, JudgeAnswer, JudgeRequest, ModelAnswer, ModelError, ModelRequest, ModelStop,
-    ModelTool, Part, ReplyModel, Speaker, Usage,
+    ModelTool, OrderFields, PAYMENT_METHODS, Part, ReplyModel, Speaker, Usage,
 };
 use jt_outbound::{Egress, EgressError, EgressScope, Method, Url, header};
 use serde::Deserialize;
@@ -225,24 +225,76 @@ pub fn tools() -> Value {
     ])
 }
 
-/// [`tools`] and the `discount` tool, for a workspace that allows a bargaining discount: it takes
-/// only a short line; the server sets the step and the price.
+/// The order tool, offered only after a quote with a shop to order from ([`tools_for`]): every
+/// detail the order needs (empty for one the customer did not give) and a short line. It has no
+/// amount (the server orders the quote's) and no acceptance (the server asks the customer to
+/// confirm a summary and judges the answer itself).
+pub fn create_order_tool() -> Value {
+    let field = |description: &str| json!({ "type": "string", "description": description });
+    json!({
+        "name": "create_order",
+        "description": "Create the order for the quoted price once the customer accepted it and gave every detail the order needs. The first call makes the server show the customer a summary to confirm; after the customer confirms, call it again with exactly the same details. The server orders the quoted amount and sends the payment link itself.",
+        "strict": true,
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "email", "phone", "street", "neighbourhood", "district", "province", "postcode", "payment_method", "item", "text"],
+            "properties": {
+                "name": field("The customer's full name, copied exactly from their messages."),
+                "email": field("The customer's email address, copied exactly from their messages."),
+                "phone": field("A phone number the customer wrote, if it differs from this WhatsApp number, copied exactly; empty for this number."),
+                "street": field("The street address (street, building, flat), copied exactly from the customer's words: never corrected, expanded or completed."),
+                "neighbourhood": field("The neighbourhood, copied exactly, if the customer gave it; empty otherwise."),
+                "district": field("The district, copied exactly from the customer's words."),
+                "province": field("The province, copied exactly from the customer's words."),
+                "postcode": field("The postcode, copied exactly, if the customer gave it; empty otherwise."),
+                "payment_method": { "type": "string", "enum": PAYMENT_METHODS },
+                "item": field("What is ordered, in a few words (at most 120 characters), without any amount or link."),
+                "text": field("A short line to the customer sent before the payment link: no amount, no link, none of their details; empty for none.")
+            }
+        }
+    })
+}
+
+/// The `discount` tool, for a workspace that allows a bargaining discount: it takes only a short
+/// line; the server sets the step and the price.
+pub fn discount_tool() -> Value {
+    json!({
+        "name": "discount",
+        "description": "The customer bargains over the price you quoted (asks for a discount, says it is expensive, names a lower price): ask the server for the business's next discount. The server sets the new price and adds it to your line. Never use it unless the customer bargains.",
+        "strict": true,
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text"],
+            "properties": {
+                "text": { "type": "string", "description": "A short, warm line before the server's price line, in the customer's language, with no amount, number or percent; empty for none." }
+            }
+        }
+    })
+}
+
+/// [`tools`] and the `discount` tool.
 pub fn tools_with_discount() -> Value {
     let mut all = tools();
     if let Some(list) = all.as_array_mut() {
-        list.push(json!({
-            "name": "discount",
-            "description": "The customer bargains over the price you quoted (asks for a discount, says it is expensive, names a lower price): ask the server for the business's next discount. The server sets the new price and adds it to your line. Never use it unless the customer bargains.",
-            "strict": true,
-            "input_schema": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["text"],
-                "properties": {
-                    "text": { "type": "string", "description": "A short, warm line before the server's price line, in the customer's language, with no amount, number or percent; empty for none." }
-                }
-            }
-        }));
+        list.push(discount_tool());
+    }
+    all
+}
+
+/// The tools `request` offers: [`tools`], then the `discount` tool when it offers a discount and
+/// [`create_order_tool`] when it offers the order, each independently. With neither, exactly
+/// [`tools`].
+pub fn tools_for(request: &ModelRequest) -> Value {
+    let mut all = tools();
+    if let Some(list) = all.as_array_mut() {
+        if request.offer_discount {
+            list.push(discount_tool());
+        }
+        if request.order.is_some() {
+            list.push(create_order_tool());
+        }
     }
     all
 }
@@ -300,7 +352,7 @@ pub fn request_body(model: &str, request: &ModelRequest) -> Value {
         "max_tokens": request.max_tokens,
         "output_config": { "effort": EFFORT },
         "system": system,
-        "tools": if request.offer_discount { tools_with_discount() } else { tools() },
+        "tools": tools_for(request),
         "tool_choice": tool_choice(),
         "messages": messages,
     })
@@ -352,6 +404,14 @@ struct HandOverIn {
     text: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct CreateOrderIn {
+    #[serde(flatten)]
+    fields: OrderFields,
+    #[serde(default)]
+    text: String,
+}
+
 /// The tool call `block` makes, when it is a usable one.
 fn tool_of(block: &Value) -> Option<ModelTool> {
     if block["type"] != "tool_use" {
@@ -359,6 +419,12 @@ fn tool_of(block: &Value) -> Option<ModelTool> {
     }
     let input = block["input"].clone();
     match block["name"].as_str()? {
+        "create_order" => serde_json::from_value::<CreateOrderIn>(input)
+            .ok()
+            .map(|o| ModelTool::CreateOrder {
+                fields: Box::new(o.fields),
+                text: o.text,
+            }),
         "reply" => serde_json::from_value::<ReplyIn>(input)
             .ok()
             .map(|r| ModelTool::Reply { text: r.text }),
@@ -385,10 +451,15 @@ fn tool_of(block: &Value) -> Option<ModelTool> {
     }
 }
 
-/// `response` as the use case reads it, priced at `prices`.
-pub fn answer_of(response: &MessageResponse, prices: &Prices) -> ModelAnswer {
+/// `response` as the use case reads it, priced at `prices`: `offered` says whether the request
+/// offered `create_order` (a call of it otherwise is no usable tool call).
+pub fn answer_of(response: &MessageResponse, prices: &Prices, offered: bool) -> ModelAnswer {
     let usage = usage_of(response, prices);
-    let tool = response.content.iter().find_map(tool_of);
+    let tool = response
+        .content
+        .iter()
+        .filter(|b| offered || b["name"] != "create_order")
+        .find_map(tool_of);
     let stop = match (response.stop_reason.as_deref(), &tool) {
         (Some("refusal"), _) => ModelStop::Refusal,
         (Some("max_tokens"), _) => ModelStop::MaxTokens,
@@ -442,7 +513,7 @@ impl ReplyModel for ClaudeModel {
 
     async fn answer(&self, request: &ModelRequest) -> Result<ModelAnswer, ModelError> {
         let body = self.post(&request_body(&self.model, request)).await?;
-        Ok(answer_of(&body, &self.prices))
+        Ok(answer_of(&body, &self.prices, request.order.is_some()))
     }
 
     async fn judge(&self, request: &JudgeRequest) -> Result<JudgeAnswer, ModelError> {
