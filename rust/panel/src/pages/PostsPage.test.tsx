@@ -427,6 +427,19 @@ describe('a post that did not go out', () => {
     expect(within(p).getByRole('button', { name: P.actions.dismiss })).toBeInTheDocument();
   });
 
+  it('says TikTok has not audited the app, offers no reconnect and prepares it again', async () => {
+    const row = postRow('slot:f5', { title: 'Gitmeyen', status: 'failed', waits: [wait('failed', { reason: 'app_not_audited', kind: 'tiktok', recovered: false })], actions: { redo: { project_id: 'area-1', package_revision: 2 }, acknowledge: { slot_id: 'f5', expected_revision: 1 } } });
+    open('/posts?slot=f5', postsOut({ rows: [row] }));
+    const p = await panel();
+    expect(await within(p).findByTestId('wait-sentence')).toHaveTextContent(
+      "TikTok bu paylaşımı almadı: Jeeta'nın TikTok uygulaması henüz denetlenmediği için herkese açık hesaba doğrudan paylaşım yapılamıyor; yeniden hazırlatıp TikTok'a taslak olarak gönderebilirsin.",
+    );
+    expect(within(p).queryByText(/bağlantı yenilendi/)).not.toBeInTheDocument();
+    expect(within(p).queryByRole('link', { name: P.actions.reconnect })).not.toBeInTheDocument();
+    expect(within(p).queryByText(P.panel.managerReconnect)).not.toBeInTheDocument();
+    expect(within(p).getByRole('button', { name: P.actions.retry })).toBeInTheDocument();
+  });
+
   it('says a renewed connection and offers to prepare it again', async () => {
     const row = postRow('slot:f2', { title: 'Gitmeyen', status: 'failed', waits: [wait('failed', { reason: 'auth', kind: 'instagram', recovered: true })], actions: { redo: { project_id: 'area-1', package_revision: 2 } } });
     open('/posts?slot=f2', postsOut({ rows: [row] }));

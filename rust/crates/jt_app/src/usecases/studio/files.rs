@@ -482,31 +482,53 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
     r.commit().await?;
     Ok(count)
 }
+/// How long a signed file-store URL handed to a provider stays valid: the longest the file store
+/// signs. A provider fetches it when the post is sent, right after it is signed; TikTok gives up
+/// on a `PULL_FROM_URL` download one hour after it starts
+/// (<https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide>), well within.
+pub const PROVIDER_URL_LIFETIME: Duration = Duration::hours(24);
+
+/// How long TikTok keeps downloading a `PULL_FROM_URL` medium before it gives up
+/// (`video_pull_failed`): a provider URL must outlive it ([`PROVIDER_URL_LIFETIME`]).
+pub const TIKTOK_PULL_WINDOW: Duration = Duration::hours(1);
+
 /// How a capability's provider takes a medium: its bytes, uploaded by the adapter, or a URL the
 /// provider fetches itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaDelivery {
     /// The bytes, read from the file store (or fetched once from a hosted URL): the provider
-    /// takes uploads (X, LinkedIn, a TikTok video).
+    /// takes uploads (X, LinkedIn, a TikTok video while the platform uploads them).
     Bytes,
     /// A URL: a signed file-store URL, or the hosted URL as is (Instagram, Facebook Pages, a
-    /// TikTok photo, which TikTok pulls from a verified domain).
+    /// TikTok photo, which TikTok pulls from a verified domain, and a TikTok video once the
+    /// platform switch `JEETA_TIKTOK_VIDEO_PULL` is on).
     SignedUrl,
 }
 
 impl MediaDelivery {
-    /// How a capability of kind `kind_key` takes a medium of type `mime`.
+    /// How a capability of kind `kind_key` takes a medium of type `mime`, a TikTok video
+    /// uploaded ([`MediaDelivery::with`] with the switch off).
     pub fn of(kind_key: &str, mime: &str) -> MediaDelivery {
+        MediaDelivery::with(kind_key, mime, false)
+    }
+
+    /// How a capability of kind `kind_key` takes a medium of type `mime`, a TikTok video pulled
+    /// by TikTok from its URL when `tiktok_video_pull` (the platform switch
+    /// `JEETA_TIKTOK_VIDEO_PULL`, `PlatformAppConfig::tiktok_video_pull`) is on, else uploaded.
+    pub fn with(kind_key: &str, mime: &str, tiktok_video_pull: bool) -> MediaDelivery {
         match kind_key {
             "x" | "linkedin_member" | "linkedin_page" => MediaDelivery::Bytes,
-            "tiktok" if mime.trim().eq_ignore_ascii_case("video/mp4") => MediaDelivery::Bytes,
+            "tiktok" if !tiktok_video_pull && mime.trim().eq_ignore_ascii_case("video/mp4") => {
+                MediaDelivery::Bytes
+            }
             _ => MediaDelivery::SignedUrl,
         }
     }
 }
 
 /// Build provider transport at dispatch time for a capability of kind `kind_key`: each medium as
-/// [`MediaDelivery::of`] says, durable bytes reloaded from the file store.
+/// [`MediaDelivery::with`] says under the platform's switches, durable bytes reloaded from the
+/// file store.
 pub async fn resolve_media(
     d: &Deps,
     ws: WorkspaceId,
@@ -515,6 +537,19 @@ pub async fn resolve_media(
 ) -> Result<(Vec<Url>, Vec<MediaUpload>), AppError> {
     let (urls, _, bytes) = resolve_typed_media(d, ws, media, kind_key).await?;
     Ok((urls, bytes))
+}
+
+/// The bytes of each medium a capability of kind `kind_key` takes as an upload when no medium is
+/// pulled from its URL ([`MediaDelivery::of`]): what a check reads from the file itself (a TikTok
+/// video's length), however the post is then sent.
+pub async fn resolve_uploads(
+    d: &Deps,
+    ws: WorkspaceId,
+    media: &[MediaAsset],
+    kind_key: &str,
+) -> Result<Vec<MediaUpload>, AppError> {
+    let (_, _, bytes) = resolve_as(d, ws, media, kind_key, false).await?;
+    Ok(bytes)
 }
 
 /// [`resolve_media`], with the type of each URL, in order, as the file store (`StoredFile::mime`)
@@ -526,6 +561,18 @@ pub async fn resolve_typed_media(
     media: &[MediaAsset],
     kind_key: &str,
 ) -> Result<(Vec<Url>, Vec<String>, Vec<MediaUpload>), AppError> {
+    resolve_as(d, ws, media, kind_key, d.apps.tiktok_video_pull()).await
+}
+
+/// [`resolve_typed_media`] with the switch `tiktok_video_pull` given.
+async fn resolve_as(
+    d: &Deps,
+    ws: WorkspaceId,
+    media: &[MediaAsset],
+    kind_key: &str,
+    tiktok_video_pull: bool,
+) -> Result<(Vec<Url>, Vec<String>, Vec<MediaUpload>), AppError> {
+    let delivery = |mime: &str| MediaDelivery::with(kind_key, mime, tiktok_video_pull);
     let mut urls = vec![];
     let mut mimes = vec![];
     let mut bytes = vec![];
@@ -542,14 +589,14 @@ pub async fn resolve_typed_media(
                     return Err(AppError::not_found("file"));
                 }
                 drop(r);
-                if MediaDelivery::of(kind_key, &f.mime) == MediaDelivery::Bytes {
+                if delivery(&f.mime) == MediaDelivery::Bytes {
                     let u = d.files.read(ws, *id).await?;
                     validate_upload(&u)?;
                     bytes.push(u)
                 } else {
                     urls.push(
                         d.files
-                            .provider_url(ws, *id, d.clock.now() + Duration::hours(24))
+                            .provider_url(ws, *id, d.clock.now() + PROVIDER_URL_LIFETIME)
                             .await?,
                     );
                     mimes.push(f.mime.trim().to_ascii_lowercase());
@@ -565,7 +612,7 @@ pub async fn resolve_typed_media(
                 if u.bytes.len() as u64 != *size_bytes {
                     return Err(invalid());
                 }
-                if MediaDelivery::of(kind_key, mime) == MediaDelivery::Bytes {
+                if delivery(mime) == MediaDelivery::Bytes {
                     bytes.push(u)
                 } else {
                     urls.push(url.clone());

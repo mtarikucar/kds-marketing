@@ -27,6 +27,7 @@ type TiktokCase =
   | 'tiktokAppCap'
   | 'tiktokBanned'
   | 'tiktokDomain'
+  | 'tiktokPull'
   | 'tiktokSpam'
   | 'tiktokMedia';
 
@@ -38,6 +39,7 @@ const TIKTOK_CODES: [RegExp, TiktokCase][] = [
   [/reached_active_user_cap/, 'tiktokAppCap'],
   [/spam_risk_user_banned_from_posting/, 'tiktokBanned'],
   [/url_ownership_unverified/, 'tiktokDomain'],
+  [/video_pull_failed|photo_pull_failed/, 'tiktokPull'],
   [/spam_risk_text|spam_risk\b/, 'tiktokSpam'],
   [/(file_format|duration|frame_rate|picture_size)_check_failed/, 'tiktokMedia'],
 ];

@@ -1197,6 +1197,9 @@ fn failure(f: &Facts, fact: &VersionFact) -> (&'static str, bool) {
         .filter_map(|a| match a.outcome() {
             Some(PublishOutcome::Refused(_)) => Some("refused"),
             Some(PublishOutcome::Failed(e)) => Some(match e {
+                // Before the kinds: reconnecting fixes neither (the account is not at fault).
+                RedactedPublishError::AppNotAudited => "app_not_audited",
+                RedactedPublishError::MediaUnfetched => "media_unfetched",
                 RedactedPublishError::Auth => "auth",
                 RedactedPublishError::Permission => "permission",
                 RedactedPublishError::Throttle => "rate_limited",

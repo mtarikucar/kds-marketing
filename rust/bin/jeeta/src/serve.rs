@@ -344,6 +344,12 @@ pub(crate) fn log_providers(config: &Config) {
         "outreach email: campaigns launch and send only while {} is on",
         config::OUTREACH_ENABLED
     );
+    tracing::info!(
+        tiktok_video_pull = config.apps.tiktok_video_pull(),
+        "tiktok videos: uploaded (FILE_UPLOAD) unless {} is on, then pulled from the file store \
+         (PULL_FROM_URL, its host verified at TikTok)",
+        config::TIKTOK_VIDEO_PULL
+    );
 }
 
 /// The strategy gate over `pool`: open for a workspace while it has a committed approved strategy

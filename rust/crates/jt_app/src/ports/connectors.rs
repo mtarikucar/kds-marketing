@@ -235,6 +235,14 @@ pub trait PlatformAppConfig: Send + Sync {
     fn outreach_enabled(&self) -> bool {
         false
     }
+    /// The platform switch `JEETA_TIKTOK_VIDEO_PULL`: off (the default) until the operator turns
+    /// it on. While it is off a TikTok video is uploaded (`FILE_UPLOAD`); once it is on, TikTok
+    /// pulls it from a signed file-store URL (`PULL_FROM_URL`), which needs the file store's
+    /// public host verified for the TikTok app in TikTok's developer portal
+    /// (`docs/operations/tiktok.md` §7).
+    fn tiktok_video_pull(&self) -> bool {
+        false
+    }
 }
 
 /// The app an OAuth flow signs in with, as the last segment of its redirect URI names it

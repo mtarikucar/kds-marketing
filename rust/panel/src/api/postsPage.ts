@@ -82,7 +82,7 @@ export type FoundMark = 'face' | 'name' | 'child' | 'logo' | 'company';
 export const FOUND_MARKS: readonly FoundMark[] = ['face', 'name', 'child', 'logo', 'company'];
 
 /** Why a post did not go out (`RedactedPublishError` class, §2.6 "Reasons in words"). */
-export type FailReason = 'auth' | 'permission' | 'rate_limited' | 'validation' | 'refused' | 'unreachable' | 'missed_grace';
+export type FailReason = 'auth' | 'permission' | 'rate_limited' | 'validation' | 'refused' | 'unreachable' | 'missed_grace' | 'app_not_audited' | 'media_unfetched';
 
 /** What a `files_quality` wait's `finding` is: the first such file's quality tag (`unset`: none). */
 export type QualityFinding = 'needs_crop' | 'unusable' | 'publishable' | 'unset';

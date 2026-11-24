@@ -246,7 +246,7 @@ describe('TikTok posting screen', () => {
       }),
     );
     // Approving sends nothing; this slot's time has passed, so the publisher sends it now.
-    expect(await screen.findByText("Onaylandı. Saati geçtiği için şimdi TikTok'a gönderiliyor…")).toBeInTheDocument();
+    expect(await screen.findByText("Onaylandı. Saati geçtiği için şimdi TikTok'a gönderiliyor… İçeriğin işlenip profilinde görünmesi birkaç dakika sürebilir.")).toBeInTheDocument();
     expect(screen.queryByText(/Paylaşım durumu/)).not.toBeInTheDocument();
   });
 
@@ -263,7 +263,7 @@ describe('TikTok posting screen', () => {
     await user.selectOptions(await within(form).findByLabelText('Bu paylaşımı kimler görebilir'), 'SELF_ONLY');
     await user.click(within(form).getByRole('button', { name: "TikTok'ta paylaş" }));
     expect(
-      await screen.findByText(/^Onaylandı: .+ olunca TikTok'ta kendiliğinden paylaşılır\. Senden başka bir şey gerekmiyor\.$/),
+      await screen.findByText(/^Onaylandı: .+ olunca TikTok'ta kendiliğinden paylaşılır\. Senden başka bir şey gerekmiyor\. Gönderildikten sonra içeriğin işlenip profilinde görünmesi birkaç dakika sürebilir\.$/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/gönderiliyor|işleniyor|işliyor/)).not.toBeInTheDocument();
   });
@@ -420,7 +420,7 @@ describe('TikTok posting screen', () => {
     renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
-      await within(card).findByText(/^Onaylandı: .+ olunca TikTok'ta kendiliğinden paylaşılır\. Senden başka bir şey gerekmiyor\.$/),
+      await within(card).findByText(/^Onaylandı: .+ olunca TikTok'ta kendiliğinden paylaşılır\. Senden başka bir şey gerekmiyor\. Gönderildikten sonra içeriğin işlenip profilinde görünmesi birkaç dakika sürebilir\.$/),
     ).toBeInTheDocument();
     // One confirmation, not an internal status line.
     expect(within(card).queryByText(/Paylaşım durumu|Yayınlandıktan sonra/)).not.toBeInTheDocument();
@@ -431,7 +431,7 @@ describe('TikTok posting screen', () => {
     renderAt('/posts?slot=s1&tiktok=s1');
     const card = await screen.findByRole('region', { name: i18n.t('socialAccounts.finishTiktok') });
     expect(
-      await within(card).findByText("Onaylandı. Saati geçtiği için şimdi TikTok'a gönderiliyor…"),
+      await within(card).findByText("Onaylandı. Saati geçtiği için şimdi TikTok'a gönderiliyor… İçeriğin işlenip profilinde görünmesi birkaç dakika sürebilir."),
     ).toBeInTheDocument();
     expect(within(card).queryByText(/kendiliğinden paylaşılır/)).not.toBeInTheDocument();
   });
@@ -641,6 +641,33 @@ describe('TikTok posting screen', () => {
     ).toBeInTheDocument();
   });
 
+  it('suggests_the_draft_after_tiktok_refused_an_unaudited_app_and_still_lets_the_human_choose', async () => {
+    const calls = mockFetch(answers(true, {
+      'GET /api/studio/slots/s1/tiktok': screenAnswer({ suggest_draft: true }),
+      'POST /api/studio/slots/s1/tiktok': { revision: 3 },
+    }));
+    renderAt('/posts?slot=s1&tiktok=s1');
+    const user = userEvent.setup();
+    const form = await postingScreen();
+    const how = await within(form).findByRole('radiogroup', { name: 'Nasıl gönderilsin' });
+    const draftRadio = within(how).getByRole('radio', { name: "TikTok'a taslak olarak gönder (TikTok uygulamasında tamamla)" });
+    expect(draftRadio).toBeChecked();
+    expect(within(how).getByText(i18n.t('studio.tiktok.draftSuggested'))).toBeInTheDocument();
+    // Nothing is sent until the human presses the button; they may still post directly.
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+    await user.click(within(how).getByRole('radio', { name: 'Doğrudan paylaş' }));
+    expect(within(form).getByLabelText('Bu paylaşımı kimler görebilir')).toBeInTheDocument();
+  });
+
+  it('suggests_nothing_when_drafts_are_not_granted', async () => {
+    mockFetch(answers(true, { 'GET /api/studio/slots/s1/tiktok': screenAnswer({ suggest_draft: true, drafts_available: false }) }));
+    renderAt('/posts?slot=s1&tiktok=s1');
+    const form = await postingScreen();
+    const how = await within(form).findByRole('radiogroup', { name: 'Nasıl gönderilsin' });
+    expect(within(how).getByRole('radio', { name: 'Doğrudan paylaş' })).toBeChecked();
+    expect(within(how).queryByText(i18n.t('studio.tiktok.draftSuggested'))).not.toBeInTheDocument();
+  });
+
   it('posts_directly_unless_the_draft_is_chosen', async () => {
     mockFetch(answers());
     renderAt('/posts?slot=s1&tiktok=s1');
@@ -816,5 +843,20 @@ describe('TikTok posting screen', () => {
     } finally {
       await i18n.changeLanguage('tr');
     }
+  });
+});
+
+describe('TikTok processing notice', () => {
+  it('the_approval_says_it_may_take_a_few_minutes_in_tiktoks_words', () => {
+    expect(i18n.getFixedT('en')('studio.tiktok.approved', { time: 'x' })).toMatch(
+      /it may take a few minutes for the content to process and be visible on your profile\.$/,
+    );
+    expect(i18n.getFixedT('en')('studio.tiktok.status.due')).toMatch(
+      /it may take a few minutes for the content to process and be visible on your profile\.$/i,
+    );
+    expect(i18n.getFixedT('tr')('studio.tiktok.approved', { time: 'x' })).toMatch(/birkaç dakika sürebilir\.$/);
+    expect(i18n.getFixedT('tr')('studio.tiktok.status.due')).toMatch(/birkaç dakika sürebilir\.$/);
+    // A draft is posted by the creator in TikTok: its words are its own.
+    expect(i18n.getFixedT('en')('studio.tiktok.approvedDraft', { time: 'x' })).not.toMatch(/few minutes/);
   });
 });

@@ -132,6 +132,8 @@ export function failReason(t: TFunction, reason: string | null | undefined): str
     case 'permission':
     case 'rate_limited':
     case 'missed_grace':
+    case 'app_not_audited':
+    case 'media_unfetched':
       return t(`postsPage.reasons.${reason}`);
     case 'validation':
     case 'refused':

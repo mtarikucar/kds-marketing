@@ -43,6 +43,12 @@ describe('failureText', () => {
       ['throttle: tiktok: HTTP 200 reached_active_user_cap: app cap', tr.failure.tiktokAppCap],
       ['permission: tiktok: HTTP 403 spam_risk_user_banned_from_posting: banned', tr.failure.tiktokBanned],
       ['permanent: tiktok: HTTP 403 url_ownership_unverified: verify', tr.failure.tiktokDomain],
+      [
+        'permanent: tiktok: HTTP 403 unaudited_client_can_only_post_to_private_accounts: Unaudited clients can only post to a private account.',
+        tr.failure.tiktokUnaudited,
+      ],
+      ['permanent: tiktok: publish failed: video_pull_failed', tr.failure.tiktokPull],
+      ['permanent: tiktok: publish failed: photo_pull_failed', tr.failure.tiktokPull],
       ['permanent: tiktok: publish failed: spam_risk_text', tr.failure.tiktokSpam],
       ['permanent: tiktok: publish failed: spam_risk', tr.failure.tiktokSpam],
       ['permanent: tiktok: publish failed: duration_check_failed', tr.failure.tiktokMedia],

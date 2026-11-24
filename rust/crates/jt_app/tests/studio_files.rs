@@ -442,3 +442,99 @@ fn mp4_major_or_compatible_brands_are_checked_within_the_ftyp_box() {
     to_end[..4].fill(0);
     assert!(check(to_end).is_ok());
 }
+/// A [`MemoryFiles`] that remembers until when each provider URL it signed is valid.
+struct Recording {
+    inner: Arc<MemoryFiles>,
+    expiries: std::sync::Mutex<Vec<time::OffsetDateTime>>,
+}
+#[async_trait::async_trait]
+impl FileStore for Recording {
+    async fn probe(&self) -> Result<(), jt_app::error::AppError> {
+        self.inner.probe().await
+    }
+    async fn put(
+        &self,
+        w: jt_tenancy::WorkspaceId,
+        i: FileId,
+        u: MediaUpload,
+    ) -> Result<jt_app::ports::files::StoredFile, jt_app::error::AppError> {
+        self.inner.put(w, i, u).await
+    }
+    async fn read(
+        &self,
+        w: jt_tenancy::WorkspaceId,
+        i: FileId,
+    ) -> Result<MediaUpload, jt_app::error::AppError> {
+        self.inner.read(w, i).await
+    }
+    async fn provider_url(
+        &self,
+        w: jt_tenancy::WorkspaceId,
+        i: FileId,
+        e: time::OffsetDateTime,
+    ) -> Result<url::Url, jt_app::error::AppError> {
+        self.expiries.lock().unwrap().push(e);
+        self.inner.provider_url(w, i, e).await
+    }
+    async fn delete(
+        &self,
+        w: jt_tenancy::WorkspaceId,
+        i: FileId,
+    ) -> Result<(), jt_app::error::AppError> {
+        self.inner.delete(w, i).await
+    }
+}
+/// A TikTok video is read as bytes (`FILE_UPLOAD`) while `JEETA_TIKTOK_VIDEO_PULL` is off, and
+/// handed over as a signed URL with its type (`PULL_FROM_URL`) once it is on, signed for the full
+/// provider lifetime, far past TikTok's one-hour download window. Its length is read from the
+/// file either way.
+#[tokio::test]
+async fn a_tiktok_video_goes_by_signed_url_only_behind_the_switch() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use jt_app::usecases::studio::files::{
+        PROVIDER_URL_LIFETIME, TIKTOK_PULL_WINDOW, resolve_typed_media, resolve_uploads,
+    };
+    let mut w = support::world().await;
+    let files = Arc::new(Recording {
+        inner: Arc::new(MemoryFiles::default()),
+        expiries: Default::default(),
+    });
+    w.d.files = files.clone();
+    let i=serde_json::from_value(json!({"request_key":"video","filename":"a.mp4","mime":"video/mp4","content":{"kind":"bytes_base64","data":STANDARD.encode(b"\0\0\0\x18ftypisom-video-bytes")}})).unwrap();
+    let f = file_upload(&w.d, &w.ctx, i).await.unwrap();
+    let media = [MediaAsset::File { id: f.id }];
+
+    let (urls, mimes, bytes) = resolve_typed_media(&w.d, w.f.ws, &media, "tiktok")
+        .await
+        .unwrap();
+    assert!(urls.is_empty() && mimes.is_empty(), "off by default");
+    assert_eq!(bytes.len(), 1);
+    assert!(files.expiries.lock().unwrap().is_empty());
+
+    w.d.apps = Arc::new(jt_testkit::fakes::FakeAppConfig {
+        tiktok_video_pull: true,
+        ..Default::default()
+    });
+    let (urls, mimes, bytes) = resolve_typed_media(&w.d, w.f.ws, &media, "tiktok")
+        .await
+        .unwrap();
+    assert_eq!(urls.len(), 1);
+    assert_eq!(mimes, vec!["video/mp4".to_owned()]);
+    assert!(bytes.is_empty());
+    let expiries = files.expiries.lock().unwrap().clone();
+    assert_eq!(expiries, vec![FIXED_NOW + PROVIDER_URL_LIFETIME]);
+    assert!(expiries[0] - FIXED_NOW > TIKTOK_PULL_WINDOW);
+    // Another provider's video is unchanged by the switch.
+    let (urls, _, bytes) = resolve_typed_media(&w.d, w.f.ws, &media, "x")
+        .await
+        .unwrap();
+    assert!(urls.is_empty() && bytes.len() == 1);
+    // A check reads the file whatever the switch says.
+    assert_eq!(
+        resolve_uploads(&w.d, w.f.ws, &media, "tiktok")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}

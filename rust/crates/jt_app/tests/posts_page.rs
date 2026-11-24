@@ -1462,3 +1462,79 @@ async fn the_read_stays_cheap_with_500_areas_and_2000_posts() {
         "the read took {took:?}"
     );
 }
+
+/// The slot of the post `scheduled` planned for `key`, sent once and failed with `category`.
+async fn failed_with(w: &World, key: &str, category: RedactedPublishError) -> Slot {
+    let (_, slot) = scheduled(w, key).await;
+    let slot = stored_slot(w, slot.id);
+    w.uow.edit(|s| {
+        let piece = s
+            .studio
+            .pieces
+            .iter()
+            .rev()
+            .find(|(id, p)| *id == slot.id && p.revision == slot.revision)
+            .map(|(_, p)| p.clone())
+            .expect("the slot's piece");
+        let attempt = PublishAttempt::claim(
+            PublishAttemptId::new_v7(),
+            &slot,
+            &piece,
+            slot.chain.born_version_id,
+            0,
+            Actor::System {
+                component: "studio_publish".into(),
+            },
+            FIXED_NOW,
+        )
+        .unwrap()
+        .finish(&PublishOutcome::Failed(category))
+        .unwrap();
+        s.studio.attempts.push(attempt);
+    });
+    slot
+}
+
+/// A post the platform refused because it has not audited Jeeta's app (TikTok's
+/// `unaudited_client_can_only_post_to_private_accounts`) says so: never "the connection was
+/// renewed", never a reconnect; "Tekrar hazırlat" is the way on (as a draft). A real permission
+/// failure is unchanged: renewed once the account posts again, a reconnect while it does not.
+#[tokio::test]
+async fn a_post_refused_by_an_unaudited_app_is_told_as_such_not_as_a_reconnect() {
+    let w = page_world().await;
+    let slot = failed_with(&w, "req-a", RedactedPublishError::AppNotAudited).await;
+    let page = read(&w, &w.ctx, json!({})).await;
+    let r = row(&page, &format!("slot:{}", slot.id));
+    assert_eq!(r.status, RowStatus::Failed);
+    assert_eq!(r.waits[0].code, WaitCode::Failed);
+    assert_eq!(r.waits[0].facts["reason"], "app_not_audited");
+    assert_eq!(r.waits[0].facts["recovered"], false);
+    assert!(r.actions.reconnect.is_none(), "{:?}", r.actions);
+    assert!(r.actions.redo.is_some(), "prepared again: {:?}", r.actions);
+
+    // A permission failure on an account that posts again reads as renewed, as before.
+    let w = page_world().await;
+    let slot = failed_with(&w, "req-p", RedactedPublishError::Permission).await;
+    let page = read(&w, &w.ctx, json!({})).await;
+    let r = row(&page, &format!("slot:{}", slot.id));
+    assert_eq!(r.waits[0].facts["reason"], "permission");
+    assert_eq!(r.waits[0].facts["recovered"], true);
+
+    // A revoked token, the account no longer able to post: reconnect, as before.
+    let w = page_world().await;
+    let slot = failed_with(&w, "req-r", RedactedPublishError::Auth).await;
+    w.uow.edit(|s| {
+        for c in s
+            .capabilities
+            .iter_mut()
+            .filter(|c| c.capability.id == slot.capability_id)
+        {
+            c.capability.status = jt_capability::StoredStatus::Unreachable;
+        }
+    });
+    let page = read(&w, &w.ctx, json!({})).await;
+    let r = row(&page, &format!("slot:{}", slot.id));
+    assert_eq!(r.waits[0].facts["reason"], "auth");
+    assert_eq!(r.waits[0].facts["recovered"], false);
+    assert_eq!(r.actions.reconnect, Some(slot.capability_id));
+}

@@ -38,7 +38,8 @@ connected through the other (section 4).
 |---|---|
 | `JEETA_TIKTOK_CLIENT_KEY` | the app's client key (portal → the app → App details) |
 | `JEETA_TIKTOK_CLIENT_SECRET` | the app's client secret; given with the key, or neither |
-| `JEETA_PUBLIC_BASE_URL` | required once any provider app is set: the redirect and webhook addresses are built from it |
+| `JEETA_PUBLIC_BASE_URL` | required once any provider app is set: the redirect and webhook addresses are built from it, and the file store's signed URLs TikTok pulls media from |
+| `JEETA_TIKTOK_VIDEO_PULL` | off by default (unset, `0`, `false`); `1` or `true` sends videos as `PULL_FROM_URL` instead of `FILE_UPLOAD`. Turn it on only as section 7 says; any other value stops the start |
 
 The values live in the service's environment file, `root:root` 0600, never printed:
 
@@ -48,7 +49,7 @@ The values live in the service's environment file, `root:root` 0600, never print
 | `staging.jeetagrowth.com` | `/etc/jeeta-staging/jeeta.env` | `jeeta-staging.service` |
 
 At start the binary logs one line `provider apps: ...` with `providers=` the configured apps: it
-must name `tiktok`. The client secret signs the OAuth token calls and verifies the webhooks, so the
+must name `tiktok`; and one line `tiktok videos: ...` with `tiktok_video_pull=` the switch. The client secret signs the OAuth token calls and verifies the webhooks, so the
 key and the secret must be the same app's, and the app whose webhooks a host receives (section 3).
 
 ## 3. What to register in TikTok's developer portal
@@ -154,25 +155,89 @@ Check which app a host runs with by its client key, which is not secret:
 
 Until TikTok audits the app (the production review), and always for the sandbox app:
 
-- it posts only to **private** accounts: a public account is refused with
+- it posts directly only to **private** accounts: a public account is refused with
   `unaudited_client_can_only_post_to_private_accounts` (HTTP 403), whatever the privacy chosen;
 - the posting screen offers only "Only me" (`SELF_ONLY`); Jeeta never picks a privacy itself;
 - only the sandbox's target users can sign in to the sandbox app.
+
+Jeeta files that refusal under its own reason, `app_not_audited` (the adapter's
+`Cause::AppNotAudited`, a `Permanent` refusal; not `Permission`), because reconnecting does not help
+and the same post fails the same way until the audit passes:
+
+- the attempt's evidence is `app_not_audited`, the ledger's `studio.publish.failure` carries
+  `provider_cause: app_not_audited` beside the failure line;
+- the pending work's blocker is `publish_app_not_audited` with `next_action: send_as_tiktok_draft`
+  (never `reconnect_capability`);
+- Paylaşımlar says, in one sentence, that TikTok has not audited Jeeta's app yet so it cannot post
+  directly to a public account, and that the post can be prepared again and sent to TikTok as a
+  draft; its action is the usual "Tekrar hazırlat", never a reconnect;
+- the next posting screen of that account suggests "Send to TikTok as a draft" (it is selected,
+  with one line saying why) while the account's latest post TikTok answered was refused this way;
+  the human still chooses, and a post that went out since ends the suggestion.
+
+TikTok's pages state the restriction for Direct Post only; a draft (the upload to the creator's
+inbox) is not documented to be refused this way, but TikTok does not confirm it either.
 
 To demonstrate posting, make the test account private in TikTok for the session (its privacy
 settings, "Private account") and public again afterwards.
 
 ## 7. Videos and photos: `FILE_UPLOAD` and `PULL_FROM_URL`
 
-- **Videos go as `FILE_UPLOAD`**: Jeeta reads the file from its file store and uploads it in
-  10 MiB chunks to the upload URL TikTok answers with (`open-upload*.tiktokapis.com`). Nothing has
-  to be verified at TikTok; it costs the server's upload time (at most 120 seconds per chunk).
+TikTok's guidelines say "If video resources are already on API Clients' servers, do not use
+FILE_UPLOAD; use PULL_FROM_URL instead"
+(<https://developers.tiktok.com/doc/content-sharing-guidelines>, 2d).
+
 - **Photos go as `PULL_FROM_URL`** (TikTok takes photos no other way): TikTok fetches the file
   store's signed URLs itself, so the file store's public host must be verified in the portal (URL
   properties, a domain or a URL prefix); until it is, photo posts fail `url_ownership_unverified`.
-- Sending videos as `PULL_FROM_URL` too would spare the server the upload, but it needs the same URL
-  verification and a signed URL that stays valid while TikTok downloads (TikTok gives up after an
-  hour: `video_pull_failed`). Not changed: a decision for later.
+- **Videos go as `PULL_FROM_URL` once `JEETA_TIKTOK_VIDEO_PULL` is on**, through the same path as
+  photos: the post's init (`/v2/post/publish/video/init/`, or `/inbox/video/init/` for a draft)
+  carries `source_info: {source: PULL_FROM_URL, video_url}`, the file store's signed URL, and no
+  bytes are uploaded. While the switch is **off (the default)** they go as `FILE_UPLOAD` as before:
+  Jeeta reads the file and uploads it in 10 MiB chunks to the upload URL TikTok answers with
+  (`open-upload*.tiktokapis.com`; at most 120 seconds per chunk).
+
+What a pulled video needs, from TikTok's media transfer guide
+(<https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide>), and how Jeeta meets
+it:
+
+| TikTok asks | Jeeta |
+|---|---|
+| the URL's domain or URL prefix verified for the app ("URL properties") | the operator's step below; until then the init fails `url_ownership_unverified` |
+| `https`, no redirect (a 3xx is invalid) | the URL is `JEETA_PUBLIC_BASE_URL` + `/files/{id}?workspace&expires&signature`, answered by the file route itself (`200`, no redirect); the adapter refuses a non-`https` video URL before anything is sent. A proxy in front must not redirect that path (for example `http`→`https` or a trailing-slash rule) |
+| reachable for the whole download, which TikTok ends one hour after it starts | the URL is signed for 24 hours from the moment the post is sent (`PROVIDER_URL_LIFETIME`, the file store's longest), the init follows at once; the file route serves one response for up to 30 minutes (`READ_DEADLINE`) and cuts a reader idle for 30 s |
+| content type, range requests | the guide names neither; the route answers `Content-Type: video/mp4` (the stored type) and `Content-Length`, and serves the whole file (no `Range` support) |
+
+How a pulled video can fail, and what Jeeta does (never sent again by itself, section 9):
+
+- `url_ownership_unverified` (HTTP 403 at the init): TikTok refused the URL before downloading
+  anything; nothing was posted. Reason `media_unfetched` (`Cause::MediaUnfetched`), blocker
+  `publish_media_unfetched` with `next_action: check_media_url_verification`; the owner reads that
+  Jeeta's media domain is not verified yet.
+- `video_pull_failed` (the post's status `FAILED`, after the init was accepted): TikTok could not
+  download it within its hour; nothing was posted. The same reason; the owner reads that TikTok
+  could not download the media and can have it prepared again.
+- An accepted init whose answer is lost is `Unknown` (TikTok may be downloading it): never sent
+  again, never followed by an upload.
+
+A refused pull is **not** retried as `FILE_UPLOAD`: after an accepted init TikTok may still post the
+pulled video, so a second send could post twice; and an unverified URL means the switch is on too
+early.
+
+**Before turning the switch on** (on staging first, then production):
+
+1. In the portal, on the app the host runs with: Content Posting API → URL properties → add the
+   file store's host (the host of `JEETA_PUBLIC_BASE_URL`, e.g. `yeni.jeetagrowth.com`) as a
+   domain (DNS TXT record, which covers its paths) or the URL prefix `https://<host>/files/`, and
+   see it verified. Photo posts need the same property, so a working photo post shows it is in
+   place.
+2. Check that `https://<host>/files/...` reaches the file route without a redirect (a signed photo
+   URL from a recent attempt answers `200` with the image; never paste a signed URL into a chat).
+3. Set `JEETA_TIKTOK_VIDEO_PULL=1` in the environment file, restart (section 4, step 3), and check
+   the `tiktok videos:` start line says `tiktok_video_pull=true`.
+4. Post a test video (to a private test account while the app is unaudited); Today shows it
+   processing (`PROCESSING_DOWNLOAD`), then published. Turning the switch off again needs only a
+   restart.
 
 ## 8. Tokens and disconnecting
 
@@ -194,7 +259,15 @@ settings, "Private account") and public again afterwards.
 
 A TikTok post that failed is never sent again by itself (no Studio publication is: a retry could
 post twice). Today shows the slot with TikTok's reason in plain words and a Cancel button; cancel
-it, fix the cause, and the agent (or the next planning run) plans it again.
+it, fix the cause, and the agent (or the next planning run) plans it again. In Paylaşımlar the post
+waits with "Tekrar hazırlat" (prepare it again), or "Yeniden bağla" when the account itself lost
+its access.
+
+What the owner is told depends on the reason: a lost or narrowed grant (`auth`, `permission`)
+asks to reconnect, or says the connection was renewed once the account posts again; an app TikTok
+has not audited (`app_not_audited`, section 6) never asks to reconnect and points to a draft; media
+TikTok could not fetch (`media_unfetched`, section 7) points to the media domain's verification or
+to preparing it again.
 
 ## 10. Troubleshooting by error code
 
@@ -208,14 +281,14 @@ A failure reads `kind: tiktok: HTTP <status> <code>: <message>` (the attempt's f
 | `invalid_grant` | a refresh token spent, expired (after 365 days) or revoked, or a sign-in code reused | reconnect the account |
 | `access_token_invalid`, HTTP 401 | the token was revoked or expired | reconnect |
 | `scope_not_authorized`, `scope_permission_missed` | the grant lacks a scope (connected before it was asked for) | reconnect: the consent page grants all five |
-| `unaudited_client_can_only_post_to_private_accounts` | an unaudited app posting to a public account | section 6 |
+| `unaudited_client_can_only_post_to_private_accounts` | an unaudited app posting directly to a public account (`Permanent`, cause `app_not_audited`; not a permission problem) | do not reconnect: prepare it again and send it as a TikTok draft, or wait for the audit (section 6) |
 | `privacy_level_option_mismatch`, "privacy level X not available" | the privacy chosen is not offered for the account (any longer) | cancel, post again with a privacy the screen offers |
 | `spam_risk_too_many_posts`, `reached_active_user_cap`, `spam_risk_too_many_pending_share` | daily caps: the creator's posts through apps, the app's daily posting users, drafts waiting in the inbox | wait a day |
 | `spam_risk_user_banned_from_posting` | TikTok bars the account from posting | the account's owner, in TikTok |
 | `rate_limit_exceeded`, HTTP 429 | too many calls for the account's token | wait; a failed post is planned again |
-| `url_ownership_unverified` | photos from an unverified host | section 7 |
+| `url_ownership_unverified` | photos, or videos with `JEETA_TIKTOK_VIDEO_PULL` on, from a host not verified for the app (`Permanent`, cause `media_unfetched`); nothing was posted | verify the file store's host in the portal, or turn the switch off (section 7) |
 | `file_format_check_failed`, `duration_check_failed`, `frame_rate_check_failed`, `picture_size_check_failed` | TikTok refused the media | fix the file (MP4, the account's longest video, frame rate, picture size) |
-| `video_pull_failed`, `photo_pull_failed` | TikTok could not download the media within an hour | check the media URL is public and valid; post again |
+| `video_pull_failed`, `photo_pull_failed` | TikTok could not download the media within an hour (`Permanent`, cause `media_unfetched`); nothing was posted | check the file route is public, `https` and not redirected (section 7); prepare it again |
 | `spam_risk_text`, `spam_risk` | TikTok flagged the caption or the post | change the caption; do not retry as is |
 | `auth_removed` | the creator removed the app while the post was processing | reconnect |
 | `internal`, `internal_error`, HTTP 5xx | TikTok's side | post again later |

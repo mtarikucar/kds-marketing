@@ -10,7 +10,7 @@ use jt_app::ports::connectors::{
     Connector, InsightsReader, MediaUpload, OAuthApp, OAuthProvider, PublishReceipt,
     PublishRequest, PublishResolution, Publisher, TiktokCreator, TiktokPost, XApp,
 };
-use jt_connector::{ConnectorError, Credential, Provider};
+use jt_connector::{Cause, ConnectorError, Credential, Provider};
 use jt_outbound::FIXED_HOSTS;
 use jt_tiktok::{
     CHUNK_BYTES, MAX_DESCRIPTION_UNITS, MAX_PHOTOS, MAX_TITLE_UNITS, PRIVACY_LEVELS, READ_ATTEMPTS,
@@ -64,6 +64,22 @@ fn video_post(text: &str, len: usize) -> PublishRequest {
     PublishRequest {
         text: text.into(),
         media: vec![clip(len)],
+        tiktok: Some(choice("PUBLIC_TO_EVERYONE")),
+        ..PublishRequest::default()
+    }
+}
+
+/// The signed file-store URL a pulled video is posted from.
+const VIDEO_URL: &str =
+    "https://media.jeeta.test/files/v1?workspace=w&expires=1&signature=sig-SECRET-0";
+
+/// A video post TikTok pulls from the file store (`JEETA_TIKTOK_VIDEO_PULL` on): its URL and its
+/// type, no bytes.
+fn pulled_video_post(text: &str) -> PublishRequest {
+    PublishRequest {
+        text: text.into(),
+        media_urls: vec![Url::parse(VIDEO_URL).unwrap()],
+        media_mimes: vec!["video/mp4".into()],
         tiktok: Some(choice("PUBLIC_TO_EVERYONE")),
         ..PublishRequest::default()
     }
@@ -1403,6 +1419,121 @@ async fn photo_uses_pull_from_url() {
 }
 
 #[tokio::test]
+async fn a_video_by_url_is_pulled_by_tiktok_never_uploaded() {
+    let r = rig().await;
+    r.mock
+        .on("POST", CREATOR_INFO, answer("creator_info_public"));
+    r.mock.on("POST", VIDEO_INIT, answer("photo_init"));
+    let receipt =
+        r.tt.publish(&cred(), &public(), &pulled_video_post("Bugünün menüsü"))
+            .await
+            .unwrap();
+    assert_eq!(receipt, self::receipt(PHOTO_PUBLISH_ID));
+    assert_eq!(
+        r.mock.lines(),
+        [format!("POST {CREATOR_INFO}"), format!("POST {VIDEO_INIT}")]
+    );
+    let call = r.mock.request("POST", VIDEO_INIT);
+    assert_eq!(call.bearer(), Some(ACCESS_TOKEN));
+    assert_eq!(
+        call.json(),
+        json!({
+            "post_info": {
+                "title": "Bugünün menüsü",
+                "privacy_level": "PUBLIC_TO_EVERYONE",
+                "disable_comment": false,
+                "disable_duet": true,
+                "disable_stitch": false,
+                "brand_content_toggle": false,
+                "brand_organic_toggle": false,
+            },
+            "source_info": { "source": "PULL_FROM_URL", "video_url": VIDEO_URL },
+        })
+    );
+    assert!(r.mock.requests("PUT", UPLOAD).is_empty());
+
+    // A draft goes to the inbox init with the source alone, pulled too.
+    r.mock.on("POST", INBOX_VIDEO_INIT, answer("photo_init"));
+    let mut request = pulled_video_post("");
+    request.tiktok = Some(draft(""));
+    r.tt.publish(&cred(), &public(), &request).await.unwrap();
+    assert_eq!(
+        r.mock.request("POST", INBOX_VIDEO_INIT).json(),
+        json!({ "source_info": { "source": "PULL_FROM_URL", "video_url": VIDEO_URL } })
+    );
+    assert!(r.mock.requests("PUT", UPLOAD).is_empty());
+}
+
+#[tokio::test]
+async fn a_refused_pull_is_its_own_reason_and_is_never_uploaded_instead() {
+    let r = rig().await;
+    r.mock
+        .on("POST", CREATOR_INFO, answer("creator_info_public"));
+    // The file store's host is not verified for the app: nothing was posted, and nothing is
+    // sent again (no FILE_UPLOAD of the same video).
+    r.mock
+        .on("POST", VIDEO_INIT, answer_with(403, "error_url_ownership"));
+    let e =
+        r.tt.publish(&cred(), &public(), &pulled_video_post("x"))
+            .await
+            .unwrap_err();
+    assert_eq!(
+        (e.kind(), e.cause()),
+        ("permanent", Some(Cause::MediaUnfetched))
+    );
+    assert!(
+        e.reason()
+            .unwrap()
+            .starts_with("HTTP 403 url_ownership_unverified"),
+        "{e}"
+    );
+    assert_eq!(r.mock.requests("POST", VIDEO_INIT).len(), 1);
+    assert!(r.mock.requests("PUT", UPLOAD).is_empty());
+    assert!(!format!("{e} {e:?}").contains("sig-SECRET-0"));
+
+    // An accepted init may have started the pull: a lost or unreadable answer is `Unknown`,
+    // never followed by another init or an upload.
+    r.mock.clear();
+    r.mock.set(
+        "POST",
+        VIDEO_INIT,
+        ok(json!({ "data": {}, "error": { "code": "ok" } })),
+    );
+    assert_eq!(
+        kind_of(
+            r.tt.publish(&cred(), &public(), &pulled_video_post("x"))
+                .await
+        ),
+        "unknown"
+    );
+    assert_eq!(r.mock.requests("POST", VIDEO_INIT).len(), 1);
+    assert!(r.mock.requests("PUT", UPLOAD).is_empty());
+}
+
+#[tokio::test]
+async fn a_video_url_is_one_https_mp4_and_nothing_else() {
+    let r = rig().await;
+    r.mock
+        .on("POST", CREATOR_INFO, answer("creator_info_public"));
+    let mut two = pulled_video_post("x");
+    two.media_urls.push(photo_urls(1).remove(0));
+    two.media_mimes.push("image/jpeg".into());
+    let mut mov = pulled_video_post("x");
+    mov.media_mimes = vec!["video/quicktime".into()];
+    let mut plain = pulled_video_post("x");
+    plain.media_urls = vec![Url::parse("http://media.jeeta.test/files/v1").unwrap()];
+    for request in [two, mov, plain] {
+        assert_eq!(
+            kind_of(r.tt.publish(&cred(), &public(), &request).await),
+            "permanent",
+            "{:?}",
+            request.media_mimes
+        );
+    }
+    assert!(r.mock.recorded().is_empty());
+}
+
+#[tokio::test]
 async fn post_shape_is_checked_before_anything_is_sent() {
     let r = rig().await;
     script_video(&r.mock);
@@ -1746,6 +1877,39 @@ async fn status_failed_carries_fail_reason() {
     assert!(r.mock.recorded().is_empty());
 }
 
+#[tokio::test]
+async fn a_pulled_video_fails_with_the_media_cause_and_names_no_secret() {
+    let r = rig().await;
+    r.mock.on("POST", STATUS, answer("status_processing"));
+    for why in ["video_pull_failed", "photo_pull_failed"] {
+        r.mock.set(
+            "POST",
+            STATUS,
+            ok(json!({ "data": { "status": "FAILED", "fail_reason": why }, "error": { "code": "ok" } })),
+        );
+        let Some(PublishResolution::Failed(e)) =
+            r.tt.resolve(&cred(), &public(), &receipt(PUBLISH_ID))
+                .await
+                .unwrap()
+        else {
+            panic!("not failed");
+        };
+        assert_eq!(e.kind(), "permanent", "{why}");
+        assert_eq!(e.cause(), Some(Cause::MediaUnfetched), "{why}");
+        assert_eq!(e.reason(), Some(format!("publish failed: {why}").as_str()));
+    }
+    // Any other refusal of the media is the content's: no cause.
+    r.mock.set("POST", STATUS, answer("status_failed"));
+    let Some(PublishResolution::Failed(e)) =
+        r.tt.resolve(&cred(), &public(), &receipt(PUBLISH_ID))
+            .await
+            .unwrap()
+    else {
+        panic!("not failed");
+    };
+    assert_eq!(e.cause(), None);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Counters
 // ---------------------------------------------------------------------------------------------
@@ -2072,11 +2236,10 @@ async fn error_mapping_scope() {
             "permission"
         );
     }
-    // The creator or the app may not post that way.
+    // The creator may not post that way.
     r.mock
         .set("POST", CREATOR_INFO, answer("creator_info_public"));
     for reply in [
-        answer_with(403, "error_unaudited"),
         api_error(
             403,
             "privacy_level_option_mismatch",
@@ -2092,7 +2255,38 @@ async fn error_mapping_scope() {
                     .await
                     .unwrap_err();
             assert_eq!(e.kind(), "permission", "{reply:?}: {e}");
+            assert_eq!(e.cause(), None);
         }
+    }
+    assert!(r.mock.requests("PUT", UPLOAD).is_empty());
+}
+
+#[tokio::test]
+async fn an_unaudited_app_is_its_own_cause_not_a_permission() {
+    let r = rig().await;
+    r.mock
+        .on("POST", CREATOR_INFO, answer("creator_info_public"));
+    r.mock
+        .on("POST", VIDEO_INIT, answer_with(403, "error_unaudited"));
+    r.mock
+        .on("POST", CONTENT_INIT, answer_with(403, "error_unaudited"));
+    for request in [video_post("x", 10), photo_post("x", 1)] {
+        let e =
+            r.tt.publish(&cred(), &public(), &request)
+                .await
+                .unwrap_err();
+        // Reconnecting does not help: not `Permission`, not `Auth`.
+        assert_eq!(
+            (e.kind(), e.cause()),
+            ("permanent", Some(Cause::AppNotAudited)),
+            "{e}"
+        );
+        assert!(
+            e.reason()
+                .unwrap()
+                .starts_with("HTTP 403 unaudited_client_can_only_post_to_private_accounts"),
+            "{e}"
+        );
     }
     assert!(r.mock.requests("PUT", UPLOAD).is_empty());
 }

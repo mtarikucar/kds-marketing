@@ -133,6 +133,11 @@ pub const PUBLIC_BASE_URL: &str = "JEETA_PUBLIC_BASE_URL";
 /// business-recipient basis. Turned on only after the public unsubscribe links are deployed and
 /// the owner's lawyer answered.
 pub const OUTREACH_ENABLED: &str = "JEETA_OUTREACH_ENABLED";
+/// The platform switch for TikTok videos sent as `PULL_FROM_URL`: `1` or `true` turns it on,
+/// anything else unset or `0`/`false` keeps it off (the default, videos uploaded as
+/// `FILE_UPLOAD`). Turned on only once the file store's public host (`JEETA_PUBLIC_BASE_URL`'s)
+/// is verified for the TikTok app in TikTok's developer portal (`docs/operations/tiktok.md` §7).
+pub const TIKTOK_VIDEO_PULL: &str = "JEETA_TIKTOK_VIDEO_PULL";
 /// The platform's Claude API key, for the inbox's automatic replies (`usecases::inbox::autoreply`,
 /// `jt_claude`). Optional: unset, the automatic replies are off in every workspace and the panel
 /// says so. A secret: never logged, wiped from memory when dropped.
@@ -191,6 +196,7 @@ const VARS: &[&str] = &[
     GOOGLE_CLIENT_SECRET,
     PUBLIC_BASE_URL,
     OUTREACH_ENABLED,
+    TIKTOK_VIDEO_PULL,
     ANTHROPIC_API_KEY,
     AUTOREPLY_MODEL,
 ];
@@ -287,6 +293,8 @@ pub struct EnvPlatformApps {
     public_base_url: Option<Url>,
     /// [`OUTREACH_ENABLED`].
     outreach_enabled: bool,
+    /// [`TIKTOK_VIDEO_PULL`].
+    tiktok_video_pull: bool,
 }
 
 impl EnvPlatformApps {
@@ -323,6 +331,7 @@ impl fmt::Debug for EnvPlatformApps {
                 &self.public_base_url.as_ref().map(Url::as_str),
             )
             .field("outreach_enabled", &self.outreach_enabled)
+            .field("tiktok_video_pull", &self.tiktok_video_pull)
             .finish()
     }
 }
@@ -362,6 +371,10 @@ impl PlatformAppConfig for EnvPlatformApps {
 
     fn outreach_enabled(&self) -> bool {
         self.outreach_enabled
+    }
+
+    fn tiktok_video_pull(&self) -> bool {
+        self.tiktok_video_pull
     }
 }
 
@@ -844,6 +857,7 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
         google,
         public_base_url,
         outreach_enabled: parse_flag(OUTREACH_ENABLED, get(OUTREACH_ENABLED))?,
+        tiktok_video_pull: parse_flag(TIKTOK_VIDEO_PULL, get(TIKTOK_VIDEO_PULL))?,
     })
 }
 
@@ -1167,6 +1181,20 @@ mod tests {
         for bad in ["yes", "2", "on", "enabled"] {
             let err = error(&with(&[(OUTREACH_ENABLED, bad)]));
             assert_eq!(err.var, OUTREACH_ENABLED, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_tiktok_video_pull_switch_is_off_unless_one_or_true() {
+        let off = Config::from_map(&with(&[])).unwrap();
+        assert!(!off.apps.tiktok_video_pull(), "off by default");
+        for (raw, on) in [("1", true), (" true ", true), ("0", false), ("", false)] {
+            let config = Config::from_map(&with(&[(TIKTOK_VIDEO_PULL, raw)])).unwrap();
+            assert_eq!(config.apps.tiktok_video_pull(), on, "{raw:?}");
+        }
+        for bad in ["yes", "on"] {
+            let err = error(&with(&[(TIKTOK_VIDEO_PULL, bad)]));
+            assert_eq!(err.var, TIKTOK_VIDEO_PULL, "{bad}");
         }
     }
 
@@ -1752,6 +1780,8 @@ mod tests {
             X_AD_SCOPES,
             TIKTOK_CLIENT_KEY,
             TIKTOK_CLIENT_SECRET,
+            // Off in the example: only once the media host is verified at TikTok.
+            TIKTOK_VIDEO_PULL,
             TIKTOK_ADS_APP_ID,
             TIKTOK_ADS_SECRET,
             LINKEDIN_CLIENT_ID,

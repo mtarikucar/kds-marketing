@@ -222,18 +222,7 @@ pub(crate) async fn pending_in(
                     details: None,
                     target,
                     reason: format!("publish_{reason}"),
-                    next_action: Some(
-                        if matches!(
-                            e,
-                            jt_studio::RedactedPublishError::Auth
-                                | jt_studio::RedactedPublishError::Permission
-                        ) {
-                            "reconnect_capability"
-                        } else {
-                            "review_publication_duplicate_risk"
-                        }
-                        .into(),
-                    ),
+                    next_action: Some(publish_next_action(e).into()),
                 });
             }
         }
@@ -572,4 +561,20 @@ pub async fn slot_cancel(d: &Deps, ctx: &Ctx, input: CancelSlotInput) -> Result<
     let out = slot_in(r.as_mut(), s.id, &frame, ctx.now).await?;
     r.commit().await?;
     Ok(out)
+}
+
+/// What a pending publish failure of category `e` asks for: a lost or narrowed connection is
+/// reconnected; a post the provider refuses because it has not audited the platform's app goes to
+/// the creator's TikTok drafts instead (reconnecting does not help, and a direct post fails the
+/// same way until the audit passes); media the provider could not fetch is the file server's or
+/// its URL verification's to check; anything else is reviewed for a duplicate before it is sent
+/// again.
+pub(crate) fn publish_next_action(e: jt_studio::RedactedPublishError) -> &'static str {
+    use jt_studio::RedactedPublishError as E;
+    match e {
+        E::Auth | E::Permission => "reconnect_capability",
+        E::AppNotAudited => "send_as_tiktok_draft",
+        E::MediaUnfetched => "check_media_url_verification",
+        _ => "review_publication_duplicate_risk",
+    }
 }

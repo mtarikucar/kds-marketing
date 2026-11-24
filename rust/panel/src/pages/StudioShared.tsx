@@ -141,7 +141,11 @@ export function Reason({ reason }: { reason: string }) {
       ? 'waitingApproval'
       : reason === 'publish_processing'
         ? 'processing'
-        : reason === 'publish_unknown'
+        : reason === 'publish_app_not_audited'
+          ? 'appNotAudited'
+          : reason === 'publish_media_unfetched'
+            ? 'mediaUnfetched'
+            : reason === 'publish_unknown'
           ? 'unknown'
           : /brake/.test(reason)
             ? 'braked'

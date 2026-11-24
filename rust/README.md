@@ -67,6 +67,7 @@ rolü ya da göç hatası tek, okunur bir satır yazdırır (ör.
    ```text
    INFO jeeta::serve: provider apps: OAuth needs a configured app; webhook and redirect addresses need the public base URL providers="none" public_base_url="unset (JEETA_PUBLIC_BASE_URL)"
    INFO jeeta::serve: outreach email: campaigns launch and send only while JEETA_OUTREACH_ENABLED is on outreach_enabled=false
+   INFO jeeta::serve: tiktok videos: uploaded (FILE_UPLOAD) unless JEETA_TIKTOK_VIDEO_PULL is on, then pulled from the file store (PULL_FROM_URL, its host verified at TikTok) tiktok_video_pull=false
    INFO jeeta::serve: jeeta is listening bind=127.0.0.1:8080 panel=served from panel/dist allowed_hosts=0 migrations_applied=4
    ```
 
@@ -219,6 +220,7 @@ hiçbir günlük satırında görünmez.
 | `JEETA_GOOGLE_CLIENT_ID` | — | Platformun Google uygulamasının OAuth istemci kimliği: Google Ads API'si açık olan Google Cloud projesinin "Web application" istemcisi. Google Ads API erişimi projeye verilir (geliştirici belirteci gönderilmez); üretim hesaplarını çağırmak için projenin erişim düzeyi en az "Explorer" olmalıdır. Sırla birlikte verilir |
 | `JEETA_GOOGLE_CLIENT_SECRET` | — | Google uygulamasının istemci sırrı; kimlikle birlikte verilir |
 | `JEETA_OUTREACH_ENABLED` | kapalı | Soğuk e-posta (outreach) platform anahtarı: yalnız `1`/`true` açar, `0`/`false` ya da boş kapalı tutar, başka bir değer açılışı durdurur. Kapalıyken hiçbir kampanya başlatılmaz ya da sürdürülmez (`403` `details.reason = "outreach_disabled_on_platform"`), gönderici kimliği ayarlı olsa bile hiçbir kampanya e-postası gitmez ve hiçbir ticari gönderi işletme alıcısı dayanağına (B2B) dayanmaz: aday havuzundaki «Mesaj gönder» de (e-posta ve SMS) bu dayanağa dayandığı için rızası olmayan bir adaya gitmez (`403` `IZIN_YOK`). Yalnız abonelikten çıkma ve tıklama adresleri yayına alındıktan ve sahibin avukatı yanıtladıktan sonra açılır (bkz. tasarım D24) |
+| `JEETA_TIKTOK_VIDEO_PULL` | kapalı | TikTok videoları platform anahtarı: yalnız `1`/`true` açar, `0`/`false` ya da boş kapalı tutar, başka bir değer açılışı durdurur. Kapalıyken TikTok videosu `FILE_UPLOAD` ile yüklenir; açıkken TikTok onu dosya deposunun imzalı adresinden kendisi çeker (`PULL_FROM_URL`, fotoğraflar gibi). Yalnız dosya deposunun genel alan adı TikTok geliştirici portalında (URL properties) doğrulandıktan sonra açılır; bkz. [`docs/operations/tiktok.md`](../docs/operations/tiktok.md) §7 |
 | `JEETA_PUBLIC_BASE_URL` | — | Panelin dışarıdan ulaşılan genel adresi: `https://alan-adi` ya da `https://alan-adi:port`; yol, sorgu, parça ya da kullanıcı yok (yalnız yerel geliştirmede `http://localhost:port`). Herhangi bir sağlayıcı uygulaması yapılandırılmışsa **zorunlu**. OAuth yönlendirme adresleri ve webhook adresleri bundan kurulur; boşken akış başlamaz ve webhook adresi gösterilmez (`409`, `details.reason = "public_base_url_not_configured"`) |
 
 **Sağlayıcı değişkenleri.** Her uygulama isteğe bağlıdır ama ancak bütün olarak yapılandırılır:

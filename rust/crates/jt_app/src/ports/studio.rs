@@ -72,6 +72,12 @@ impl PublishOutcome {
 fn publish_error_category(e: &AppError) -> jt_studio::RedactedPublishError {
     use crate::error::ErrorCode as C;
     use jt_studio::RedactedPublishError as E;
+    // A refusal's cause comes before its kind (`jt_connector::Cause::key`).
+    match e.details["provider_cause"].as_str() {
+        Some("app_not_audited") => return E::AppNotAudited,
+        Some("media_unfetched") => return E::MediaUnfetched,
+        _ => {}
+    }
     match e.details["provider_error"].as_str() {
         Some("auth") => return E::Auth,
         Some("permission") => return E::Permission,
