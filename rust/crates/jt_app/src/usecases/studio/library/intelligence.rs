@@ -607,9 +607,11 @@ pub async fn material_analysis_complete(
         material.tags.quality = Some(quality);
     }
     let mut share_cleared = false;
+    let mut marked = false;
     if let Some(depicts) = i.depicts {
         // An agent may add privacy findings, never erase a person's corrections/markers.
         if !depicts.is_subset(&material.tags.depicts) {
+            marked = true;
             share_cleared = material.share.is_some();
             material.share = None;
         }
@@ -663,6 +665,9 @@ pub async fn material_analysis_complete(
         .update_material(material.clone(), i.expected_revision)
         .await?;
     r.studio_materials().save_intelligence(row.clone()).await?;
+    if marked {
+        super::propagate_markers(r.as_mut(), &material).await?;
+    }
     if share_cleared {
         super::invalidate_material_productions(r.as_mut(), material.id, ctx.now, false).await?;
         // A person's file for a post waits for `İzin ver` again where it is still used (§3.4.4).

@@ -7,6 +7,9 @@ pub fn input(action: &str) -> Value {
     if let Some(name) = action.strip_prefix("project_") {
         return super::projects::schema(name);
     }
+    if let Some(schema) = super::render::schema(action) {
+        return schema;
+    }
     if action == "ledger_export" {
         return object(json!({"filter":input("ledger")}), &["filter"]);
     }

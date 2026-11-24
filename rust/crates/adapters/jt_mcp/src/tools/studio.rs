@@ -136,7 +136,98 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     .into_iter()
     .chain(library_definitions())
     .chain(posting_definitions())
+    .chain(render_definitions())
     .collect()
+}
+
+/// Composed posts' tools: slides and story frames the server draws from the library's photos,
+/// a fixed template and short texts, in the workspace's brand tokens. None needs a frame.
+fn render_definitions() -> Vec<ToolDef> {
+    let def = |use_case: &'static str,
+               description: &'static str,
+               schema: fn() -> Schema,
+               run: crate::registry::ToolRun| ToolDef {
+        use_case,
+        description,
+        permissions: jt_app::usecases::studio::permissions::for_use_case(use_case),
+        schema,
+        run,
+    };
+    vec![
+        def(
+            "studio.post_templates",
+            "List the post templates: roles (slides: cover, second_cover, steps, closeup, items, \
+             cta at 1080x1350; stories: moment, question, item at 1080x1920), their variants and \
+             each slot (kind photo, text or price; required; max_chars, max_lines and width at \
+             the template's size), the workspace's brand tokens (as set and as drawn) and its \
+             render history: last_variants per role, recent renders and cover.next_variant, the \
+             cover to use next. Read it before rendering a post. [risk: READ]",
+            || posting_schema("post_templates"),
+            post_templates,
+        ),
+        def(
+            "studio.post_render",
+            "Render one slide or story frame from the library's photos, with request_key \
+             (replayed): role, variant, texts {slot: text} drawn exactly as given (no casing \
+             change; wrapped by words), photos {slot: {material_id, focus_x?, focus_y?}} (live, \
+             filed JPEG/PNG/WebP materials; one olay at most), counter {index, total} on a \
+             slide, output jpeg (default) or png, allow_repeat, title. A text that does not \
+             fit is VALIDATION text_overflow naming the slot, max_chars and max_lines: shorten \
+             it. A cover in the variant of the workspace's last rendered cover is CONFLICT \
+             cover_variant_repeats (details.next_variant) unless allow_repeat. The image is \
+             stored and added to the library at once: returns {file, material, ai_generated, \
+             sticker_area, brand_fallbacks, reused, next}; file.id goes in \
+             jeeta.studio.piece_submit, material.id in jeeta.studio.posts_propose. The material \
+             is composed by the server: its composition names the template and the sources, it \
+             is AI-generated when any source is, and it takes its sources' olay, people, \
+             depicts and share permission. [risk: WRITE]",
+            || posting_schema("post_render"),
+            post_render,
+        ),
+        def(
+            "studio.brand_get",
+            "Read the workspace's brand tokens for composed posts: background, ink, accent and \
+             muted colours, heading_font and body_font (bundled: bricolage_grotesque, figtree), \
+             brand_name and logo_material_id; effective (as drawn) with fallbacks, and revision. \
+             [risk: READ]",
+            || posting_schema("brand_get"),
+            brand_get,
+        ),
+        def(
+            "studio.brand_set",
+            "Replace the workspace's brand tokens at expected_revision (from \
+             jeeta.studio.brand_get): tokens {background, ink, accent, muted: #rrggbb; \
+             heading_font, body_font; brand_name (up to 32 characters); logo_material_id (a live \
+             image material) or null}. A colour pair under WCAG AA large-text contrast (3:1) is \
+             drawn with a fallback the answer names (fallbacks). Requires content.manage. \
+             [risk: WRITE]",
+            || posting_schema("brand_set"),
+            brand_set,
+        ),
+    ]
+}
+
+fn post_templates<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let work::EmptyInput {} = args(v)?;
+        to_json(&jt_app::usecases::studio::render::post_templates(d, c).await?)
+    })
+}
+fn post_render<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        to_json(&jt_app::usecases::studio::render::post_render(d, c, args(v)?).await?)
+    })
+}
+fn brand_get<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(async move {
+        let work::EmptyInput {} = args(v)?;
+        to_json(&jt_app::usecases::studio::render::brand_get(d, c).await?)
+    })
+}
+fn brand_set<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(
+        async move { to_json(&jt_app::usecases::studio::render::brand_set(d, c, args(v)?).await?) },
+    )
 }
 
 /// Olay-driven publishing's tools (spec 2026-11-03 §14): each needs an approved strategy. The

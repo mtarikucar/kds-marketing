@@ -637,6 +637,56 @@ impl MaterialRepo for PgTenantRepos {
         Ok(())
     }
 
+    async fn brand(&mut self) -> Result<Option<jt_app::ports::compose::BrandRecord>, AppError> {
+        let row: Option<(Value, i64, OffsetDateTime)> = sqlx::query_as(
+            "select data,revision,updated_at from studio_brand where workspace_id=$1",
+        )
+        .bind(self.workspace_id().0)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read brand tokens"))?;
+        let Some((data, revision, updated_at)) = row else {
+            return Ok(None);
+        };
+        Ok(Some(jt_app::ports::compose::BrandRecord {
+            tokens: decode(data)?,
+            revision: u64::try_from(revision)
+                .map_err(|_| AppError::internal("invalid stored brand revision"))?,
+            updated_at,
+        }))
+    }
+
+    async fn save_brand(
+        &mut self,
+        record: jt_app::ports::compose::BrandRecord,
+    ) -> Result<(), AppError> {
+        checked(
+            "studio_brand",
+            record.tokens.validate().map_err(|e| format!("{e:?}")),
+        )?;
+        let revision = i64::try_from(record.revision)
+            .map_err(|_| AppError::internal("brand revision overflow"))?;
+        // The first set inserts revision 1; a later one replaces the row whose revision is one
+        // less. Anything else changed meanwhile (`CONFLICT`).
+        let sql = if revision == 1 {
+            "insert into studio_brand (workspace_id,data,revision,updated_at)              values($1,$2,$3,$4) on conflict (workspace_id) do nothing"
+        } else {
+            "update studio_brand set data=$2,revision=$3,updated_at=$4              where workspace_id=$1 and revision=$3-1"
+        };
+        let written = sqlx::query(sql)
+            .bind(self.workspace_id().0)
+            .bind(encode(&record.tokens)?)
+            .bind(revision)
+            .bind(record.updated_at)
+            .execute(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "save brand tokens"))?;
+        if written.rows_affected() != 1 {
+            return Err(AppError::conflict("brand revision changed"));
+        }
+        Ok(())
+    }
+
     async fn save_release(&mut self, r: MaterialRelease) -> Result<(), AppError> {
         let slot: bool = sqlx::query_scalar(
             "select exists(select 1 from studio_slots where workspace_id=$1 and id=$2)",

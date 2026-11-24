@@ -127,6 +127,7 @@ impl World {
                 bank_instructions: "Synthetic bank instructions".into(),
             },
             job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
+            compositor: Arc::new(jt_app::ports::compose::UnavailableCompositor),
         };
         let (a, a_owner) = db.seed_workspace("alpha").await;
         let (b, b_owner) = db.seed_workspace("beta").await;

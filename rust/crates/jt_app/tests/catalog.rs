@@ -61,6 +61,10 @@ fn mcp_only_use_cases_have_no_panel_route() {
             "studio.material_analysis_claim",
             "studio.material_analysis_complete",
             "studio.material_analysis_fail",
+            "studio.post_templates",
+            "studio.post_render",
+            "studio.brand_get",
+            "studio.brand_set",
             "strategy.frame_apply",
             "strategy.note_claim",
             "strategy.note_file",
@@ -168,6 +172,10 @@ const STUDIO_LIBRARY: &[&str] = &[
     "studio.material_delete",
     "studio.calendar_set",
     "studio.material_policy_set",
+    "studio.post_templates",
+    "studio.post_render",
+    "studio.brand_get",
+    "studio.brand_set",
 ];
 
 #[test]
@@ -280,6 +288,10 @@ fn catalog_is_the_release_table() {
         ("studio.material_delete", None, Some(("POST", "/api/studio/materials/{material_id}/delete")), true, Risk::Destructive),
         ("studio.calendar_set", None, Some(("PUT", "/api/studio/calendar/{key}/{year}")), true, Risk::Write),
         ("studio.material_policy_set", None, Some(("PUT", "/api/studio/materials/policy")), true, Risk::Write),
+        ("studio.post_templates", Some("jeeta.studio.post_templates"), None, false, Risk::Read),
+        ("studio.post_render", Some("jeeta.studio.post_render"), None, false, Risk::Write),
+        ("studio.brand_get", Some("jeeta.studio.brand_get"), None, false, Risk::Read),
+        ("studio.brand_set", Some("jeeta.studio.brand_set"), None, false, Risk::Write),
         ("studio.material_check_release", None, Some(("POST", "/api/studio/slots/{slot_id}/material-check/release")), true, Risk::Write),
         ("studio.post_requests", Some("jeeta.studio.post_requests"), Some(("GET", "/api/studio/post-requests")), false, Risk::Read),
         ("studio.posts_propose", Some("jeeta.studio.posts_propose"), Some(("POST", "/api/studio/post-requests/{request_id}/proposal")), false, Risk::Write),
@@ -512,7 +524,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 332);
+    assert_eq!(CATALOG.len(), 336);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export", "studio.posting_policy_set"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && !["calls.policy_get", "calls.end", "calls.transfer"].contains(&uc.id) && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || (uc.id.starts_with("outreach.") && !["outreach.campaigns_control", "outreach.enrollments_stop"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

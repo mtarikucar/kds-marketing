@@ -482,6 +482,10 @@ pub async fn material_production_fail(
 
 /// Under the existing Studio control fence: revoke derived approvals recursively when source
 /// consent changes. Erasure additionally clears all derivative request text, including history.
+/// The derivatives are a production's output and a composition (a slide or story the server drew,
+/// `Material::composition`) that names the material among its sources, and theirs in turn: on
+/// erasure each live one is redacted (its file id is answered, its bytes go with the files
+/// cleanup), otherwise its share permission is cleared for a person to decide again.
 pub async fn invalidate_material_productions(
     r: &mut dyn TenantRepos,
     id: MaterialId,
@@ -495,6 +499,36 @@ pub async fn invalidate_material_productions(
     while let Some(id) = queue.pop() {
         if !seen.insert(id) {
             continue;
+        }
+        for composite in r.studio_materials().list_materials().await? {
+            let drawn_from = composite
+                .composition
+                .as_ref()
+                .is_some_and(|c| c.sources.contains(&id));
+            if !drawn_from || composite.id == id || composite.erased_at.is_some() {
+                continue;
+            }
+            queue.push(composite.id);
+            let revision = composite.revision;
+            let changed = if erase {
+                files.push(composite.file_id);
+                r.studio_materials()
+                    .delete_intelligence(composite.id)
+                    .await?;
+                composite.redacted(now)
+            } else if composite.share.is_some() {
+                Material {
+                    share: None,
+                    tags_reviewed_by: None,
+                    revision: revision + 1,
+                    ..composite
+                }
+            } else {
+                continue;
+            };
+            r.studio_materials()
+                .update_material(changed, revision)
+                .await?;
         }
         let rows = r.studio_productions().list_productions().await?;
         for mut row in rows {
@@ -567,25 +601,37 @@ pub async fn blocked_derivatives(
     let rows = r.studio_productions().list_productions().await?;
     let materials = r.studio_materials().list_materials().await?;
     let mut blocked = BTreeSet::new();
+    // A source restricts what was made of it: blocked itself, gone, unfiled, or not shareable.
+    let restricted = |blocked: &BTreeSet<MaterialId>, id: MaterialId| {
+        blocked.contains(&id)
+            || materials.iter().find(|m| m.id == id).is_none_or(|m| {
+                m.erased_at.is_some()
+                    || m.is_unfiled()
+                    || m.share
+                        .as_ref()
+                        .is_none_or(|p| p.permission != SharePermission::Shareable)
+            })
+    };
     loop {
         let before = blocked.len();
         for row in &rows {
             if let Some(output) = row.production.output_material_id
-                && row.production.sources.iter().any(|s| {
-                    blocked.contains(&s.material_id)
-                        || materials
-                            .iter()
-                            .find(|m| m.id == s.material_id)
-                            .is_none_or(|m| {
-                                m.erased_at.is_some()
-                                    || m.is_unfiled()
-                                    || m.share
-                                        .as_ref()
-                                        .is_none_or(|p| p.permission != SharePermission::Shareable)
-                            })
-                })
+                && row
+                    .production
+                    .sources
+                    .iter()
+                    .any(|s| restricted(&blocked, s.material_id))
             {
                 blocked.insert(output);
+            }
+        }
+        // A composition (a slide or story the server drew) is a derivative of its sources too:
+        // a person's approval of it never outranks a source's current restriction.
+        for m in &materials {
+            if let Some(c) = &m.composition
+                && c.sources.iter().any(|s| restricted(&blocked, *s))
+            {
+                blocked.insert(m.id);
             }
         }
         if blocked.len() == before {
@@ -593,4 +639,54 @@ pub async fn blocked_derivatives(
         }
     }
     Ok(blocked)
+}
+
+/// Under the Studio control fence: the people and `depicts` flags of `source` (a tag a person or
+/// an agent added after a render) reach every live composition drawn from it, and theirs in turn,
+/// so person erasure and the publish gate see them there too. A composition that gains a marker
+/// loses its share permission: a person decides it again, as for the source.
+pub(crate) async fn propagate_markers(
+    r: &mut dyn TenantRepos,
+    source: &Material,
+) -> Result<(), AppError> {
+    let mut queue = vec![source.clone()];
+    let mut seen = BTreeSet::new();
+    while let Some(from) = queue.pop() {
+        if !seen.insert(from.id) {
+            continue;
+        }
+        for listed in r.studio_materials().list_materials().await? {
+            let drawn_from = listed
+                .composition
+                .as_ref()
+                .is_some_and(|c| c.sources.contains(&from.id));
+            if !drawn_from || listed.id == from.id || listed.erased_at.is_some() {
+                continue;
+            }
+            let mut composite = listed;
+            let people = from.people.difference(&composite.people).count();
+            let depicts = from
+                .tags
+                .depicts
+                .difference(&composite.tags.depicts)
+                .count();
+            if people == 0 && depicts == 0 {
+                continue;
+            }
+            let revision = composite.revision;
+            composite.people.extend(from.people.iter().copied());
+            composite
+                .tags
+                .depicts
+                .extend(from.tags.depicts.iter().copied());
+            composite.share = None;
+            composite.tags_reviewed_by = None;
+            composite.revision += 1;
+            r.studio_materials()
+                .update_material(composite.clone(), revision)
+                .await?;
+            queue.push(composite);
+        }
+    }
+    Ok(())
 }

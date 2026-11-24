@@ -191,6 +191,11 @@ const EXEMPT_IDS: &[&str] = &[
     "studio.calendar_list",
     "studio.calendar_set",
     "studio.material_policy_set",
+    // Composed posts render the library's photos; they publish nothing.
+    "studio.post_templates",
+    "studio.post_render",
+    "studio.brand_get",
+    "studio.brand_set",
     "studio.shoot_list",
     "studio.shoot_request",
     "studio.shoot_resolve",

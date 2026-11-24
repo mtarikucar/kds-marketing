@@ -87,6 +87,7 @@ async fn register_login_resolve_and_switch_through_postgres() {
             bank_instructions: "Synthetic bank instructions".into(),
         },
         job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
+        compositor: Arc::new(jt_app::ports::compose::UnavailableCompositor),
     };
 
     // Registration.
@@ -265,6 +266,7 @@ fn scripted(uow: Arc<dyn UnitOfWork>) -> Deps {
             bank_instructions: "Synthetic bank instructions".into(),
         },
         job_lock: Arc::new(jt_testkit::fakes::FakeJobLock::new()),
+        compositor: Arc::new(jt_app::ports::compose::UnavailableCompositor),
     }
 }
 

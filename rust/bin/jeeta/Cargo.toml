@@ -14,6 +14,8 @@ subtle.workspace = true
 serde_json.workspace = true
 jt_app.workspace = true
 jt_files.workspace = true
+# The post renderer (`studio.post_render`).
+jt_render.workspace = true
 jt_pg.workspace = true
 jt_panel_http.workspace = true
 jt_mcp.workspace = true

@@ -67,8 +67,10 @@ its logo.
 - **Brand name** as the business writes it.
 - **Product facts** you read there are for your own understanding only (rule 3).
 
-Set the colours, fonts, brand name and logo with **the brand tokens tool** (it belongs to the
-renderer's change; until it is merged there is nothing to set, so carry on with the rest).
+Set the colours, fonts, brand name and logo with `jeeta.studio.brand_set` (read the current ones
+and their `revision` with `jeeta.studio.brand_get` first). The fonts are `bricolage_grotesque` or
+`figtree`; a colour pair under WCAG AA contrast is drawn with a fallback the answer names. See
+[Composed posts](composed-posts.md#brand-tokens).
 
 ### 2. The account's own posts
 

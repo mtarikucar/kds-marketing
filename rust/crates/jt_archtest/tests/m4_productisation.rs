@@ -25,7 +25,7 @@ const ADDED: [&str; 11] = [
 /// pool, leads L1-T6; the playbook and the research tasks, leads L2; promotion, distribution and
 /// the recipient kind, leads L3; the materials library's twins; olay-driven publishing's; the
 /// pool's report, leads L4-T6; outreach, leads L4-T7).
-const POST_M4_ADDED: [(&str, &str); 135] = [
+const POST_M4_ADDED: [(&str, &str); 139] = [
     ("modules.list", "jeeta.modules.list"),
     ("modules.install", "jeeta.modules.install"),
     ("modules.update", "jeeta.modules.update"),
@@ -116,6 +116,10 @@ const POST_M4_ADDED: [(&str, &str); 135] = [
         "studio.material_production_claim",
         "jeeta.studio.material_production_claim",
     ),
+    ("studio.post_templates", "jeeta.studio.post_templates"),
+    ("studio.post_render", "jeeta.studio.post_render"),
+    ("studio.brand_get", "jeeta.studio.brand_get"),
+    ("studio.brand_set", "jeeta.studio.brand_set"),
     (
         "studio.material_production_complete",
         "jeeta.studio.material_production_complete",

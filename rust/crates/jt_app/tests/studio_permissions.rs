@@ -405,6 +405,9 @@ fn expected_permissions(action: &str) -> &'static [Permission] {
         "hypothesis_propose" => &[ContentWork, SocialWork, AdsWork],
         "brake" => &[SocialManage, AdsManage, BudgetManage],
         "approve" => &[SocialManage, AdsManage],
+        "post_templates" | "post_render" => &[ContentWork],
+        "brand_get" => &[ContentWork, ContentManage],
+        "brand_set" => &[ContentManage],
         _ => panic!("unlisted Studio action {action}"),
     }
 }
@@ -929,6 +932,22 @@ async fn call_studio(
         )
         .await
         .map(|_| ()),
+        "post_templates" => studio::render::post_templates(d, ctx).await.map(|_| ()),
+        "brand_get" => studio::render::brand_get(d, ctx).await.map(|_| ()),
+        "post_render" => studio::render::post_render(
+            d,
+            ctx,
+            serde_json::from_value(v).unwrap_or_else(|e| panic!("{action}: {e}")),
+        )
+        .await
+        .map(|_| ()),
+        "brand_set" => studio::render::brand_set(
+            d,
+            ctx,
+            serde_json::from_value(v).unwrap_or_else(|e| panic!("{action}: {e}")),
+        )
+        .await
+        .map(|_| ()),
         _ => panic!("unlisted Studio action {action}"),
     }
 }
@@ -970,6 +989,9 @@ async fn every_studio_use_case_asks_its_module_permission() {
                 serde_json::to_value(jt_studio::MaterialPolicy::default()).unwrap()
             }
             "posting_policy_set" => json!({}),
+            "brand_set" => {
+                json!({"tokens":jt_studio::compose::BrandTokens::default(),"expected_revision":0})
+            }
             "project_production" => {
                 json!({"project_id":id,"expected_revision":0,"request_key":"test","kind":"crop","instructions":"test","material_ids":[]})
             }

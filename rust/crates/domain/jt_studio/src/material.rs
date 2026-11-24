@@ -264,6 +264,10 @@ pub struct Material {
     /// A person attached it to work ([`UploadFor`]); absent on every other material.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upload_for: Option<UploadFor>,
+    /// How the server composed it from other materials (a rendered slide or story frame); absent
+    /// on every other material. Fixed when it is created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition: Option<crate::compose::Composition>,
 }
 
 /// A generator name: 1–40 of `[a-z0-9_.-]`.

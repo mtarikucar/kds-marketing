@@ -4,6 +4,7 @@
 mod calendar;
 mod capture;
 mod chain;
+pub mod compose;
 mod control;
 mod eligibility;
 mod ids;

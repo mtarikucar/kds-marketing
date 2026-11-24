@@ -4,7 +4,7 @@ fn studio_tools_publish_shared_strict_schemas_and_manage_permission() {
         .into_iter()
         .filter(|t| t.name.starts_with("jeeta.studio."))
         .collect();
-    assert_eq!(tools.len(), 54);
+    assert_eq!(tools.len(), 58);
     for tool in tools {
         let action = tool.name.strip_prefix("jeeta.studio.").unwrap();
         assert_eq!(
@@ -134,6 +134,13 @@ fn studio_tools_publish_shared_strict_schemas_and_manage_permission() {
                     jt_tenancy::Permission::AdsManage,
                     jt_tenancy::Permission::BudgetManage
                 ][..],
+                "post_templates" => &[jt_tenancy::Permission::ContentWork][..],
+                "post_render" => &[jt_tenancy::Permission::ContentWork][..],
+                "brand_get" => &[
+                    jt_tenancy::Permission::ContentWork,
+                    jt_tenancy::Permission::ContentManage,
+                ][..],
+                "brand_set" => &[jt_tenancy::Permission::ContentManage][..],
                 "approve" => &[
                     jt_tenancy::Permission::SocialManage,
                     jt_tenancy::Permission::AdsManage

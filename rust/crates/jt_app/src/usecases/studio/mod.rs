@@ -7,6 +7,7 @@ pub mod lifecycle;
 pub mod materials;
 pub mod owner_request;
 pub mod pieces;
+pub mod render;
 pub mod schema;
 
 pub mod planner;

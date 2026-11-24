@@ -193,6 +193,8 @@ const actionsTr: Record<string, string> = {
   // Materyal kütüphanesi, üretim alanları, paylaşımlar ve bağlı reklam setleri (`studio.*` kayıtları).
   'studio.file_upload': 'bir dosya yükledi',
   'studio.material.added': 'kütüphaneye bir materyal ekledi',
+  'studio.post.rendered': 'fotoğraflardan bir paylaşım görseli hazırladı',
+  'studio.brand.set': 'marka renklerini ve yazı tiplerini güncelledi',
   'studio.material.tagged': 'bir materyali etiketledi',
   'studio.material.permission_set': 'bir materyalin paylaşım iznini belirledi',
   'studio.material.policy_set': 'materyal kurallarını güncelledi',
@@ -408,6 +410,8 @@ const actionsEn: Record<string, string> = {
   // The materials library, production areas, posts and bound ad sets (the `studio.*` records).
   'studio.file_upload': 'uploaded a file',
   'studio.material.added': 'added a material to the library',
+  'studio.post.rendered': 'composed a post image from photos',
+  'studio.brand.set': 'updated the brand colours and fonts',
   'studio.material.tagged': 'tagged a material',
   'studio.material.permission_set': 'set a material’s share permission',
   'studio.material.policy_set': 'updated the material rules',
