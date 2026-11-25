@@ -37,9 +37,9 @@ async fn composite(
         composition: Some(Composition {
             logo: None,
             renderer: "jeeta-compose".into(),
-            role: jt_studio::compose::Role::Cover,
+            role: jt_studio::compose::Role::Cover.into(),
             variant: "full_top".into(),
-            frame: jt_studio::compose::Frame::Slide,
+            frame: jt_studio::compose::Frame::Slide.into(),
             sources,
         }),
         ..from.clone()

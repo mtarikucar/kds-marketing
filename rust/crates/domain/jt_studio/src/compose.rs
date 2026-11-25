@@ -753,16 +753,81 @@ impl BrandTokens {
     }
 }
 
+/// A value stored in a composition that this build may not know: a role or a frame a later
+/// release added. Read without failing, and written back exactly as it was read, so a material
+/// a later release composed stays readable, and unchanged, if the server is rolled back.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Known<T> {
+    Is(T),
+    /// The stored text, kept as it was.
+    Unknown(String),
+}
+
+impl<T> Known<T> {
+    /// The value, when this build knows it.
+    pub fn known(&self) -> Option<&T> {
+        match self {
+            Self::Is(v) => Some(v),
+            Self::Unknown(_) => None,
+        }
+    }
+}
+
+impl<T: Copy> Known<T> {
+    pub fn get(&self) -> Option<T> {
+        self.known().copied()
+    }
+}
+
+impl<T> From<T> for Known<T> {
+    fn from(v: T) -> Self {
+        Self::Is(v)
+    }
+}
+
+impl<T: PartialEq> PartialEq<T> for Known<T> {
+    fn eq(&self, other: &T) -> bool {
+        self.known() == Some(other)
+    }
+}
+
+impl<T: Serialize> Serialize for Known<T> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Is(v) => v.serialize(s),
+            Self::Unknown(text) => s.serialize_str(text),
+        }
+    }
+}
+
+impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Known<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::IntoDeserializer;
+        let text = String::deserialize(d)?;
+        let parsed: Result<T, serde::de::value::Error> =
+            T::deserialize(text.as_str().into_deserializer());
+        Ok(match parsed {
+            Ok(v) => Self::Is(v),
+            Err(_) => Self::Unknown(text),
+        })
+    }
+}
+
 /// How a material was composed by the server (a slide or a story frame drawn from other
 /// materials): fixed when the material is created. `sources` are the materials drawn, photos
 /// in slot order and the logo last; any AI-generated source makes the composition AI-generated.
+///
+/// Its role and frame may be ones a later release added ([`Known::Unknown`]): such a material is
+/// still a composition for every rule that follows one (its sources' cascades, the publication
+/// fence, the triggers that pass it over, area membership by its sources), but this build never
+/// draws it or draws from it ([`Composition::is_known`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Composition {
     pub renderer: String,
-    pub role: Role,
+    pub role: Known<Role>,
     pub variant: String,
-    pub frame: Frame,
+    pub frame: Known<Frame>,
     pub sources: Vec<MaterialId>,
     /// The brand logo drawn in its chip, also listed in `sources` (for provenance, the AI flag
     /// and the cascades); absent without a logo, and on a composition stored before this field.
@@ -771,6 +836,11 @@ pub struct Composition {
 }
 
 impl Composition {
+    /// Whether this build knows its role and frame.
+    pub fn is_known(&self) -> bool {
+        self.role.known().is_some() && self.frame.known().is_some()
+    }
+
     /// What it was drawn from as content: its sources less the brand logo, which is the
     /// workspace's, never content. For a composition stored before `logo` was recorded, a source
     /// equal to the workspace's current logo (`brand_logo`) is taken for the logo.
@@ -981,6 +1051,36 @@ mod tests {
         assert_eq!(eff.accent, BrandTokens::default().accent);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].token, "accent");
+    }
+
+    /// A composition a later release made (a role and a frame this build does not know) reads,
+    /// and writes back byte for byte the same; a known one reads as known.
+    #[test]
+    fn an_unknown_role_or_frame_reads_and_writes_back_unchanged() {
+        let later = serde_json::json!({
+            "renderer": "jeeta-later", "role": "some_new_role", "variant": "v1",
+            "frame": "some_new_frame", "sources": [MaterialId::new_v7()]
+        });
+        let c: Composition = serde_json::from_value(later.clone()).expect("reads");
+        assert_eq!(c.role, Known::Unknown("some_new_role".into()));
+        assert_eq!(c.frame, Known::Unknown("some_new_frame".into()));
+        assert!(!c.is_known());
+        assert_eq!(serde_json::to_value(&c).unwrap(), later);
+        let known: Composition = serde_json::from_value(serde_json::json!({
+            "renderer": RENDERER, "role": "cover", "variant": "full_top",
+            "frame": "slide", "sources": []
+        }))
+        .unwrap();
+        assert_eq!(known.role, Role::Cover);
+        assert_eq!(known.frame, Frame::Slide);
+        assert!(known.is_known());
+        // Not a string at all is still refused, as before.
+        assert!(
+            serde_json::from_value::<Composition>(serde_json::json!({
+                "renderer": RENDERER, "role": 3, "variant": "x", "frame": "slide", "sources": []
+            }))
+            .is_err()
+        );
     }
 
     #[test]
