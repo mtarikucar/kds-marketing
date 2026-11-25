@@ -137,7 +137,8 @@ fn mcp_registry_matches_catalog() {
 /// `proposal_create`, §5.1, `strategy` +5) 250. A shop's order template for the automatic
 /// replies' orders (`jeeta.connector.set_shop_order`, `connector` +1) adds one, and the two that
 /// read a connected account's own posts for the brand scan (`jeeta.social.own_posts`,
-/// `own_post_image`, `social` +2) give 255.
+/// `own_post_image`, `social` +2) give 255. Opening a message's file (`jeeta.inbox.message_media`,
+/// `inbox` +1) gives 260.
 /// Written out, so a tool added or dropped without updating the
 /// documentation (the README lists them) fails here.
 const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
@@ -162,7 +163,7 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("distribution", 5),
     ("outreach", 18),
     ("events", 3),
-    ("inbox", 50),
+    ("inbox", 51),
     ("studio", 58),
     ("content", 5),
     ("social", 6),
@@ -172,9 +173,9 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
 #[test]
 fn the_registry_holds_exactly_the_documented_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 259);
+    assert_eq!(specs.len(), 260);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 259);
+    assert_eq!(total, 260);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -183,7 +184,7 @@ fn the_registry_holds_exactly_the_documented_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 259);
+    assert_eq!(catalog, 260);
 }
 
 /// These MCP-only use cases are agent workflows without a panel route.

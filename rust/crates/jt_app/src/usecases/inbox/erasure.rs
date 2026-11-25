@@ -91,8 +91,13 @@ pub async fn erase(
     // The materials that show the person, and the olays naming them (spec 2026-11-03 §9.2), in
     // the same transaction; the materials' bytes go once it is committed (best effort:
     // `StudioFilesCleanup` deletes an erased material's file too).
-    let files =
+    let mut files =
         crate::usecases::studio::library::erase_person(deps, r.as_mut(), ctx, person).await?;
+    // The files the person sent or was sent, by email (spec 2026-10-30 §3.15) and on chat
+    // channels (`media`): their rows lose their names and become `deleted` here; their bytes go
+    // once this is committed (best effort: the store's daily sweep deletes a file no row keeps).
+    files.extend(r.mail_files().erase_person(person, ctx.now).await?);
+    files.extend(r.message_media().erase_person(person, ctx.now).await?);
     r.commit().await?;
     for file in files {
         let _ = deps.files.delete(ctx.workspace_id, file).await;

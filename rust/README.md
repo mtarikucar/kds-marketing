@@ -137,6 +137,7 @@ döndürür. `0001`–`0032` arasında otuz iki göç vardır:
 | `0052_knowledge_proposal_card_key` | Marka taraması (`docs/operations/brand-scan.md`): `knowledge_proposals.card_key` (bir `card_new` önerisinin yaptığı tohumlanmamış iyi bilinen kart, bugün `visual_style`; denetim `knowledge_proposals_card_key_rule` yalnız `card_new` ve geçerli bir anahtar kabul eder). Sahip öneriyi eklediğinde kart bu anahtarla açılır. Tablo eklemez. Geri alma, anahtar taşıyan bekleyen önerileri `superseded` kapatır, sonra denetimi ve sütunu düşürür |
 | `0053_studio_brand` | Composed posts (`studio.post_render`): `studio_brand`, one row per workspace holding its brand tokens (colours, the two bundled fonts, brand name, logo material) as validated JSON with a `revision`; forced RLS; 114 tables. No row means the neutral defaults. Down drops the table: composed posts go back to the defaults, composed materials keep their files and `composition`. |
 | `0054_composed_material_analysis` | A composed material (`studio.post_render`, `data ? 'composition'`) is created analysed; this marks the analysis of every live composed material complete (its fields kept as its own, any lease ended), so it no longer shows as agents' analysis work. Uploads are untouched; no table. Down changes nothing. |
+| `0055_message_media` | Chat files (`usecases::inbox::media`): `message_media`, one row per image or document a chat message carries (a customer's WhatsApp file `pending` with the provider's media id when its message is consumed, `stored` once the `inbox_media` job fetched and checked it, `failed` with why, `deleted` once its bytes went by retention or erasure; the bytes live in the file store, never here); forced RLS; 115 tables. Additive. Down drops the table (the files left in the store go with the store's daily sweep), and is refused while an outbox entry waiting to be sent carries an image (`intent.media`). |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -2029,6 +2030,7 @@ birleştirme işlemleri `inbox.manage` gerektirir.
 | `conversations.list` | `GET /api/inbox/conversations` | `jeeta.inbox.conversations_list` | READ / `inbox.work` |
 | `conversations.get` | `GET /api/inbox/conversations/{conversation_id}` | `jeeta.inbox.conversations_get` | READ / `inbox.work` |
 | `messages.list` | `GET /api/inbox/conversations/{conversation_id}/messages` | `jeeta.inbox.messages_list` | READ / `inbox.work` |
+| `message_media` | `GET /api/inbox/messages/{message_id}/media` | `jeeta.inbox.message_media` | READ / `inbox.work` |
 | `take_over` | `POST /api/inbox/conversations/{conversation_id}/take-over` | `jeeta.inbox.take_over` | WRITE / `inbox.work` |
 | `hand_to_agent` | `POST /api/inbox/conversations/{conversation_id}/hand-to-agent` | `jeeta.inbox.hand_to_agent` | WRITE / `inbox.work` |
 | `snooze` | `POST /api/inbox/conversations/{conversation_id}/snooze` | `jeeta.inbox.snooze` | WRITE / `inbox.work` |

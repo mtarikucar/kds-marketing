@@ -135,6 +135,9 @@ impl TenantRepos for Tenant {
     fn mail_files(&mut self) -> &mut dyn jt_app::ports::mail_files::MailFileRepo {
         self.inner.mail_files()
     }
+    fn message_media(&mut self) -> &mut dyn jt_app::ports::message_media::MessageMediaRepo {
+        self.inner.message_media()
+    }
     fn consents(&mut self) -> &mut dyn ConsentRepo {
         self.inner.consents()
     }

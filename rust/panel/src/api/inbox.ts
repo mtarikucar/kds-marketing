@@ -28,6 +28,9 @@ export const getConversation = (id: string) => request<InboxConversationRow>('GE
 export const getContext = (id: string) => request<InboxContext>('GET', `${conv(id)}/context`);
 export const listMessages = (id: string, cursor?: string) =>
   request<InboxPageOut<InboxMessage>>('GET', `${conv(id)}/messages`, { query: { cursor } });
+/** A file of message `id` (`index`, from 0), with an address that lives a few minutes. */
+export const messageMedia = (id: string, index: number) =>
+  request<import('./types').InboxMediaOut>('GET', `${root}/messages/${seg(id)}/media`, { query: { index } });
 export const conversationAction = (
   id: string,
   action: 'take-over' | 'hand-to-agent' | 'unsnooze' | 'close',
@@ -51,8 +54,12 @@ const held = (id: string) => `${root}/replies/${seg(id)}`;
 export const approveReply = (id: string, text?: string) =>
   request<InboxReplyOut>('POST', `${held(id)}/approve`, { body: text === undefined ? {} : { text } });
 export const discardReply = (id: string) => request<InboxReplyOut>('POST', `${held(id)}/discard`);
-export const reply = (id: string, text: string, request_key?: string, subject?: string) =>
-  request<InboxReplyOut>('POST', `${conv(id)}/reply`, { body: { text, intent: 'reply', request_key, ...(subject === undefined ? {} : { subject }) } });
+/** An image a reply carries: a file stored by `studio.file_upload`, or a library material. */
+export type ReplyImageRef = { file_id: string } | { material_id: string };
+export const reply = (id: string, text: string, request_key?: string, subject?: string, image?: ReplyImageRef) =>
+  request<InboxReplyOut>('POST', `${conv(id)}/reply`, {
+    body: { text, intent: 'reply', request_key, ...(subject === undefined ? {} : { subject }), ...(image ? { image } : {}) },
+  });
 /** People by name/company; an empty query pages through everyone (`limit`/`offset`, oldest first). */
 export const searchPeople = (q: string, limit?: number, offset?: number) =>
   request<InboxPerson[]>('GET', `${root}/people`, { query: { q, limit, offset } });

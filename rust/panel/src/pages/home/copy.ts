@@ -87,6 +87,7 @@ const actionsTr: Record<string, string> = {
   'connector.pbx_policy_set': 'santral ayarlarını değiştirdi', 'connector.app_sync': 'WhatsApp eşitleme isteğinin sonucunu kaydetti',
   // Gelen kutusu: kişiler ve müşteri süreçleri
   'inbox.person.created': 'kişi ekledi', 'inbox.person.kind_set': 'bir kişinin türünü değiştirdi',
+  'inbox.media.opened': 'bir müşteri dosyasını açtı',
   'inbox.person.erased': 'bir kişinin verilerini sildi', 'inbox.identity.added': 'bir kişiye iletişim bilgisi ekledi',
   'inbox.merge.suggested': 'iki kaydın aynı kişi olabileceğini bildirdi', 'inbox.merge.applied': 'iki kişi kaydını birleştirdi',
   'inbox.merge.refused': 'bir birleştirme önerisini reddetti', 'inbox.merge.undone': 'bir birleştirmeyi geri aldı',
@@ -304,6 +305,7 @@ const actionsEn: Record<string, string> = {
   'connector.pbx_policy_set': 'changed the phone system settings', 'connector.app_sync': 'recorded the result of a WhatsApp sync request',
   // Inbox: people and customer journeys
   'inbox.person.created': 'added a person', 'inbox.person.kind_set': 'changed the type of a person',
+  'inbox.media.opened': "opened a customer's file",
   'inbox.person.erased': 'erased the data of a person', 'inbox.identity.added': 'added a contact detail to a person',
   'inbox.merge.suggested': 'suggested that two records are the same person', 'inbox.merge.applied': 'merged two person records',
   'inbox.merge.refused': 'declined a merge suggestion', 'inbox.merge.undone': 'undid a merge',

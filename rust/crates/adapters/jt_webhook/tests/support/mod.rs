@@ -392,6 +392,9 @@ impl TenantRepos for FailingTenant {
     fn mail_files(&mut self) -> &mut dyn jt_app::ports::mail_files::MailFileRepo {
         self.0.mail_files()
     }
+    fn message_media(&mut self) -> &mut dyn jt_app::ports::message_media::MessageMediaRepo {
+        self.0.message_media()
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self.0.consents()

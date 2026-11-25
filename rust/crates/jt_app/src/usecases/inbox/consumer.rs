@@ -497,8 +497,9 @@ struct Content {
     name: String,
 }
 /// The stored text of a WhatsApp image a person sent: this marker, then its caption on the next
-/// line when it has one. The image itself is never stored: the automatic replies read it from the
-/// provider, in memory, by the inbound event's media id.
+/// line when it has one. The image itself is recorded apart (`super::media`), fetched by the media
+/// job; the automatic replies read it from the provider, in memory, by the inbound event's media
+/// id.
 pub(crate) const IMAGE_MARKER: &str = "[image]";
 /// The stored text of a WhatsApp document a person sent: this marker (with the file's name,
 /// `[document: name]`, when it has one), then its caption on the next line when it has one.
@@ -792,6 +793,11 @@ async fn message(
         r.mail_files()
             .link_event_to_message(cap.id, &event.external_id, message_id, person.id)
             .await?;
+    }
+    // A WhatsApp image or document is recorded to be fetched by the media job (`media`): never
+    // fetched here, so the message is never held up by its file.
+    if channel == Channel::WhatsApp && event.provider == Provider::Meta {
+        super::media::record_inbound(deps, r, cap.id, message_id, &event.payload, ctx.now).await?;
     }
     r.conversations().lock_for_person(person.id).await?;
     let j = journey(deps, ctx, r, &person).await?;

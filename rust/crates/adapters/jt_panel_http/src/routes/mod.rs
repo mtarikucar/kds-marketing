@@ -1185,6 +1185,12 @@ pub fn api_routes() -> Vec<ApiRoute> {
             inbox::messages_list,
         ),
         api_route(
+            "GET",
+            "/inbox/messages/{message_id}/media",
+            "inbox.message_media",
+            inbox::message_media,
+        ),
+        api_route(
             "POST",
             "/inbox/conversations/{conversation_id}/take-over",
             "inbox.take_over",

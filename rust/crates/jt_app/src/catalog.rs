@@ -372,6 +372,7 @@ pub static CATALOG: &[UseCase] = &[
     twin("inbox.conversations.list", Exempt, "jeeta.inbox.conversations_list", ("GET", "/api/inbox/conversations"), Read),
     twin("inbox.conversations.get", Exempt, "jeeta.inbox.conversations_get", ("GET", "/api/inbox/conversations/{conversation_id}"), Read),
     twin("inbox.messages.list", Exempt, "jeeta.inbox.messages_list", ("GET", "/api/inbox/conversations/{conversation_id}/messages"), Read),
+    twin("inbox.message_media", Exempt, "jeeta.inbox.message_media", ("GET", "/api/inbox/messages/{message_id}/media"), Read),
     twin("inbox.take_over", Exempt, "jeeta.inbox.take_over", ("POST", "/api/inbox/conversations/{conversation_id}/take-over"), Write),
     twin("inbox.hand_to_agent", Exempt, "jeeta.inbox.hand_to_agent", ("POST", "/api/inbox/conversations/{conversation_id}/hand-to-agent"), Write),
     twin("inbox.snooze", Exempt, "jeeta.inbox.snooze", ("POST", "/api/inbox/conversations/{conversation_id}/snooze"), Write),

@@ -358,15 +358,17 @@ async fn messages_list_shows_attachments() {
     let listed = serde_json::to_value(item).unwrap()["attachments"].clone();
     let rows = mail_rows(&w);
     let stored = rows.iter().find(|r| r.filename == "teklif.pdf").unwrap();
-    let skipped = rows.iter().find(|r| r.filename == "big.bin").unwrap();
     assert_eq!(
         listed,
         json!([
-            {"file_id": stored.id, "filename": "teklif.pdf", "declared_mime": "application/pdf",
-             "size_bytes": PDF.len(), "state": "stored", "skip_reason": null},
-            {"file_id": skipped.id, "filename": "big.bin", "declared_mime": "application/octet-stream",
-             "size_bytes": MAX_INBOUND_FILE_BYTES + 1, "state": "skipped",
-             "skip_reason": "file_too_large"},
+            {"index": 0, "kind": "file", "file_id": stored.id, "filename": "teklif.pdf",
+             "declared_mime": "application/pdf", "mime": null, "size_bytes": PDF.len(),
+             "width": null, "height": null, "state": "stored", "reason": null,
+             "skip_reason": null},
+            {"index": 1, "kind": "file", "file_id": null, "filename": "big.bin",
+             "declared_mime": "application/octet-stream", "mime": null,
+             "size_bytes": MAX_INBOUND_FILE_BYTES + 1, "width": null, "height": null,
+             "state": "skipped", "reason": "file_too_large", "skip_reason": "file_too_large"},
         ])
     );
     // A message without files lists none.
@@ -492,4 +494,83 @@ async fn the_store_sweep_keeps_mail_files() {
         .await
         .unwrap();
     assert_eq!(stored_ids(&files, w.ws), [rows[0].id]);
+}
+
+#[tokio::test]
+async fn an_emails_file_opens_as_a_download_and_is_recorded() {
+    use jt_app::usecases::inbox::media::{self, Hand, MediaInput};
+    let (w, _, mail, _) = setup().await;
+    poll(
+        &w,
+        &mail,
+        vec![email(
+            1,
+            vec![attachment("teklif.pdf", "application/pdf", PDF)],
+        )],
+    )
+    .await;
+    let row = mail_rows(&w).remove(0);
+    let message = row.message_id.expect("linked to its message");
+    // Whatever it holds, an email's file is a download: to an agent too, never image content.
+    let opened = media::open(
+        &w.deps,
+        &w.owner_ctx,
+        message,
+        MediaInput::default(),
+        Hand::Content,
+    )
+    .await
+    .unwrap();
+    assert!(opened.image.is_none());
+    assert_eq!(
+        opened.url.as_deref(),
+        Some(
+            format!(
+                "https://files.example.com/files/{}?purpose=attachment",
+                row.id
+            )
+            .as_str()
+        )
+    );
+    let entries = w.entries("inbox.media.opened");
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].payload.to_string().contains("teklif"));
+}
+
+#[tokio::test]
+async fn erasing_the_person_deletes_their_email_files() {
+    let (w, c, mail, files) = setup().await;
+    poll(
+        &w,
+        &mail,
+        vec![email(
+            1,
+            vec![attachment("teklif.pdf", "application/pdf", PDF)],
+        )],
+    )
+    .await;
+    assert_eq!(stored_ids(&files, w.ws).len(), 1);
+    let person = w
+        .uow
+        .snapshot()
+        .inbox
+        .conversations
+        .iter()
+        .find(|x| x.id == c)
+        .unwrap()
+        .person_id;
+    erasure::erase(
+        &w.deps,
+        &w.owner_ctx,
+        person,
+        erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    assert!(stored_ids(&files, w.ws).is_empty());
+    let row = mail_rows(&w).remove(0);
+    assert_eq!(
+        (row.state, row.filename.as_str()),
+        (MailFileState::Deleted, "")
+    );
 }

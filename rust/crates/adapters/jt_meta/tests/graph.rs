@@ -2774,6 +2774,39 @@ async fn fetch_media_reads_the_address_graph_names_with_the_numbers_token() {
     assert!(m.recorded().is_empty());
 }
 
+#[tokio::test]
+async fn fetch_media_sends_the_token_to_no_host_but_metas() {
+    let r = rig().await;
+    let m = &r.mock;
+    let wa = public("whatsapp_cloud", Some(PHONE));
+    for address in [
+        "https://media.example.invalid/file",
+        "https://fbsbx.com.example.invalid/file",
+        "http://lookaside.fbsbx.com/file",
+        "https://lookaside.fbsbx.com:8443/file",
+        "https://user:pass@lookaside.fbsbx.com/file",
+    ] {
+        m.set(
+            "GET",
+            "/fb/v19.0/1500000000000001",
+            ok(json!({ "url": address, "mime_type": "image/jpeg", "file_size": 12 })),
+        );
+        let refused = r
+            .meta
+            .fetch_media(&wa_cred(None), &wa, "1500000000000001", 1024)
+            .await;
+        assert_eq!(kind_of(refused), "permanent", "{address}");
+    }
+    // Only Graph was asked: no download was attempted anywhere.
+    assert!(
+        m.recorded()
+            .iter()
+            .all(|request| request.path.starts_with("/fb/")),
+        "{:?}",
+        m.recorded()
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Lead-gen and ads
 // ---------------------------------------------------------------------------------------------

@@ -246,6 +246,7 @@ pub async fn test_send(
         r.as_mut(),
         Target::PersonVia(person, campaign.mailbox_id),
         ReplyInput {
+            image: None,
             text: rendered.text,
             intent: SendIntent::Commercial,
             request_key: None,

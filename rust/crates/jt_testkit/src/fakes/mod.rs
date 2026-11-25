@@ -67,6 +67,8 @@ mod outreach;
 pub use outreach::MemOutreach;
 mod mail_files;
 pub use mail_files::MemMailFiles;
+mod message_media;
+pub use message_media::media_of;
 mod public;
 pub use public::StoredCursor;
 mod draft;

@@ -51,6 +51,10 @@ pub struct ReplyInput {
     /// conversations only.
     #[serde(default)]
     pub visibility: Option<Visibility>,
+    /// An image to send, `text` its caption (which may then be empty): a stored file or a
+    /// library material (`super::media::ImageInput`). WhatsApp conversations only.
+    #[serde(default)]
+    pub image: Option<super::media::ImageInput>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplyOut {
@@ -150,6 +154,9 @@ pub struct SendInput {
     /// subject); refused on every other channel.
     #[serde(default)]
     pub subject: Option<String>,
+    /// An image to send with `text` as its caption, as `ReplyInput::image`.
+    #[serde(default)]
+    pub image: Option<super::media::ImageInput>,
 }
 
 pub async fn send(
@@ -166,6 +173,7 @@ pub async fn send(
         ));
     }
     let input_reply = ReplyInput {
+        image: None,
         text: input.text,
         intent: input.intent,
         request_key: input.request_key,
@@ -361,7 +369,27 @@ pub(crate) async fn enqueue_in(
     {
         return Ok(Enqueued::Existing(serde_json::from_value(out)?));
     }
-    let mut text = required("text", &input.text)?;
+    // An image's text is its caption, which may be empty; the message reads as a customer's image
+    // does (`[image]`, then the caption).
+    let caption = match &input.image {
+        Some(_) => {
+            let caption = input.text.trim().to_owned();
+            if caption.chars().count() > super::media::MAX_CAPTION_CHARS {
+                return Err(super::media::image_refused("caption_too_long"));
+            }
+            Some(caption)
+        }
+        None => None,
+    };
+    let mut text = match &caption {
+        Some(c) if c.is_empty() => super::consumer::IMAGE_MARKER.to_owned(),
+        Some(c) => format!(
+            "{}
+{c}",
+            super::consumer::IMAGE_MARKER
+        ),
+        None => required("text", &input.text)?,
+    };
     if text.len() > 1_000_000 {
         return Err(AppError::validation(
             "message too large",
@@ -488,6 +516,18 @@ pub(crate) async fn enqueue_in(
     };
     let generation = auto.map_or(c.executor_generation, |a| a.expected_generation);
     let cap = capability(r, &c).await?;
+    // An image goes on a channel that sends images, and only one that may be sent.
+    let image = match &input.image {
+        Some(image) => {
+            if !super::media::IMAGE_CHANNELS.contains(&cap.kind_key.as_str()) {
+                return Err(super::media::image_refused(
+                    "images_not_supported_on_channel",
+                ));
+            }
+            Some(super::media::sendable_image(r, image).await?)
+        }
+        None => None,
+    };
     let fenced = match fence_all(
         deps,
         r,
@@ -562,6 +602,15 @@ pub(crate) async fn enqueue_in(
     });
     // An agent's (or the system's) reply on a capability that requires approval waits for a
     // human (spec §3.7); a human's never does.
+    if let Some(image) = &image {
+        intent["media"] = json!({
+            "kind": "image",
+            "file_id": image.file_id,
+            "mime": image.mime,
+            "material_id": image.material_id,
+            "caption": caption.clone().unwrap_or_default(),
+        });
+    }
     let mut held = false;
     if let Some(fenced) = &fenced {
         intent["public"] = json!({
@@ -799,6 +848,17 @@ pub(crate) async fn enqueue_in(
         })
         .await?;
     r.outbox().insert(row.clone()).await?;
+    if let Some(image) = &image {
+        r.message_media()
+            .insert_if_new(&super::media::outbound_row(
+                deps.ids.uuid(),
+                c.capability_id,
+                message_id,
+                image,
+                ctx.now,
+            ))
+            .await?;
+    }
     if let Some(j) = &j {
         crate::usecases::distribution::touch(r, ctx, j.id).await?;
     }
@@ -1686,6 +1746,23 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
                 sms_filter(&p.row),
             )
             .await
+    } else if let Some(media) = p.row.intent.get("media") {
+        match image_to_send(deps, &ctx, media).await? {
+            Ok(image) => {
+                deps.connectors
+                    .messaging(p.provider)
+                    .ok_or_else(|| AppError::internal("sender disappeared"))?
+                    .send_image(
+                        &p.credential,
+                        &adapter_public(&p.capability),
+                        &p.recipient,
+                        &image,
+                        media["caption"].as_str().unwrap_or_default(),
+                    )
+                    .await
+            }
+            Err(e) => Err(e),
+        }
     } else {
         deps.connectors
             .messaging(p.provider)
@@ -1699,6 +1776,53 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
             .await
     };
     record_result_for(deps, &fresh(deps, &ctx), p.row.id, result, recipient).await
+}
+
+/// The image a claimed send carries (`intent.media`), as the provider fetches it: an address of
+/// the file store signed for [`super::media::SEND_URL_MINUTES`] minutes. A material erased since
+/// the send was queued, or a file the store no longer keeps, is a permanent refusal: nothing is
+/// asked of the provider.
+async fn image_to_send(
+    deps: &Deps,
+    ctx: &Ctx,
+    media: &Value,
+) -> Result<Result<crate::ports::connectors::OutboundImage, ConnectorError>, AppError> {
+    let gone = || ConnectorError::permanent("the image is no longer available");
+    let Some(file) = media["file_id"]
+        .as_str()
+        .and_then(|f| f.parse::<Uuid>().ok())
+        .map(jt_studio::FileId)
+    else {
+        return Ok(Err(gone()));
+    };
+    if let Some(material) = media["material_id"]
+        .as_str()
+        .and_then(|m| m.parse::<Uuid>().ok())
+    {
+        let mut r = deps.uow.tenant(ctx.workspace_id).await?;
+        let erased = r
+            .studio_materials()
+            .get_material(jt_studio::MaterialId(material))
+            .await?
+            .is_none_or(|m| m.erased_at.is_some());
+        if erased {
+            return Ok(Err(gone()));
+        }
+    }
+    let expires = ctx.now + Duration::minutes(super::media::SEND_URL_MINUTES);
+    Ok(
+        match deps
+            .files
+            .provider_url(ctx.workspace_id, file, expires)
+            .await
+        {
+            Ok(url) => Ok(crate::ports::connectors::OutboundImage {
+                url: url.to_string(),
+                mime: media["mime"].as_str().unwrap_or_default().to_owned(),
+            }),
+            Err(_) => Err(gone()),
+        },
+    )
 }
 
 /// Phase C and acceptance reconciliation. The original journey is retained across a later
