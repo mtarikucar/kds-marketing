@@ -85,6 +85,8 @@ pub struct Intervals {
     pub agent_wake: Duration,
     pub inbox_auto_reply: Duration,
     pub owner_notices: Duration,
+    /// Fetches and stores customers' chat files; purges them past their retention.
+    pub inbox_media: Duration,
     pub knowledge_settle: Duration,
     /// The longest random delay before each job's first run.
     pub first_run_jitter: Duration,
@@ -143,6 +145,7 @@ impl Default for Intervals {
             knowledge_settle: 10 * MINUTE,
             inbox_auto_reply: Duration::from_secs(3),
             owner_notices: Duration::from_secs(30),
+            inbox_media: Duration::from_secs(15),
             first_run_jitter: Duration::from_secs(30),
         }
     }
@@ -191,6 +194,7 @@ impl Intervals {
             Job::KnowledgeSettle => self.knowledge_settle,
             Job::InboxAutoReply => self.inbox_auto_reply,
             Job::OwnerNotices => self.owner_notices,
+            Job::InboxMedia => self.inbox_media,
         }
     }
 }
@@ -518,6 +522,7 @@ mod tests {
             knowledge_settle: every,
             inbox_auto_reply: every,
             owner_notices: every,
+            inbox_media: every,
             first_run_jitter: Duration::ZERO,
         }
     }
@@ -657,6 +662,8 @@ mod tests {
         assert_eq!(i.of(Job::InboxAutoReply), Duration::from_secs(3));
         assert_eq!(i.of(Job::OwnerNotices), Duration::from_secs(30));
         assert_eq!(Job::OwnerNotices.lock_name(), "jeeta.jobs.owner_notices");
+        assert_eq!(i.of(Job::InboxMedia), Duration::from_secs(15));
+        assert_eq!(Job::InboxMedia.lock_name(), "jeeta.jobs.inbox_media");
         assert_eq!(
             Job::InboxAutoReply.lock_name(),
             "jeeta.jobs.inbox_auto_reply"

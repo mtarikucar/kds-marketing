@@ -187,6 +187,9 @@ impl TenantRepos for PgTenantRepos {
     fn mail_files(&mut self) -> &mut dyn jt_app::ports::mail_files::MailFileRepo {
         self
     }
+    fn message_media(&mut self) -> &mut dyn jt_app::ports::message_media::MessageMediaRepo {
+        self
+    }
 
     fn consents(&mut self) -> &mut dyn jt_app::ports::inbox::ConsentRepo {
         self

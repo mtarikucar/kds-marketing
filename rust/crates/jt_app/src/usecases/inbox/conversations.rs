@@ -46,8 +46,10 @@ pub struct Page<T> {
 /// On a public conversation, `item` names the comment the message is (an inbound
 /// one) or answers (ours, with its visibility); absent on a direct conversation.
 ///
-/// `attachments` are the email's files (spec 2026-10-30-leads-pool-outreach-design.md §3.15):
-/// each kept, skipped (with why) or deleted, oldest first; empty for any other message.
+/// `attachments` are the files the message carries: an email's (spec
+/// 2026-10-30-leads-pool-outreach-design.md §3.15), oldest first, or a chat message's images and
+/// documents (`super::media`), each with its index (what `inbox.message_media` opens), its kind,
+/// type, size and state, and why it is not there to open; empty for a message without any.
 #[derive(Debug, Serialize)]
 pub struct MessageView {
     #[serde(flatten)]
@@ -237,6 +239,14 @@ pub async fn messages(
     let reasons = r.outbox().failure_reasons(&failed).await?;
     let ids: Vec<_> = items.iter().map(|m| m.id).collect();
     let files = r.mail_files().for_messages(&ids).await?;
+    let mut media = r.message_media().for_messages(&ids).await?;
+    // A customer's image or document stored before chat files were kept gets its row on the
+    // first read of its page, and the media job fetches it while the provider still serves it.
+    if !public && super::media::backfill(deps, r.as_mut(), &items, &media, ctx.now).await? > 0 {
+        media = r.message_media().for_messages(&ids).await?;
+        r.commit().await?;
+        r = deps.uow.tenant(ctx.workspace_id).await?;
+    }
     // The page's outbox rows in one read: which messages the automatic replies wrote, and which
     // of those wait for approval.
     let outbound: Vec<_> = items
@@ -269,11 +279,7 @@ pub async fn messages(
                 .find(|(id, _)| *id == message.id)
                 .map(|(_, reason)| reason.clone()),
             item,
-            attachments: files
-                .iter()
-                .filter(|f| f.message_id == Some(message.id))
-                .map(Into::into)
-                .collect(),
+            attachments: super::media::views(message.id, &files, &media),
             message,
         });
     }

@@ -101,6 +101,7 @@ pub async fn enqueue(
         r.as_mut(),
         replies::Target::Person(j.person_id, input.channel),
         replies::ReplyInput {
+            image: None,
             text: input.text,
             intent: input.intent,
             request_key: None,

@@ -76,28 +76,89 @@ pub fn record_mime(mime: &str) -> String {
     }
 }
 
-/// A mail file as `inbox.messages.list` shows it with its message (spec §3.15).
+/// What a message's file is, as the inbox lists it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentKind {
+    /// A chat image, checked by its bytes: shown in the thread.
+    Image,
+    /// A chat document, checked by its bytes: handed out as a download.
+    Document,
+    /// An email's file, of whatever it holds: handed out as a download only.
+    File,
+}
+
+/// Where a message's file stands, as the inbox lists it: an email file's state
+/// (`ports::mail_files::MailFileState`) or a chat file's (`ports::message_media::MediaState`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentState {
+    /// A chat file waiting to be fetched from the provider.
+    Pending,
+    /// Kept: there to open.
+    Stored,
+    /// An uploaded outbound email file not yet attached.
+    Staged,
+    /// An outbound email file attached to its message.
+    Attached,
+    /// An email file a cap refused (`skip_reason`).
+    Skipped,
+    /// A chat file never kept (`reason`).
+    Failed,
+    /// Its bytes went (`reason` for a chat file: `erased`, `retention`).
+    Deleted,
+}
+
+/// A file of a message as `inbox.messages.list` shows it (spec §3.15 for an email's): its index
+/// among the message's files (what `inbox.message_media` takes), what it is, where it stands and,
+/// when it is not there to open, why.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AttachmentView {
-    pub file_id: FileId,
+    pub index: u32,
+    pub kind: AttachmentKind,
+    /// The file store's id of the bytes, while they are kept.
+    pub file_id: Option<FileId>,
+    /// The name it came with (an email's file, a document); blank for an image and once erased.
     pub filename: String,
+    /// The type it was declared as: never trusted.
     pub declared_mime: String,
-    pub size_bytes: u64,
-    pub state: MailFileState,
-    /// Why the file was not kept, when it was `skipped`.
+    /// The type its bytes are, once checked (a chat file).
+    pub mime: Option<String>,
+    /// Its size, once known.
+    pub size_bytes: Option<u64>,
+    /// An image's size in pixels.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub state: AttachmentState,
+    /// Why it is not there to open: a chat file's reason (`expired`, `too_large`,
+    /// `not_allowed`, `too_many_pixels`, `unavailable`, `daily_limit`, `erased`, `retention`) or
+    /// an email file's skip reason.
+    pub reason: Option<String>,
+    /// Why an email's file was not kept, when it was `skipped`.
     pub skip_reason: Option<SkipReason>,
 }
 
-impl From<&MailFileRow> for AttachmentView {
-    fn from(row: &MailFileRow) -> Self {
-        AttachmentView {
-            file_id: row.id,
-            filename: row.filename.clone(),
-            declared_mime: row.declared_mime.clone(),
-            size_bytes: row.size_bytes,
-            state: row.state,
-            skip_reason: row.skip_reason,
-        }
+/// An email's file as the inbox lists it (its index set by the caller).
+pub(crate) fn mail_view(row: &MailFileRow) -> AttachmentView {
+    AttachmentView {
+        index: 0,
+        kind: AttachmentKind::File,
+        file_id: Some(row.id).filter(|_| row.state.holds_bytes()),
+        filename: row.filename.clone(),
+        declared_mime: row.declared_mime.clone(),
+        mime: None,
+        size_bytes: Some(row.size_bytes),
+        width: None,
+        height: None,
+        state: match row.state {
+            MailFileState::Stored => AttachmentState::Stored,
+            MailFileState::Staged => AttachmentState::Staged,
+            MailFileState::Attached => AttachmentState::Attached,
+            MailFileState::Skipped => AttachmentState::Skipped,
+            MailFileState::Deleted => AttachmentState::Deleted,
+        },
+        reason: row.skip_reason.map(|r| r.key().to_owned()),
+        skip_reason: row.skip_reason,
     }
 }
 

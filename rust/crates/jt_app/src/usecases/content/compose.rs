@@ -238,6 +238,7 @@ async fn attach(
             erased_at: None,
             upload_for: Some(upload.clone()),
             composition: None,
+            unknown: Default::default(),
         };
         material.validate().map_err(library::invalid)?;
         r.studio_materials()

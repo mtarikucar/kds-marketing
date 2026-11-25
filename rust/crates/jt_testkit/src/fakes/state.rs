@@ -151,6 +151,11 @@ pub struct MemState {
     pub auto_reply: super::autoreply::MemAutoReply,
     /// The owner's email notices (`0049_owner_notices`).
     pub notices: Vec<(jt_tenancy::WorkspaceId, jt_app::ports::notices::NoticeRow)>,
+    /// Chat messages' images and documents (`0055_message_media`).
+    pub message_media: Vec<(
+        jt_tenancy::WorkspaceId,
+        jt_app::ports::message_media::MessageMediaRow,
+    )>,
     pub workspaces: Vec<WorkspaceRow>,
     pub users: Vec<UserRow>,
     pub sessions: Vec<SessionRow>,

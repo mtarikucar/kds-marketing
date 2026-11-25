@@ -189,6 +189,81 @@ pub(crate) async fn sender_name(
         .filter(|name| !name.is_empty()))
 }
 
+/// The longest caption of a WhatsApp image, in characters.
+pub(crate) const MAX_WHATSAPP_CAPTION: usize = 1024;
+
+/// Sends an image to a person on a `whatsapp_cloud` number: `POST /{phone_number_id}/messages`
+/// with `type: image` and `image: {link, caption}`, Meta fetching the image from `image.url`
+/// (<https://developers.facebook.com/docs/whatsapp/cloud-api/messages/image-messages>). Only
+/// JPEG and PNG are WhatsApp images; another type, another kind of capability, or a caption over
+/// [`MAX_WHATSAPP_CAPTION`] characters is refused before any call (`Permanent`).
+pub(crate) async fn send_image(
+    connector: &MetaConnector,
+    cred: &Credential,
+    public: &Value,
+    recipient: &str,
+    image: &jt_app::ports::connectors::OutboundImage,
+    caption: &str,
+) -> Result<SendReceipt, ConnectorError> {
+    if kind_of(public)? != "whatsapp_cloud" {
+        return Err(ConnectorError::permanent(
+            "images are sent on WhatsApp numbers only",
+        ));
+    }
+    if recipient.trim().is_empty() {
+        return Err(ConnectorError::permanent("no recipient"));
+    }
+    if !matches!(image.mime.as_str(), "image/jpeg" | "image/png") {
+        return Err(ConnectorError::permanent(
+            "a WhatsApp image is a JPEG or a PNG",
+        ));
+    }
+    if caption.chars().count() > MAX_WHATSAPP_CAPTION {
+        return Err(ConnectorError::permanent(format!(
+            "a WhatsApp image caption is at most {MAX_WHATSAPP_CAPTION} characters"
+        )));
+    }
+    let MetaCred::WhatsApp {
+        phone_number_id,
+        token,
+        ..
+    } = MetaCred::of(cred, "send messages")?
+    else {
+        return Err(ConnectorError::permanent(
+            "images are sent on WhatsApp numbers only",
+        ));
+    };
+    let app = connector.graph_app()?;
+    let mut body = json!({ "link": image.url });
+    if !caption.trim().is_empty() {
+        body["caption"] = json!(caption);
+    }
+    let answer = connector
+        .graph_post(
+            &app,
+            token,
+            &[node(phone_number_id)?, "messages"],
+            &[],
+            json!({
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "to": recipient,
+                "type": "image",
+                "image": body,
+            }),
+        )
+        .await?;
+    let id = answer["messages"]
+        .as_array()
+        .and_then(|m| m.first())
+        .and_then(|m| text(&m["id"]))
+        .ok_or_else(|| missing("message id"))?;
+    Ok(SendReceipt {
+        provider_id: id,
+        cost_minor: None,
+    })
+}
+
 /// Asks Meta, once, to share what the WhatsApp Business app behind a `whatsapp_cloud` number
 /// holds: `POST /{phone_number_id}/smb_app_data` with `messaging_product: whatsapp` and
 /// `sync_type` `smb_app_state_sync` (contacts) or `history`, as Meta's onboarding page gives it
@@ -235,12 +310,42 @@ pub(crate) async fn request_app_sync(
     }))
 }
 
+/// The hosts a media file's address may name, and their subdomains: where Meta serves WhatsApp
+/// media (`lookaside.fbsbx.com`) and its content hosts. The number's token is sent to no other.
+pub(crate) const MEDIA_HOSTS: [&str; 4] =
+    ["fbsbx.com", "whatsapp.net", "fbcdn.net", "facebook.com"];
+
+/// Whether `url` may be read with a number's token: HTTPS on one of [`MEDIA_HOSTS`] (or a
+/// subdomain), or on the Graph API's own configured host (a test double's). An address that names
+/// a user, a password or another port is refused.
+fn media_host(connector: &MetaConnector, url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if !url.username().is_empty() || url.password().is_some() {
+        return false;
+    }
+    let graph = &connector.bases().graph;
+    if graph.host_str() == Some(host)
+        && graph.port_or_known_default() == url.port_or_known_default()
+    {
+        return url.scheme() == graph.scheme();
+    }
+    let host = host.to_ascii_lowercase();
+    url.scheme() == "https"
+        && url.port().is_none_or(|p| p == 443)
+        && MEDIA_HOSTS
+            .iter()
+            .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
+}
+
 /// The media file `media_id` names, one a person sent to a `whatsapp_cloud` number: `GET
 /// /{media-id}` names its address (`url`, on `lookaside.fbsbx.com`), its `mime_type` and its
 /// `file_size`; the address is then read with the number's token as the bearer
 /// (<https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media>). A file larger than
 /// `max_bytes` (by its `file_size`, or as it is read) is `Permanent`. The type is Graph's, else
-/// the download's. `None` for another kind, without a call.
+/// the download's. The address must be on a Meta media host ([`media_host`]): the token goes to no
+/// other. `None` for another kind, without a call.
 pub(crate) async fn fetch_media(
     connector: &MetaConnector,
     cred: &Credential,
@@ -267,6 +372,11 @@ pub(crate) async fn fetch_media(
     let url = text(&answer["url"]).ok_or_else(|| missing("media address"))?;
     let url = Url::parse(&url)
         .map_err(|_| ConnectorError::permanent("the media file's address is unreadable"))?;
+    if !media_host(connector, &url) {
+        return Err(ConnectorError::permanent(
+            "the media file's address is not on a Meta media host",
+        ));
+    }
     let (kind, data) = connector.download(url, Some(token), max_bytes).await?;
     let mime = text(&answer["mime_type"]).or(kind).unwrap_or_default();
     Ok(Some(Media { mime, data }))

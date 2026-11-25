@@ -208,6 +208,25 @@ pub async fn messages_list(
 ) -> Result<Json<Value>, ApiError> {
     to_json(&conversations::messages(&state.deps, &ctx, id, input).await?)
 }
+/// A file of a message, as an address the panel shows (an image, inline) or downloads (anything
+/// else), living a few minutes (`inbox.message_media`).
+pub async fn message_media(
+    State(state): State<AppState>,
+    WorkspaceCtx(ctx): WorkspaceCtx,
+    ApiPath(id): ApiPath<jt_app::usecases::inbox::MessageId>,
+    ApiQuery(input): ApiQuery<jt_app::usecases::inbox::media::MediaInput>,
+) -> Result<Json<Value>, ApiError> {
+    to_json(
+        &jt_app::usecases::inbox::media::open(
+            &state.deps,
+            &ctx,
+            id,
+            input,
+            jt_app::usecases::inbox::media::Hand::Address,
+        )
+        .await?,
+    )
+}
 pub async fn take_over(
     State(state): State<AppState>,
     WorkspaceCtx(ctx): WorkspaceCtx,

@@ -229,6 +229,17 @@ impl MessagingSender for MetaConnector {
         messaging::send_text(self, cred, public, recipient_id, text).await
     }
 
+    async fn send_image(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        recipient_id: &str,
+        image: &jt_app::ports::connectors::OutboundImage,
+        caption: &str,
+    ) -> Result<SendReceipt, ConnectorError> {
+        messaging::send_image(self, cred, public, recipient_id, image, caption).await
+    }
+
     async fn sender_name(
         &self,
         cred: &Credential,
