@@ -777,6 +777,7 @@ async fn material(
         erased_at: erased.then_some(FIXED_NOW),
         upload_for: None,
         composition: None,
+        unknown: Default::default(),
     };
     let mut r = t.w.uow.tenant(t.w.ws).await.unwrap();
     r.studio_materials().insert_material(m).await.unwrap();
