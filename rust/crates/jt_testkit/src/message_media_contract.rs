@@ -7,7 +7,7 @@ use std::sync::Arc;
 use jt_app::error::ErrorCode;
 use jt_app::ports::UnitOfWork;
 use jt_app::ports::message_media::{
-    MediaDirection, MediaKind, MediaReason, MediaSource, MediaState, MessageMediaRow,
+    ErasedFiles, MediaDirection, MediaKind, MediaReason, MediaSource, MediaState, MessageMediaRow,
 };
 use jt_capability::CapabilityId;
 use jt_inbox::{MessageId, PersonId};
@@ -206,7 +206,7 @@ pub async fn record_fetch_purge(uow: Arc<dyn UnitOfWork>) {
     );
     assert_eq!(
         t.message_media().due_for_purge(at(5), 10).await.unwrap(),
-        [kept.clone()]
+        std::slice::from_ref(&kept)
     );
     let file = kept.file_id.unwrap();
     let unknown = FileId::new_v7();
@@ -252,9 +252,30 @@ pub async fn erasure_deletes_and_answers_the_files(uow: Arc<dyn UnitOfWork>) {
         material_id: Some(Uuid::now_v7()),
         ..stored(pending(cap, message, 2, 0), 1, 10)
     };
+    // The team's uploads: one sent only to the erased person, one also sent to another person.
+    let upload = |message, position| MessageMediaRow {
+        direction: MediaDirection::Outbound,
+        source: MediaSource::Upload,
+        ..stored(pending(cap, message, position, 0), 1, 10)
+    };
+    let only_theirs = upload(message, 3);
+    let shared = upload(message, 4);
+    let shared_elsewhere = MessageMediaRow {
+        file_id: shared.file_id,
+        ..upload(other_message, 1)
+    };
     let others = stored(pending(cap, other_message, 0, 0), 1, 10);
     let mut t = f.uow.tenant(f.ws).await.unwrap();
-    for row in [&image, &document, &alias_image, &material, &others] {
+    for row in [
+        &image,
+        &document,
+        &alias_image,
+        &material,
+        &only_theirs,
+        &shared,
+        &shared_elsewhere,
+        &others,
+    ] {
         assert!(t.message_media().insert_if_new(row).await.unwrap());
     }
     t.commit().await.unwrap();
@@ -265,17 +286,19 @@ pub async fn erasure_deletes_and_answers_the_files(uow: Arc<dyn UnitOfWork>) {
         .erase_person(person, at(30))
         .await
         .unwrap();
-    gone.sort();
+    gone.customer.sort();
     let mut expected = vec![image.file_id.unwrap(), alias_image.file_id.unwrap()];
     expected.sort();
-    assert_eq!(gone, expected);
+    assert_eq!(gone.customer, expected);
+    // An upload sent only here goes; one another conversation still shows stays.
+    assert_eq!(gone.uploads, [only_theirs.file_id.unwrap()]);
     // Again: nothing is left to delete.
-    assert!(
+    assert_eq!(
         t.message_media()
             .erase_person(person, at(31))
             .await
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        ErasedFiles::default()
     );
     t.commit().await.unwrap();
     let mut t = f.uow.tenant(f.ws).await.unwrap();
@@ -418,12 +441,9 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
         t.message_media().inbound_bytes_since(at(-1)).await.unwrap(),
         0
     );
-    assert!(
-        t.message_media()
-            .erase_person(person, at(1))
-            .await
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        t.message_media().erase_person(person, at(1)).await.unwrap(),
+        ErasedFiles::default()
     );
     let e = t.message_media().save(&mine).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::NotFound);

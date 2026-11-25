@@ -697,41 +697,6 @@ async fn an_older_message_gets_its_file_on_first_view() {
     assert_eq!(row(&t).state, MediaState::Stored);
 }
 
-#[tokio::test]
-async fn a_workspaces_daily_bytes_are_bounded() {
-    let t = setup().await;
-    inbound(&t, "wamid.day1", "image", image("1500000000000016"), 0).await;
-    inbound(&t, "wamid.day2", "image", image("1500000000000017"), 1).await;
-    // The day's bytes are spent by files already kept.
-    let first = rows(&t)
-        .into_iter()
-        .find(|r| r.message_id == message_id(&t, "wamid.day1"))
-        .unwrap();
-    t.w.uow.edit(|s| {
-        for (_, r) in s.message_media.iter_mut() {
-            if r.id == first.id {
-                r.state = MediaState::Stored;
-                r.file_id = Some(FileId::new_v7());
-                r.provider_media_id = None;
-                r.mime = Some("image/jpeg".into());
-                r.sha256 = Some("a".repeat(64));
-                r.size_bytes = Some(media::MAX_DAILY_BYTES);
-                r.stored_at = Some(later(0));
-            }
-        }
-    });
-    job(&t, later(1)).await;
-    let second = rows(&t)
-        .into_iter()
-        .find(|r| r.message_id == message_id(&t, "wamid.day2"))
-        .unwrap();
-    assert_eq!(
-        (second.state, second.reason),
-        (MediaState::Failed, Some(MediaReason::DailyLimit))
-    );
-    assert!(t.meta.media_calls().is_empty());
-}
-
 // ---------------------------------------------------------------------------------------------
 // Sending an image
 // ---------------------------------------------------------------------------------------------
@@ -965,6 +930,16 @@ async fn a_photo_that_may_not_be_shared_is_refused_before_sending() {
         false,
     )
     .await;
+    // The workspace does not let an agent's visual stand alone (the materials policy).
+    let mut r = t.w.uow.tenant(t.w.ws).await.unwrap();
+    r.studio_materials()
+        .save_material_policy(jt_studio::MaterialPolicy {
+            ai_standalone: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
     let by_material = |id| ImageInput {
         file_id: None,
         material_id: Some(id),
@@ -1050,4 +1025,284 @@ async fn an_image_keeps_every_sending_rule() {
             .body,
         "[image]"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The review's findings: the publication fence, the check at send time, erasure of uploads,
+// the daily cap
+// ---------------------------------------------------------------------------------------------
+
+/// A composed material (a slide the server drew) of `sources`, its own share given by the owner.
+async fn composed(t: &T, file: FileId, sources: &[jt_studio::MaterialId]) -> jt_studio::MaterialId {
+    let id = material(
+        t,
+        file,
+        Some(jt_studio::SharePermission::Shareable),
+        jt_studio::Origin::Real,
+        false,
+    )
+    .await;
+    let composition: jt_studio::compose::Composition = serde_json::from_value(json!({
+        "renderer": "test",
+        "role": "cover",
+        "variant": "a",
+        "frame": "slide",
+        "sources": sources,
+    }))
+    .unwrap();
+    t.w.uow.edit(|s| {
+        for m in s.materials.materials.iter_mut() {
+            if m.id == id {
+                m.composition = Some(composition.clone());
+            }
+        }
+    });
+    id
+}
+
+/// Changes material `id` as a person (or an analysis) would while a send waits.
+fn change_material(t: &T, id: jt_studio::MaterialId, change: impl Fn(&mut jt_studio::Material)) {
+    t.w.uow.edit(|s| {
+        for m in s.materials.materials.iter_mut() {
+            if m.id == id {
+                change(m);
+            }
+        }
+    });
+}
+
+fn set_share(m: &mut jt_studio::Material, permission: jt_studio::SharePermission) {
+    if let Some(share) = m.share.as_mut() {
+        share.permission = permission;
+    }
+}
+
+#[tokio::test]
+async fn a_derivative_the_publication_fence_blocks_is_never_sent() {
+    use jt_studio::{Origin, SharePermission};
+    let t = setup().await;
+    let c = customer_wrote(&t).await;
+    let source_file = studio_file(&t, "image/jpeg", &jpeg()).await;
+    let source = material(
+        &t,
+        source_file,
+        Some(SharePermission::NotShareable),
+        Origin::Real,
+        false,
+    )
+    .await;
+    let slide_file = studio_file(&t, "image/jpeg", &jpeg()).await;
+    // Its own share says yes; its source says no.
+    let slide = composed(&t, slide_file, &[source]).await;
+    for image in [
+        ImageInput {
+            file_id: None,
+            material_id: Some(slide),
+        },
+        // Its file named as a file is held to the same fence.
+        file_image(slide_file),
+    ] {
+        let e = replies::reply(&t.w.deps, &t.w.owner_ctx, c, with_image("x", image, None))
+            .await
+            .unwrap_err();
+        assert_eq!(e.details["reason"], "material_source_restricted");
+    }
+    assert!(sent_images(&t).is_empty());
+}
+
+#[tokio::test]
+async fn a_waiting_image_is_checked_again_when_it_goes_out() {
+    use jt_app::usecases::inbox::replies::Enqueued;
+    use jt_studio::{Depicts, Origin, SharePermission};
+    let t = setup().await;
+    let c = customer_wrote(&t).await;
+    let source_file = studio_file(&t, "image/jpeg", &jpeg()).await;
+    let source = material(
+        &t,
+        source_file,
+        Some(SharePermission::Shareable),
+        Origin::Real,
+        false,
+    )
+    .await;
+    let slide_file = studio_file(&t, "image/jpeg", &jpeg()).await;
+    let slide = composed(&t, slide_file, &[source]).await;
+    let plain_file = studio_file(&t, "image/jpeg", &jpeg()).await;
+    let plain = material(
+        &t,
+        plain_file,
+        Some(SharePermission::Shareable),
+        Origin::Real,
+        false,
+    )
+    .await;
+    let product_file = studio_file(&t, "image/jpeg", &jpeg()).await;
+    let product = material(
+        &t,
+        product_file,
+        Some(SharePermission::ProductOnly),
+        Origin::Real,
+        false,
+    )
+    .await;
+    // Each change happens while the send waits (queued, as a held reply waits for approval).
+    let changes: [(jt_studio::MaterialId, Box<dyn Fn(&T)>, &str); 3] = [
+        (
+            plain,
+            Box::new(move |t: &T| {
+                change_material(t, plain, |m| set_share(m, SharePermission::NotShareable))
+            }),
+            "material_not_shareable",
+        ),
+        (
+            product,
+            Box::new(move |t: &T| {
+                change_material(t, product, |m| {
+                    m.tags.depicts.insert(Depicts::Face);
+                })
+            }),
+            "material_shows_person",
+        ),
+        (
+            slide,
+            Box::new(move |t: &T| {
+                change_material(t, source, |m| set_share(m, SharePermission::NotShareable))
+            }),
+            "material_source_restricted",
+        ),
+    ];
+    for (n, (id, change, reason)) in changes.into_iter().enumerate() {
+        let queued = replies::enqueue(
+            &t.w.deps,
+            &t.w.owner_ctx,
+            c,
+            with_image(
+                "x",
+                ImageInput {
+                    file_id: None,
+                    material_id: Some(id),
+                },
+                Some(&format!("wait-{n}")),
+            ),
+        )
+        .await
+        .unwrap();
+        let Enqueued::New(outbox) = queued else {
+            panic!("a new send")
+        };
+        change(&t);
+        let e = replies::send_step(&t.w.deps, &t.w.owner_ctx, outbox)
+            .await
+            .unwrap_err();
+        assert_eq!(e.details["reason"], reason);
+        let row =
+            t.w.uow
+                .snapshot()
+                .inbox
+                .outbox
+                .into_iter()
+                .find(|r| r.id == outbox)
+                .unwrap();
+        assert_eq!(
+            (row.state.as_str(), row.last_error.as_deref()),
+            ("refused", Some(reason))
+        );
+    }
+    assert!(sent_images(&t).is_empty());
+}
+
+#[tokio::test]
+async fn an_upload_sent_only_to_the_erased_person_goes_with_them() {
+    use jt_studio::{Origin, SharePermission};
+    let t = setup().await;
+    let c = customer_wrote(&t).await;
+    let upload = studio_file(&t, "image/jpeg", &jpeg()).await;
+    let library_file = studio_file(&t, "image/jpeg", &jpeg()).await;
+    let library = material(
+        &t,
+        library_file,
+        Some(SharePermission::Shareable),
+        Origin::Real,
+        false,
+    )
+    .await;
+    for (n, image) in [
+        file_image(upload),
+        ImageInput {
+            file_id: None,
+            material_id: Some(library),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        t.meta.push_send_text(Ok(receipt(&format!("wamid.out{n}"))));
+        replies::reply(&t.w.deps, &t.w.owner_ctx, c, with_image("", image, None))
+            .await
+            .unwrap();
+    }
+    let (_, person) = conversation(&t);
+    erasure::erase(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        person,
+        erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    let kept: Vec<FileId> = stored_files(&t).into_iter().map(|(id, _)| id).collect();
+    // The upload's bytes and studio record are gone; the library's material stays.
+    assert!(!kept.contains(&upload));
+    assert!(kept.contains(&library_file));
+    let s = t.w.uow.snapshot();
+    let record = s
+        .studio
+        .files
+        .iter()
+        .find(|f| f.id == upload)
+        .expect("the studio record stays, marked deleted");
+    assert!(record.deleted_at.is_some());
+}
+
+#[tokio::test]
+async fn a_file_past_the_daily_cap_waits_and_is_fetched_later() {
+    let t = setup().await;
+    inbound(&t, "wamid.cap1", "image", image("1500000000000031"), 0).await;
+    inbound(&t, "wamid.cap2", "image", image("1500000000000032"), 1).await;
+    let first = rows(&t)
+        .into_iter()
+        .find(|r| r.message_id == message_id(&t, "wamid.cap1"))
+        .unwrap();
+    t.w.uow.edit(|s| {
+        for (_, r) in s.message_media.iter_mut() {
+            if r.id == first.id {
+                r.state = MediaState::Stored;
+                r.file_id = Some(FileId::new_v7());
+                r.provider_media_id = None;
+                r.mime = Some("image/jpeg".into());
+                r.sha256 = Some("a".repeat(64));
+                r.size_bytes = Some(media::MAX_DAILY_BYTES);
+                r.stored_at = Some(later(0));
+            }
+        }
+    });
+    job(&t, later(1)).await;
+    let second = |t: &T| {
+        rows(t)
+            .into_iter()
+            .find(|r| r.message_id == message_id(t, "wamid.cap2"))
+            .unwrap()
+    };
+    let waiting = second(&t);
+    assert_eq!(waiting.state, MediaState::Pending);
+    assert_eq!(
+        waiting.provider_media_id.as_deref(),
+        Some("1500000000000032")
+    );
+    assert_eq!(waiting.attempts, 0);
+    assert!(t.meta.media_calls().is_empty());
+    // A day later the window lets it in.
+    t.meta.push_media(Ok(Some(media("image/jpeg", &jpeg()))));
+    job(&t, later(1) + Duration::hours(25)).await;
+    assert_eq!(second(&t).state, MediaState::Stored);
 }

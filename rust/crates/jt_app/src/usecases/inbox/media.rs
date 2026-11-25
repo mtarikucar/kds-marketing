@@ -13,7 +13,7 @@
 //!   or WebP by its first bytes, at most [`MAX_IMAGE_BYTES`], at most [`MAX_SIDE`] pixels on a side
 //!   and [`MAX_PIXELS`] in all (read from its header, never decoded); a document a PDF, an image,
 //!   or an Office file (a ZIP the provider names as one), at most [`MAX_DOCUMENT_BYTES`]
-//!   ([`check`]). A workspace keeps at most [`MAX_DAILY_BYTES`] of customers' files a day. What is
+//!   ([`check`]). A workspace keeps at most [`MAX_DAILY_BYTES`] of customers' files a day (a file past it waits, its media id kept). What is
 //!   refused is recorded `failed` with why, never stored.
 //! - **Kept, then let go.** A stored image keeps its type in the file store (shown inline, through
 //!   a short-lived signed address of the workspace's own); a document is kept as
@@ -76,6 +76,8 @@ pub const MAX_DAILY_BYTES: u64 = super::attachments::MAX_INBOUND_DAILY_BYTES;
 /// How long a customer's file is kept once stored (design 2026-10-30 D21/D26: inbound
 /// attachments are kept 180 days). The owner may shorten it; nothing keeps a file longer.
 pub const RETENTION: Duration = Duration::days(180);
+/// How long a file waits when the workspace's day of chat files is spent ([`MAX_DAILY_BYTES`]).
+pub const DAILY_LIMIT_WAIT: Duration = Duration::hours(1);
 /// The most fetches of one file; then it is `failed` `unavailable`.
 pub const MAX_ATTEMPTS: u32 = 5;
 /// The wait after each failed fetch, in minutes (the last repeats).
@@ -691,6 +693,15 @@ pub(crate) async fn sendable_image(
         if let Some(reason) = material_refusal(m, ai_standalone) {
             return Err(image_refused(reason));
         }
+        // The publication fence: a derivative (a production's output, a composed slide or
+        // story) whose source is restricted, erased or unfiled is never sent, whatever its own
+        // share says.
+        if crate::usecases::studio::library::blocked_derivatives(r)
+            .await?
+            .contains(&m.id)
+        {
+            return Err(image_refused("material_source_restricted"));
+        }
     }
     let file = r
         .studio()
@@ -905,10 +916,12 @@ async fn fetch_one(
             .await?
             >= MAX_DAILY_BYTES
         {
-            give_up(&mut row, MediaReason::DailyLimit);
+            // Past the day's bytes: the file waits (its media id kept, no attempt counted) and is
+            // fetched once the day's window lets it, while the provider still serves it.
+            row.next_attempt_at = Some(now + DAILY_LIMIT_WAIT);
             r.message_media().save(&row).await?;
             r.commit().await?;
-            return Ok(Fetched::Refused);
+            return Ok(Fetched::Retry);
         }
         let capability = r.capabilities().find(row.capability_id).await?;
         let access = match capability.filter(|c| c.status != StoredStatus::Retired) {

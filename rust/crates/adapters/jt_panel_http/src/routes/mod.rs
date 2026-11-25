@@ -194,6 +194,7 @@ pub const ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/inbox/conversations"),
     ("GET", "/api/inbox/conversations/{conversation_id}"),
     ("GET", "/api/inbox/conversations/{conversation_id}/messages"),
+    ("GET", "/api/inbox/messages/{message_id}/media"),
     (
         "POST",
         "/api/inbox/conversations/{conversation_id}/take-over",

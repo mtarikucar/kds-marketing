@@ -49,19 +49,19 @@ create table if not exists message_media (
     foreign key (capability_id, workspace_id) references capabilities (id, workspace_id),
     unique (workspace_id, message_id, position),
     -- A customer's file comes from the provider; one of ours from an upload or the library.
-    constraint message_media_source_check check (
+    constraint message_media_source_rule check (
         (direction = 'inbound' and source = 'provider')
         or (direction = 'outbound' and source in ('upload', 'material'))),
-    constraint message_media_material_check check ((source = 'material') = (material_id is not null)),
+    constraint message_media_material_rule check ((source = 'material') = (material_id is not null)),
     -- A pending file names what to fetch; a stored one its bytes; a failed or deleted one why.
-    constraint message_media_pending_check check (state <> 'pending' or provider_media_id is not null),
-    constraint message_media_stored_check check (state <> 'stored' or (file_id is not null
+    constraint message_media_pending_rule check (state <> 'pending' or provider_media_id is not null),
+    constraint message_media_stored_rule check (state <> 'stored' or (file_id is not null
         and sha256 is not null and size_bytes is not null and mime is not null and stored_at is not null)),
-    constraint message_media_reason_check check (
+    constraint message_media_reason_rule check (
         (state in ('pending', 'stored') and reason is null)
         or (state = 'failed' and reason in ('expired', 'too_large', 'not_allowed', 'too_many_pixels', 'unavailable', 'daily_limit'))
         or (state = 'deleted' and reason in ('erased', 'retention'))),
-    constraint message_media_deleted_check check ((state = 'deleted') = (deleted_at is not null))
+    constraint message_media_deleted_rule check ((state = 'deleted') = (deleted_at is not null))
 );
 create index if not exists message_media_message on message_media (workspace_id, message_id);
 create index if not exists message_media_pending on message_media (workspace_id, next_attempt_at) where state = 'pending';

@@ -227,6 +227,16 @@ pub fn media_row_valid(row: &MessageMediaRow) -> bool {
         && hash_ok
 }
 
+/// The files a person's erasure lets go of ([`MessageMediaRepo::erase_person`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ErasedFiles {
+    /// The customer's own files (from the provider): their bytes go.
+    pub customer: Vec<FileId>,
+    /// Files the team uploaded and sent only in the erased conversations: their bytes go too,
+    /// unless the caller finds them a library material's.
+    pub uploads: Vec<FileId>,
+}
+
 #[async_trait]
 pub trait MessageMediaRepo: Send + Sync {
     /// Stores `row` and answers `true`, unless its message holds a row at its position: then
@@ -260,13 +270,14 @@ pub trait MessageMediaRepo: Send + Sync {
     /// A person's erasure: every row of the messages of the conversations of `person` and of the
     /// people merged into them (transitively) loses its name and media id; a row not yet
     /// `deleted` becomes `deleted` at `at` (reason `erased`), its file and types cleared. Answers
-    /// the file ids whose bytes the caller deletes once the bundle commits: the customer's own
-    /// files ([`MessageMediaRow::owns_bytes`]), never a file the team sent.
+    /// the files whose bytes may go once the bundle commits ([`ErasedFiles`]): the customer's own
+    /// files, and the team's uploads that no other message's stored row names. A library
+    /// material's file is never among them.
     async fn erase_person(
         &mut self,
         person: PersonId,
         at: OffsetDateTime,
-    ) -> Result<Vec<FileId>, AppError>;
+    ) -> Result<ErasedFiles, AppError>;
     /// The ids among `ids` a stored row names: the files the store keeps for chat messages.
     async fn kept(&mut self, ids: &[FileId]) -> Result<Vec<FileId>, AppError>;
 }

@@ -1514,6 +1514,13 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
             }
             Ok(prepared)
         });
+    // An image is checked again when it goes out: a material set not shareable, a person tagged
+    // on it, its source blocked by the publication fence, or its file gone while the send
+    // waited (queued, or held for approval) refuses it here, with the image's reason.
+    let prepared = match (prepared, row.intent.get("media").cloned()) {
+        (Ok(p), Some(media)) => recheck_image(r.as_mut(), &media).await.map(|()| p),
+        (other, _) => other,
+    };
     let (credential, recipient, provider) = match prepared {
         Ok(p) => p,
         Err(e) if e.code == ErrorCode::Validation => {
@@ -1776,6 +1783,25 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
             .await
     };
     record_result_for(deps, &fresh(deps, &ctx), p.row.id, result, recipient).await
+}
+
+/// [`super::media::sendable_image`] again for the image a queued send carries (`intent.media`):
+/// its material when it names one, else its file. A refusal is `VALIDATION` with the image's
+/// reason, which the claim records as the send's refusal.
+async fn recheck_image(r: &mut dyn TenantRepos, media: &Value) -> Result<(), AppError> {
+    let parse = |key: &str| media[key].as_str().and_then(|v| v.parse::<Uuid>().ok());
+    let input = match (parse("material_id"), parse("file_id")) {
+        (Some(material), _) => super::media::ImageInput {
+            file_id: None,
+            material_id: Some(jt_studio::MaterialId(material)),
+        },
+        (None, Some(file)) => super::media::ImageInput {
+            file_id: Some(jt_studio::FileId(file)),
+            material_id: None,
+        },
+        (None, None) => return Err(super::media::image_refused("image_not_found")),
+    };
+    super::media::sendable_image(r, &input).await.map(drop)
 }
 
 /// The image a claimed send carries (`intent.media`), as the provider fetches it: an address of

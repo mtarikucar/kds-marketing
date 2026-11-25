@@ -1761,7 +1761,8 @@
         "images_not_supported_on_channel": "Photos are not sent on this channel",
         "caption_too_long": "The caption is at most 1024 characters",
         "image_one_of_file_or_material": "Choose one photo",
-        "other": "The photo could not be sent"
+        "other": "The photo could not be sent",
+        "material_source_restricted": "This photo's source may not be shared"
       }
     },
     "reply": "Your reply",

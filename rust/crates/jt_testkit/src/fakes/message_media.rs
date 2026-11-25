@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::message_media::{
-    MAX_MEDIA_PAGE, MediaDirection, MediaReason, MediaState, MessageMediaRepo, MessageMediaRow,
-    media_row_valid,
+    ErasedFiles, MAX_MEDIA_PAGE, MediaDirection, MediaReason, MediaSource, MediaState,
+    MessageMediaRepo, MessageMediaRow, media_row_valid,
 };
 use jt_inbox::{MessageId, PersonId};
 use jt_studio::FileId;
@@ -204,7 +204,7 @@ impl MessageMediaRepo for MemTenant {
         &mut self,
         person: PersonId,
         at: OffsetDateTime,
-    ) -> Result<Vec<FileId>, AppError> {
+    ) -> Result<ErasedFiles, AppError> {
         let family = self.media_family(person);
         let conversations: BTreeSet<_> = self
             .state()
@@ -222,11 +222,27 @@ impl MessageMediaRepo for MemTenant {
             .filter(|m| m.workspace_id == self.ws && conversations.contains(&m.conversation_id))
             .map(|m| m.id)
             .collect();
-        let gone: Vec<FileId> = self
+        let customer: Vec<FileId> = self
             .media_rows()
             .filter(|r| messages.contains(&r.message_id) && r.owns_bytes())
             .filter_map(|r| r.file_id)
             .collect();
+        let mut uploads: Vec<FileId> = Vec::new();
+        for r in self.media_rows().filter(|r| {
+            messages.contains(&r.message_id)
+                && r.state == MediaState::Stored
+                && r.source == MediaSource::Upload
+        }) {
+            let Some(file) = r.file_id else { continue };
+            let shared = self.media_rows().any(|o| {
+                o.file_id == Some(file)
+                    && o.state == MediaState::Stored
+                    && !messages.contains(&o.message_id)
+            });
+            if !shared && !uploads.contains(&file) {
+                uploads.push(file);
+            }
+        }
         let ws = self.ws;
         self.tx.write(move |s: &mut MemState| {
             for (w, r) in s.message_media.iter_mut() {
@@ -247,7 +263,7 @@ impl MessageMediaRepo for MemTenant {
                 }
             }
         });
-        Ok(gone)
+        Ok(ErasedFiles { customer, uploads })
     }
 
     async fn kept(&mut self, ids: &[FileId]) -> Result<Vec<FileId>, AppError> {

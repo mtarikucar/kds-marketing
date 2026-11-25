@@ -1761,7 +1761,8 @@
         "images_not_supported_on_channel": "Bu kanalda fotoğraf gönderilmez",
         "caption_too_long": "Açıklama en fazla 1024 karakter olabilir",
         "image_one_of_file_or_material": "Tek bir fotoğraf seçin",
-        "other": "Fotoğraf gönderilemedi"
+        "other": "Fotoğraf gönderilemedi",
+        "material_source_restricted": "Bu fotoğrafın kaynağı paylaşılamaz"
       }
     },
     "reply": "Yanıtınız",

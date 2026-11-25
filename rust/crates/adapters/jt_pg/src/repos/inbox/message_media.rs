@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::message_media::{
-    MAX_MEDIA_PAGE, MediaDirection, MediaKind, MediaReason, MediaSource, MediaState,
+    ErasedFiles, MAX_MEDIA_PAGE, MediaDirection, MediaKind, MediaReason, MediaSource, MediaState,
     MessageMediaRepo, MessageMediaRow, media_row_valid,
 };
 use jt_capability::CapabilityId;
@@ -312,8 +312,8 @@ impl MessageMediaRepo for PgTenantRepos {
         &mut self,
         person: PersonId,
         at: OffsetDateTime,
-    ) -> Result<Vec<FileId>, AppError> {
-        let rows: Vec<(Option<Uuid>, String, String)> = sqlx::query_as(
+    ) -> Result<ErasedFiles, AppError> {
+        let rows: Vec<(Option<Uuid>, String, String, bool)> = sqlx::query_as(
             "with recursive family(id) as ( \
                  select id from people where workspace_id = $1 and id = $2 \
                  union select p.id from people p join family f on p.merged_into = f.id \
@@ -334,7 +334,7 @@ impl MessageMediaRepo for PgTenantRepos {
                  stored_at = case when t.state = 'deleted' then mm.stored_at else null end, \
                  next_attempt_at = null \
              from targets t where mm.workspace_id = $1 and mm.id = t.id \
-             returning t.file_id, t.state, t.source",
+             returning t.file_id, t.state, t.source, exists (                  select 1 from message_media o where o.workspace_id = $1                  and o.file_id = t.file_id and o.state = 'stored'                  and o.id not in (select id from targets))",
         )
         .bind(self.workspace_id().as_uuid())
         .bind(person.as_uuid())
@@ -342,11 +342,18 @@ impl MessageMediaRepo for PgTenantRepos {
         .fetch_all(self.tx.conn())
         .await
         .map_err(|e| refused(e, "erase a person's message media"))?;
-        Ok(rows
-            .into_iter()
-            .filter(|(_, state, source)| state == "stored" && source == "provider")
-            .filter_map(|(file, _, _)| file.map(FileId))
-            .collect())
+        let mut out = ErasedFiles::default();
+        for (file, state, source, shared) in rows {
+            let Some(file) = file.map(FileId).filter(|_| state == "stored") else {
+                continue;
+            };
+            match source.as_str() {
+                "provider" => out.customer.push(file),
+                "upload" if !shared && !out.uploads.contains(&file) => out.uploads.push(file),
+                _ => {}
+            }
+        }
+        Ok(out)
     }
 
     async fn kept(&mut self, of: &[FileId]) -> Result<Vec<FileId>, AppError> {

@@ -43,6 +43,7 @@ const EXEMPT_INBOX: &[&str] = &[
     "inbox.conversations.list",
     "inbox.conversations.get",
     "inbox.messages.list",
+    "inbox.message_media",
     "inbox.take_over",
     "inbox.hand_to_agent",
     "inbox.snooze",
