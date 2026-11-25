@@ -411,7 +411,7 @@ pub async fn reel_render(
         let _registered = registered;
         let outcome = produce(&d, &ctx, &i, &payload, photo_ms, brand, fallbacks).await;
         // `send_replace`: announced even when no call is waiting any more.
-        announce.send_replace(Some(outcome));
+        let _previous = announce.send_replace(Some(outcome));
     });
     wait(done).await
 }
