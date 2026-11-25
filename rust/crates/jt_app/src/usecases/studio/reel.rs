@@ -655,7 +655,9 @@ async fn store(
             frame: Frame::Reel.into(),
             sources: sources_ids.clone(),
             logo: logo.as_ref().map(|m| m.id),
+            unknown: Default::default(),
         }),
+        unknown: Default::default(),
     };
     if material.validate().is_err() {
         // A permission the reel cannot carry as its sources' (an agent's share of an AI image
