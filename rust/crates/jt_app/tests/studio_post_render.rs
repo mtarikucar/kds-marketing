@@ -1494,3 +1494,217 @@ async fn a_source_judged_unusable_makes_its_compositions_unusable() {
         "a quality alone does not reopen the permission"
     );
 }
+
+/// Rewrites `id`'s stored material as a later release would have written it: a role and a frame
+/// this build does not know, and a field it does not know on the material and on its composition.
+/// Returns the material as stored.
+async fn from_a_later_release(w: &World, id: MaterialId) -> Material {
+    use jt_app::ports::UnitOfWork;
+    let current = material(w, id);
+    let mut v = serde_json::to_value(&current).unwrap();
+    v["composition"]["role"] = json!("some_new_role");
+    v["composition"]["frame"] = json!("some_new_frame");
+    v["composition"]["added_later"] = json!(["kept"]);
+    v["added_later"] = json!({"kept": true});
+    let mut later: Material = serde_json::from_value(v).unwrap();
+    later.revision += 1;
+    let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+    r.studio_materials()
+        .update_material(later.clone(), current.revision)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    later
+}
+
+/// A composition a later release made (a role and a frame this build does not know) is read,
+/// kept unchanged when the material is saved again, follows every rule a composition follows
+/// (its sources' erasure and retention, un-sharing, late marks and quality; the publication
+/// fence; an area's membership by its sources; no trigger counts it), and is never drawn from
+/// nor counted as a render of this build.
+#[tokio::test]
+async fn a_composition_a_later_release_made_follows_every_rule() {
+    let w = world().await;
+    let o = olay(&w).await;
+    let ada = person(&w, "ada").await;
+
+    // Read, and written back unchanged when the material is saved again (a permission set).
+    let p = real_photo(&w, "p", 1, o).await;
+    let c = from_a_later_release(
+        &w,
+        render_from(&w, "c", "cover", "full_top", p.id)
+            .await
+            .unwrap()
+            .material
+            .id,
+    )
+    .await;
+    let stored = material(&w, c.id);
+    let raw = serde_json::to_value(&stored).unwrap();
+    assert_eq!(raw["composition"]["role"], "some_new_role");
+    assert_eq!(raw["composition"]["frame"], "some_new_frame");
+    library::materials_list(&w.d, &w.ctx, input(json!({})))
+        .await
+        .unwrap();
+    permit(&w, c.id, "product_only").await;
+    let again = serde_json::to_value(material(&w, c.id)).unwrap();
+    assert_eq!(again["composition"], raw["composition"]);
+    assert_eq!(again["composition"]["added_later"], json!(["kept"]));
+    assert_eq!(again["added_later"], json!({"kept": true}));
+
+    // Never drawn from, and no render of this build: the cover rotation does not see it.
+    let e = render_from(&w, "of-later", "steps", "photo_top", c.id)
+        .await
+        .unwrap_err();
+    assert_eq!(reason(&e), "source_unknown_composition");
+    let t = render::post_templates(&w.d, &w.ctx).await.unwrap();
+    assert!(t.recent.iter().all(|r| r.material_id != c.id));
+
+    // Late marks and quality reach it; un-sharing its source clears its permission and the
+    // fence holds it while the source is restricted.
+    library::material_tag(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"material_id":p.id,"expected_revision":material(&w, p.id).revision,
+            "people":[ada],"quality":"unusable"}),
+        ),
+    )
+    .await
+    .unwrap();
+    let after = material(&w, c.id);
+    assert!(after.people.contains(&ada.0));
+    assert_eq!(after.tags.quality, Some(Quality::Unusable));
+    assert!(after.share.is_none());
+    permit(&w, c.id, "shareable").await;
+    permit(&w, p.id, "not_shareable").await;
+    assert!(material(&w, c.id).share.is_none());
+    permit(&w, c.id, "shareable").await;
+    assert!(blocked(&w).await.contains(&c.id));
+
+    // A person's erasure reaches it through its source.
+    jt_app::usecases::inbox::erasure::erase(
+        &w.d,
+        &w.ctx,
+        ada,
+        jt_app::usecases::inbox::erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    assert!(material(&w, c.id).erased_at.is_some());
+
+    // Its source deleted: redacted with it.
+    let q = real_photo(&w, "q", 2, o).await;
+    let d1 = from_a_later_release(
+        &w,
+        render_from(&w, "d", "cover", "full_top", q.id)
+            .await
+            .unwrap()
+            .material
+            .id,
+    )
+    .await;
+    library::material_delete(
+        &w.d,
+        &w.ctx,
+        input(json!({"material_id":q.id,"expected_revision":material(&w, q.id).revision,"confirm":true})),
+    )
+    .await
+    .unwrap();
+    assert!(material(&w, d1.id).erased_at.is_some());
+
+    // An area's while its source is; it is no analysis work.
+    let s = real_photo(&w, "s", 3, o).await;
+    let e1 = from_a_later_release(
+        &w,
+        render_from(&w, "e", "cover", "full_top", s.id)
+            .await
+            .unwrap()
+            .material
+            .id,
+    )
+    .await;
+    assert!(!analysis_items(&w).await.contains(&e1.id));
+    let area = projects::project_create(
+        &w.d,
+        &w.ctx,
+        input(json!({"request_key":"area","brief":"Masadan bir paylaşım hazırla"})),
+    )
+    .await
+    .unwrap();
+    projects::project_materials(
+        &w.d,
+        &w.ctx,
+        input(json!({"project_id":area.id,"expected_revision":area.revision,"add":[s.id]})),
+    )
+    .await
+    .unwrap();
+    {
+        use jt_app::ports::UnitOfWork;
+        let mut r = w.uow.tenant(w.f.ws).await.unwrap();
+        let stored = r
+            .studio_projects()
+            .get_project(area.id)
+            .await
+            .unwrap()
+            .unwrap();
+        let ids = projects::available_material_ids(r.as_mut(), &stored)
+            .await
+            .unwrap();
+        assert!(ids.contains(&e1.id));
+    }
+
+    // No trigger counts it: the planner asks for no content made of it.
+    jt_app::usecases::studio::planner::plan(&w.d, w.f.ws, w.ctx.now + time::Duration::hours(3))
+        .await
+        .unwrap();
+    assert!(
+        w.uow
+            .snapshot()
+            .posts
+            .requests
+            .iter()
+            .all(|q| !q.material_ids.contains(&e1.id))
+    );
+
+    // The retention rule: an old olay's face photo goes, and what was drawn from it.
+    let old = library::olay_create(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"old","kind":"workshop","title":"Eski gün",
+            "starts_on":"2026-10-20","ends_on":"2026-10-22"}),
+        ),
+    )
+    .await
+    .unwrap()
+    .id;
+    let face_file = upload(&w, "f-face", 7).await;
+    let face = library::material_add(
+        &w.d,
+        &w.ctx,
+        input(
+            json!({"request_key":"face","file_id":face_file,"origin":{"kind":"real"},
+            "olay_id":old,"share":"shareable","quality":"publishable","depicts":["face"]}),
+        ),
+    )
+    .await
+    .unwrap()
+    .material;
+    analysed(&w, face.id).await;
+    let g1 = from_a_later_release(
+        &w,
+        render_from(&w, "g", "cover", "full_top", face.id)
+            .await
+            .unwrap()
+            .material
+            .id,
+    )
+    .await;
+    let mut w = w;
+    w.d.clock = Arc::new(jt_testkit::fakes::FixedClock(time::macros::datetime!(
+        2028-10-23 12:00 UTC
+    )));
+    files::cleanup_files(&w.d, w.f.ws).await.unwrap();
+    assert!(material(&w, g1.id).erased_at.is_some());
+}

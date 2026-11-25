@@ -268,7 +268,36 @@ pub struct Material {
     /// on every other material. Fixed when it is created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<crate::compose::Composition>,
+    /// Fields a later release added that this build does not know, as they were read: written
+    /// back unchanged, so saving the material here never drops them. Empty for every material
+    /// this build writes (and then not serialized at all).
+    #[serde(flatten)]
+    pub unknown: std::collections::BTreeMap<String, serde_json::Value>,
 }
+
+/// The fields a [`Material`] serializes (its `unknown` map aside): an unknown field may not
+/// carry one of these names.
+pub const MATERIAL_FIELDS: [&str; 19] = [
+    "id",
+    "workspace_id",
+    "file_id",
+    "mime",
+    "title",
+    "origin",
+    "binding",
+    "freed",
+    "share",
+    "tags",
+    "tags_reviewed_by",
+    "people",
+    "captured_at",
+    "created_by",
+    "revision",
+    "created_at",
+    "erased_at",
+    "upload_for",
+    "composition",
+];
 
 /// A generator name: 1–40 of `[a-z0-9_.-]`.
 pub fn valid_generator(name: &str) -> bool {
@@ -288,6 +317,19 @@ impl Material {
         }
         if self.mime.trim().is_empty() {
             return Err(invalid("mime"));
+        }
+        // A kept unknown field never shadows a known one (it would be written twice).
+        if self
+            .unknown
+            .keys()
+            .any(|k| MATERIAL_FIELDS.contains(&k.as_str()))
+            || self.composition.as_ref().is_some_and(|c| {
+                c.unknown
+                    .keys()
+                    .any(|k| crate::compose::COMPOSITION_FIELDS.contains(&k.as_str()))
+            })
+        {
+            return Err(invalid("unknown"));
         }
         if !label_ok(&self.title, MAX_MATERIAL_TITLE_CHARS, false) {
             return Err(invalid("title"));
@@ -396,8 +438,17 @@ impl Material {
 
     /// The material as erasure leaves it (spec §9.2): its id, file, origin and binding, and a
     /// human's freeing of it (a decision, not personal data, which a genel material needs).
+    /// Fields a later release added go too: this build cannot tell whether they are personal.
     pub fn redacted(&self, at: OffsetDateTime) -> Material {
         Material {
+            unknown: Default::default(),
+            composition: self
+                .composition
+                .clone()
+                .map(|c| crate::compose::Composition {
+                    unknown: Default::default(),
+                    ..c
+                }),
             title: String::new(),
             share: None,
             tags: Tags::default(),

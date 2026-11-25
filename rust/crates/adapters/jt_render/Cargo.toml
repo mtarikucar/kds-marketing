@@ -13,10 +13,13 @@ tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tiny-skia.workspace = true
 harfrust.workspace = true
 image.workspace = true
+openh264.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
+# The sample reel test prints the renderer's timing.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

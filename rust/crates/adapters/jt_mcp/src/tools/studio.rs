@@ -161,7 +161,8 @@ fn render_definitions() -> Vec<ToolDef> {
              each slot (kind photo, text or price; required; max_chars, max_lines and width at \
              the template's size), the workspace's brand tokens (as set and as drawn) and its \
              render history: last_variants per role, recent renders and cover.next_variant, the \
-             cover to use next. Read it before rendering a post. [risk: READ]",
+             cover to use next, and reel: the photo reel's limits and text slots \
+             (jeeta.studio.reel_render). Read it before rendering a post. [risk: READ]",
             || posting_schema("post_templates"),
             post_templates,
         ),
@@ -185,6 +186,33 @@ fn render_definitions() -> Vec<ToolDef> {
              depicts and share permission. [risk: WRITE]",
             || posting_schema("post_render"),
             post_render,
+        ),
+        def(
+            "studio.reel_render",
+            "Render a photo reel, a vertical MP4 video (1080x1920, 30 fps, H.264, no audio \
+             track: published by the server it goes out without sound; music can be added only \
+             when a person posts it by hand in the app), from the library's photos, with \
+             request_key (replayed): photos [{material_id, text?, focus_x?, focus_y?}] (3 to 8 \
+             live, filed, analysed JPEG/PNG/WebP materials, each once, shown in order, each \
+             slowly panning and zooming under its caption text), title_text (an opening title \
+             card), closing {heading?, site?, slogan?} (a closing card), photo_ms (2500-4000, \
+             default 3000), title, project_id (a content area: every photo must be one of its \
+             materials, else CONFLICT source_not_in_area). Limits and slots are \
+             jeeta.studio.post_templates' reel. A text that does not fit is VALIDATION \
+             text_overflow naming it (photos.N.text, title_text, closing.heading...): shorten \
+             it. Busy: UPSTREAM_UNAVAILABLE renderer_busy, try again shortly. A reel takes up \
+             to about a minute; the call waits up to 50 s, then answers UPSTREAM_UNAVAILABLE \
+             reel_rendering (retryable): the render goes on, so call again with the SAME \
+             request_key and the same input after retry_after_seconds to get it, never with a \
+             new key (that would render a second reel). The video is stored and added to the \
+             library at once: returns {file, material, ai_generated, duration_ms, frames, \
+             formats, brand_fallbacks, reused, next}; material.id goes in \
+             jeeta.content.area_deliver or jeeta.studio.posts_propose (format reel or \
+             tiktok_video), file.id in jeeta.studio.piece_submit. Like a rendered slide it is \
+             composed by the server: AI-generated when any source is, and it takes its sources' \
+             olay, people, depicts and share permission. [risk: WRITE]",
+            || posting_schema("reel_render"),
+            reel_render,
         ),
         def(
             "studio.brand_get",
@@ -219,6 +247,11 @@ fn post_render<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move {
         to_json(&jt_app::usecases::studio::render::post_render(d, c, args(v)?).await?)
     })
+}
+fn reel_render<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
+    Box::pin(
+        async move { to_json(&jt_app::usecases::studio::reel::reel_render(d, c, args(v)?).await?) },
+    )
 }
 fn brand_get<'a>(d: &'a Deps, c: &'a Ctx, v: Value) -> ToolFuture<'a> {
     Box::pin(async move {

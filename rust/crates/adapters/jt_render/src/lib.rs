@@ -6,19 +6,30 @@
 //! and `image` decodes JPEG, PNG and WebP only (no other codec is compiled in) and encodes the
 //! result. Rendering runs on tokio's blocking pool, at most [`Limits::concurrency`] at once; a
 //! source is decoded only within [`Limits::decode`] and dropped once drawn.
+//!
+//! It also renders photo reels ([`Compositor::render_reel`]): vertical H.264 videos in MP4,
+//! encoded by OpenH264 compiled from its source into the binary (`h264`, `mp4`, `reel`). Reels
+//! have a queue of their own, one at a time ([`ReelLimits`]), each within a hard time limit.
 mod fonts;
+mod h264;
 mod layout;
+mod mp4;
 mod raster;
+mod reel;
 mod text;
 
 use async_trait::async_trait;
-use jt_app::ports::compose::{ComposeError, ComposeJob, Composed, Compositor, RenderTicket};
+use jt_app::ports::compose::{
+    ComposeError, ComposeJob, Composed, Compositor, ReelJob, ReelPhotoBytes, RenderTicket,
+    RenderedReel,
+};
 use jt_studio::compose::SlotKind;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
+pub use h264::EncodeLimits;
 pub use raster::Limits as DecodeLimits;
 
 /// What the renderer may spend.
@@ -31,6 +42,7 @@ pub struct Limits {
     /// How long a render waits for its turn before it is refused as busy.
     pub queue_wait: Duration,
     pub decode: DecodeLimits,
+    pub reel: ReelLimits,
 }
 
 impl Default for Limits {
@@ -40,6 +52,31 @@ impl Default for Limits {
             max_waiting: 4,
             queue_wait: Duration::from_secs(30),
             decode: DecodeLimits::default(),
+            reel: ReelLimits::default(),
+        }
+    }
+}
+
+/// What reels may spend. One renders at a time: a reel keeps the encoder's threads busy for
+/// seconds, beside the application on the same host.
+#[derive(Clone, Copy, Debug)]
+pub struct ReelLimits {
+    /// How many reels may wait for their turn; one more is refused as busy at once.
+    pub max_waiting: usize,
+    /// How long a reel waits for its turn before it is refused as busy.
+    pub queue_wait: Duration,
+    /// The longest a reel may take once its turn came; past it the render is stopped.
+    pub time_limit: Duration,
+    pub encode: EncodeLimits,
+}
+
+impl Default for ReelLimits {
+    fn default() -> Self {
+        Self {
+            max_waiting: 2,
+            queue_wait: Duration::from_secs(90),
+            time_limit: Duration::from_secs(150),
+            encode: EncodeLimits::default(),
         }
     }
 }
@@ -49,6 +86,8 @@ pub struct Renderer {
     fonts: Option<Arc<fonts::FontSet>>,
     permits: Arc<Semaphore>,
     waiting: Arc<AtomicUsize>,
+    reel_permits: Arc<Semaphore>,
+    reel_waiting: Arc<AtomicUsize>,
     limits: Limits,
 }
 
@@ -67,6 +106,8 @@ impl Renderer {
             fonts: fonts::FontSet::load().map(Arc::new),
             permits: Arc::new(Semaphore::new(limits.concurrency.max(1))),
             waiting: Arc::new(AtomicUsize::new(0)),
+            reel_permits: Arc::new(Semaphore::new(1)),
+            reel_waiting: Arc::new(AtomicUsize::new(0)),
             limits,
         }
     }
@@ -79,6 +120,28 @@ impl Renderer {
             .as_ref()
             .ok_or_else(|| ComposeError::Internal("the bundled fonts do not parse".into()))?;
         render(fonts, job, &self.limits.decode)
+    }
+
+    /// Renders the reel `job` on the calling thread within the reel time limit (what
+    /// [`Compositor::render_reel`] runs on the blocking pool).
+    pub fn render_reel_blocking(
+        &self,
+        job: ReelJob,
+        photos: &mut dyn ReelPhotoBytes,
+    ) -> Result<RenderedReel, ComposeError> {
+        let fonts = self
+            .fonts
+            .as_ref()
+            .ok_or_else(|| ComposeError::Internal("the bundled fonts do not parse".into()))?;
+        let deadline = std::time::Instant::now() + self.limits.reel.time_limit;
+        reel::render(
+            fonts,
+            job,
+            photos,
+            &self.limits.decode,
+            &self.limits.reel.encode,
+            deadline,
+        )
     }
 }
 
@@ -114,6 +177,27 @@ fn render(
     })
 }
 
+/// A turn in the queue of `permits`: refused at once with `max_waiting` already waiting, and
+/// after `wait` without a turn.
+async fn turn(
+    permits: &Arc<Semaphore>,
+    waiting: &Arc<AtomicUsize>,
+    max_waiting: usize,
+    wait: Duration,
+) -> Result<RenderTicket, ComposeError> {
+    if waiting.fetch_add(1, Ordering::SeqCst) >= max_waiting {
+        waiting.fetch_sub(1, Ordering::SeqCst);
+        return Err(ComposeError::Busy);
+    }
+    let in_queue = Waiting(Arc::clone(waiting));
+    let permit = tokio::time::timeout(wait, Arc::clone(permits).acquire_owned())
+        .await
+        .map_err(|_| ComposeError::Busy)?
+        .map_err(|_| ComposeError::Busy)?;
+    drop(in_queue);
+    Ok(RenderTicket(Box::new(permit)))
+}
+
 #[async_trait]
 impl Compositor for Renderer {
     async fn reserve(&self) -> Result<RenderTicket, ComposeError> {
@@ -123,20 +207,13 @@ impl Compositor for Renderer {
             ));
         }
         // A bounded queue: past `max_waiting` renders already waiting, refuse at once.
-        if self.waiting.fetch_add(1, Ordering::SeqCst) >= self.limits.max_waiting {
-            self.waiting.fetch_sub(1, Ordering::SeqCst);
-            return Err(ComposeError::Busy);
-        }
-        let waiting = Waiting(Arc::clone(&self.waiting));
-        let permit = tokio::time::timeout(
+        turn(
+            &self.permits,
+            &self.waiting,
+            self.limits.max_waiting,
             self.limits.queue_wait,
-            Arc::clone(&self.permits).acquire_owned(),
         )
         .await
-        .map_err(|_| ComposeError::Busy)?
-        .map_err(|_| ComposeError::Busy)?;
-        drop(waiting);
-        Ok(RenderTicket(Box::new(permit)))
     }
 
     async fn compose(
@@ -180,5 +257,58 @@ impl Compositor for Renderer {
             }
         }
         out
+    }
+
+    async fn reserve_reel(&self) -> Result<RenderTicket, ComposeError> {
+        if self.fonts.is_none() {
+            return Err(ComposeError::Internal(
+                "the bundled fonts do not parse".into(),
+            ));
+        }
+        turn(
+            &self.reel_permits,
+            &self.reel_waiting,
+            self.limits.reel.max_waiting,
+            self.limits.reel.queue_wait,
+        )
+        .await
+    }
+
+    async fn render_reel(
+        &self,
+        ticket: RenderTicket,
+        job: ReelJob,
+        mut photos: Box<dyn ReelPhotoBytes>,
+    ) -> Result<RenderedReel, ComposeError> {
+        let fonts = self
+            .fonts
+            .clone()
+            .ok_or_else(|| ComposeError::Internal("the bundled fonts do not parse".into()))?;
+        let limits = self.limits;
+        let count = job.photos.len();
+        let started = std::time::Instant::now();
+        let result = tokio::task::spawn_blocking(move || {
+            // The turn is held until the reel is encoded; the time limit counts from here.
+            let _ticket = ticket;
+            let deadline = std::time::Instant::now() + limits.reel.time_limit;
+            reel::render(
+                &fonts,
+                job,
+                photos.as_mut(),
+                &limits.decode,
+                &limits.reel.encode,
+                deadline,
+            )
+        })
+        .await
+        .map_err(|e| ComposeError::Internal(format!("reel task failed: {e}")))?;
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            photos = count,
+            ok = result.is_ok(),
+            bytes = result.as_ref().map_or(0, |r| r.bytes.len()),
+            "reel rendered"
+        );
+        result
     }
 }

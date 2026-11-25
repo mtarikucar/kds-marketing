@@ -63,6 +63,7 @@ fn mcp_only_use_cases_have_no_panel_route() {
             "studio.material_analysis_fail",
             "studio.post_templates",
             "studio.post_render",
+            "studio.reel_render",
             "studio.brand_get",
             "studio.brand_set",
             "strategy.frame_apply",
@@ -174,6 +175,7 @@ const STUDIO_LIBRARY: &[&str] = &[
     "studio.material_policy_set",
     "studio.post_templates",
     "studio.post_render",
+    "studio.reel_render",
     "studio.brand_get",
     "studio.brand_set",
 ];
@@ -290,6 +292,7 @@ fn catalog_is_the_release_table() {
         ("studio.material_policy_set", None, Some(("PUT", "/api/studio/materials/policy")), true, Risk::Write),
         ("studio.post_templates", Some("jeeta.studio.post_templates"), None, false, Risk::Read),
         ("studio.post_render", Some("jeeta.studio.post_render"), None, false, Risk::Write),
+        ("studio.reel_render", Some("jeeta.studio.reel_render"), None, false, Risk::Write),
         ("studio.brand_get", Some("jeeta.studio.brand_get"), None, false, Risk::Read),
         ("studio.brand_set", Some("jeeta.studio.brand_set"), None, false, Risk::Write),
         ("studio.material_check_release", None, Some(("POST", "/api/studio/slots/{slot_id}/material-check/release")), true, Risk::Write),
@@ -524,7 +527,7 @@ fn catalog_is_the_release_table() {
         ("platform.workspaces.resume", None, Some(("POST", "/api/platform/workspaces/{workspace_id}/resume")), true, Risk::Write),
     ];
     assert_eq!(rows, expected);
-    assert_eq!(CATALOG.len(), 336);
+    assert_eq!(CATALOG.len(), 337);
     for uc in CATALOG {
         assert_eq!(uc.gate, if ["ads.campaign_update", "ads.campaign_propose", "ads.campaign_approve", "ads.plan_submit", "ads.campaign_move", "ads.campaign_resume"].contains(&uc.id) || uc.id == "content.area_deliver" || uc.id == "content.delivery_accept" || uc.id == "social.version_schedule" || uc.id == "inbox.send" || (uc.id.starts_with("studio.") && !["studio.brake", "studio.ledger", "studio.ledger_export", "studio.posting_policy_set"].contains(&uc.id) && !STUDIO_LIBRARY.contains(&uc.id)) || (uc.id.starts_with("calls.") && !["calls.policy_get", "calls.end", "calls.transfer"].contains(&uc.id) && !uc.id.starts_with("calls.bridge.")) || (uc.id.starts_with("prospects.") && !jt_app::catalog::OBJECTION_USE_CASES.contains(&uc.id)) || uc.id.starts_with("research.") || uc.id.starts_with("distribution.") || (uc.id.starts_with("outreach.") && !["outreach.campaigns_control", "outreach.enrollments_stop"].contains(&uc.id)) { GateMode::Gated } else { GateMode::Exempt }, "{}", uc.id);
     }

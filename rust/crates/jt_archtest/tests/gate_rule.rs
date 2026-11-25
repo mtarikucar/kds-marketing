@@ -194,6 +194,7 @@ const EXEMPT_IDS: &[&str] = &[
     // Composed posts render the library's photos; they publish nothing.
     "studio.post_templates",
     "studio.post_render",
+    "studio.reel_render",
     "studio.brand_get",
     "studio.brand_set",
     "studio.shoot_list",

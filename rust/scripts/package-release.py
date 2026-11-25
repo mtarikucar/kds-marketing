@@ -106,6 +106,17 @@ def clean_build_inputs(root):
             raise SystemExit("untracked or ignored Cargo configuration")
 
 
+def encoder_assembly(messages):
+    """Whether OpenH264 (the photo reel encoder, compiled from source by openh264-sys2) took its
+    x86-64 SIMD assembly: its build script assembles it with nasm when nasm is found and silently
+    builds plain C otherwise. The assembled objects (e.g. satd_sad.o) sit in its OUT_DIR, which
+    Cargo reports for fresh and rebuilt build scripts alike."""
+    out_dirs = [m.get("out_dir") for m in messages
+                if m.get("reason") == "build-script-executed"
+                and "openh264-sys2" in str(m.get("package_id", ""))]
+    return len(out_dirs) == 1 and bool(out_dirs[0]) and (Path(out_dirs[0]) / "satd_sad.o").is_file()
+
+
 def build_candidate(root):
     # Cargo emits compiler-artifact metadata even for fresh cached artifacts. Inspect the
     # linked production dependency's actual features, never workspace-test feature metadata.
@@ -140,6 +151,9 @@ def build_candidate(root):
             raise ValueError("unverified build")
     except (ValueError, KeyError, TypeError):
         raise SystemExit("production Cargo artifact evidence missing or test-loopback enabled") from None
+    if not encoder_assembly(messages):
+        raise SystemExit("the photo reel encoder (OpenH264) was built without its SIMD assembly, "
+                         "several times slower: install nasm on the build machine and build again")
     subprocess.run(["pnpm", "--dir", "panel", "install", "--frozen-lockfile"], check=True, env=build_env)
     panel_env = dict(build_env, NODE_ENV="production")
     subprocess.run(["pnpm", "--dir", "panel", "build"], check=True, env=panel_env)

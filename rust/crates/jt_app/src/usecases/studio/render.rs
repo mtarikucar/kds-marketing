@@ -172,6 +172,8 @@ pub struct PostTemplatesOut {
     /// The latest renders, newest first.
     pub recent: Vec<RecentRender>,
     pub brand: BrandOut,
+    /// The photo reel's limits and text slots (`studio.reel_render`).
+    pub reel: jt_studio::compose::reel::ReelLimits,
     pub rules: Vec<&'static str>,
 }
 
@@ -216,14 +218,16 @@ fn brand_out(record: Option<BrandRecord>) -> BrandOut {
     }
 }
 
-/// The workspace's composed materials, newest first.
+/// The workspace's composed materials, newest first: those of a role this build knows (a
+/// later release's are no template here, so they hold no variant to rotate).
 fn renders(materials: &[Material]) -> Vec<RecentRender> {
     let mut out: Vec<RecentRender> = materials
         .iter()
         .filter_map(|m| {
-            m.composition.as_ref().map(|c| RecentRender {
+            let c = m.composition.as_ref()?;
+            Some(RecentRender {
                 material_id: m.id,
-                role: c.role,
+                role: c.role.get()?,
                 variant: c.variant.clone(),
                 created_at: m.created_at,
             })
@@ -261,12 +265,14 @@ pub async fn post_templates(d: &Deps, ctx: &Ctx) -> Result<PostTemplatesOut, App
         last_variants,
         recent: history.into_iter().take(RECENT).collect(),
         brand,
+        reel: jt_studio::compose::reel::limits(),
         rules: vec![
             "Texts are drawn exactly as given: no casing is changed, nothing is shortened. A text over a slot's max_chars, or one that needs more than its max_lines at the template's size, is refused (VALIDATION text_overflow naming the slot and its limits): shorten it.",
             "Photo slots take material ids of live, filed JPEG, PNG or WebP materials; a not_shareable one is refused. Every photo bound to an olay must be the same olay.",
             "A cover in the variant of the workspace's last rendered cover is refused (CONFLICT cover_variant_repeats) unless allow_repeat is true: use cover.next_variant. Vary the other roles too (last_variants).",
             "Stories keep their top and bottom 250 px free of text; a question or item story leaves sticker_area empty for the platform's poll or link sticker.",
             "The answer's file.id goes in a piece (jeeta.studio.piece_submit), its material.id in a post proposal (jeeta.studio.posts_propose). Output is JPEG by default: Instagram takes JPEG for stories and feed images.",
+            "A photo reel (jeeta.studio.reel_render) takes 3 to 8 analysed photos, each once, with an optional caption each (reel.slots caption), an optional title card (title) and closing card (heading, site, slogan): the same text rule applies. It is an MP4 for format reel or tiktok_video.",
         ],
     })
 }
@@ -340,7 +346,7 @@ pub async fn brand_set(d: &Deps, ctx: &Ctx, i: BrandSetInput) -> Result<BrandOut
 }
 
 /// A live, filed image material the renderer can draw, for `field`.
-async fn source(
+pub(super) async fn source(
     r: &mut dyn TenantRepos,
     id: MaterialId,
     field: &str,
@@ -383,6 +389,13 @@ async fn source(
         .is_some_and(|s| s.permission == SharePermission::NotShareable)
     {
         Some(("source_not_shareable", "the material may not be shared"))
+    } else if m.composition.as_ref().is_some_and(|c| !c.is_known()) {
+        // Made by a later release (a role or frame this build does not know): kept and followed
+        // as a composition, never drawn from here.
+        Some((
+            "source_unknown_composition",
+            "the material was composed by a later release; this one cannot draw from it",
+        ))
     } else if blocked.contains(&m.id) {
         // A derivative whose own source is restricted now (the publication fence): drawing it
         // would launder the restriction into a new material.
@@ -502,7 +515,7 @@ fn checked_template(i: &PostRenderInput) -> Result<Template, AppError> {
 }
 
 /// Why a text does not fit its slot.
-enum Cause {
+pub(super) enum Cause {
     /// Over the slot's `max_chars`.
     TooLong,
     /// More lines than the slot has.
@@ -511,7 +524,12 @@ enum Cause {
     WordTooWide(String),
 }
 
-fn overflow(slot: &str, max_chars: Option<u16>, max_lines: Option<u8>, cause: Cause) -> AppError {
+pub(super) fn overflow(
+    slot: &str,
+    max_chars: Option<u16>,
+    max_lines: Option<u8>,
+    cause: Cause,
+) -> AppError {
     let mut details = json!({"field": slot, "reason": "text_overflow", "slot": slot,
         "max_chars": max_chars, "max_lines": max_lines});
     let hint = match cause {
@@ -540,7 +558,7 @@ fn overflow(slot: &str, max_chars: Option<u16>, max_lines: Option<u8>, cause: Ca
     )
 }
 
-fn compose_error(e: ComposeError) -> AppError {
+pub(super) fn compose_error(e: ComposeError) -> AppError {
     match e {
         ComposeError::Overflow {
             slot,
@@ -578,22 +596,28 @@ fn compose_error(e: ComposeError) -> AppError {
             message: "the renderer is busy; try again shortly".into(),
             details: json!({"reason":"renderer_busy"}),
         },
+        ComposeError::TimedOut => AppError {
+            code: crate::error::ErrorCode::UpstreamUnavailable,
+            message: "the render ran past its time limit and was stopped; nothing was stored"
+                .into(),
+            details: json!({"reason":"render_timed_out"}),
+        },
         ComposeError::Internal(m) => AppError::internal(m),
     }
 }
 
 /// What a composition takes from its sources: where it belongs, who it shows and whether it may
 /// be shared.
-struct Derived {
-    binding: Binding,
-    freed: Option<HumanMark>,
-    ai: bool,
-    share: Option<ShareDecision>,
-    tags: Tags,
-    people: BTreeSet<uuid::Uuid>,
+pub(super) struct Derived {
+    pub binding: Binding,
+    pub freed: Option<HumanMark>,
+    pub ai: bool,
+    pub share: Option<ShareDecision>,
+    pub tags: Tags,
+    pub people: BTreeSet<uuid::Uuid>,
 }
 
-fn derive(photos: &[Material], logo: Option<&Material>) -> Result<Derived, AppError> {
+pub(super) fn derive(photos: &[Material], logo: Option<&Material>) -> Result<Derived, AppError> {
     let all: Vec<&Material> = photos.iter().chain(logo).collect();
     let ai = all.iter().any(|m| m.is_ai());
     let olays: BTreeSet<_> = photos.iter().filter_map(|m| m.olay_id()).collect();
@@ -690,8 +714,20 @@ async fn sources(
             ));
         }
     }
-    let logo = match brand.logo_material_id {
-        Some(id) => match source(r, id, "logo_material_id", &blocked, now).await {
+    let logo = logo_source(r, brand, &blocked, notes, now).await?;
+    Ok((photos, logo))
+}
+
+/// The brand logo's material when it can still be drawn; otherwise none, with a fallback note.
+pub(super) async fn logo_source(
+    r: &mut dyn TenantRepos,
+    brand: &BrandTokens,
+    blocked: &BTreeSet<MaterialId>,
+    notes: &mut Vec<BrandFallback>,
+    now: OffsetDateTime,
+) -> Result<Option<Material>, AppError> {
+    Ok(match brand.logo_material_id {
+        Some(id) => match source(r, id, "logo_material_id", blocked, now).await {
             Ok(m) => Some(m),
             Err(_) => {
                 notes.push(BrandFallback {
@@ -704,8 +740,7 @@ async fn sources(
             }
         },
         None => None,
-    };
-    Ok((photos, logo))
+    })
 }
 
 async fn read_receipt(
@@ -759,7 +794,7 @@ fn answer(
         Frame::Slide => {
             "Name file.id among the piece's media in order (jeeta.studio.piece_submit, a carousel of 2-10 slides) or material.id in a post proposal (jeeta.studio.posts_propose, format carousel or feed_post)."
         }
-        Frame::Story => {
+        Frame::Story | Frame::Reel => {
             "Name file.id as the piece's one medium (jeeta.studio.piece_submit) or material.id in a story proposal (jeeta.studio.posts_propose, format story); leave sticker_area for the platform's sticker."
         }
     };
@@ -805,7 +840,7 @@ pub async fn post_render(
     check_variety(r.as_mut(), &t, &i).await?;
     let photo_materials: Vec<Material> = photos.iter().map(|(_, m)| m.clone()).collect();
     derive(&photo_materials, logo.as_ref())?;
-    in_area(r.as_mut(), &i, &photo_materials).await?;
+    in_area(r.as_mut(), i.project_id, &photo_materials).await?;
     drop(r);
 
     // A turn to render first: a render waiting for its turn holds no source in memory.
@@ -864,12 +899,12 @@ pub async fn post_render(
 
 /// With `project_id`: every photo is one of the area's materials (`CONFLICT` `source_not_in_area`
 /// naming the others). The image is then the area's by derivation (`available_material_ids`).
-async fn in_area(
+pub(super) async fn in_area(
     r: &mut dyn TenantRepos,
-    i: &PostRenderInput,
+    project_id: Option<uuid::Uuid>,
     photos: &[Material],
 ) -> Result<(), AppError> {
-    let Some(project_id) = i.project_id else {
+    let Some(project_id) = project_id else {
         return Ok(());
     };
     let p = super::projects::load(r, project_id, None, true).await?;
@@ -958,7 +993,7 @@ async fn store(
     }
     check_variety(r.as_mut(), t, i).await?;
     let photo_now: Vec<Material> = photos.iter().map(|(_, m)| m.clone()).collect();
-    in_area(r.as_mut(), i, &photo_now).await?;
+    in_area(r.as_mut(), i.project_id, &photo_now).await?;
     let receipt = |material_id, reused| RenderReceipt {
         material_id,
         width: composed.width,
@@ -1039,12 +1074,14 @@ async fn store(
         upload_for: None,
         composition: Some(Composition {
             renderer: RENDERER.into(),
-            role: t.role,
+            role: t.role.into(),
             variant: t.variant.to_owned(),
-            frame: t.frame,
+            frame: t.frame.into(),
             sources: sources_ids.clone(),
             logo: logo.as_ref().map(|m| m.id),
+            unknown: Default::default(),
         }),
+        unknown: Default::default(),
     };
     if material.validate().is_err() {
         // A permission the composition cannot carry as its sources' (an agent's share of an AI

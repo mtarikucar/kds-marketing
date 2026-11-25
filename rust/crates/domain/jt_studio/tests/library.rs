@@ -226,6 +226,7 @@ fn material(n: u128, binding: Binding) -> Material {
         erased_at: None,
         upload_for: None,
         composition: None,
+        unknown: Default::default(),
     }
 }
 

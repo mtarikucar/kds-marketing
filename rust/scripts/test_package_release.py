@@ -65,6 +65,10 @@ class PackageReleaseTests(unittest.TestCase):
         self.cargo_success = True
         self.report_artifacts = True
         self.build_fails = False
+        # OpenH264's build script output, holding an assembled object unless a test says not.
+        self.encoder_out = self.repo / "encoder-out"
+        self.encoder_out.mkdir()
+        (self.encoder_out / "satd_sad.o").write_bytes(b"assembled")
 
     def git(self, *args):
         return REAL_CHECK_OUTPUT(["git", "-C", str(self.repo), *args], text=True, stderr=subprocess.STDOUT).strip()
@@ -82,6 +86,9 @@ class PackageReleaseTests(unittest.TestCase):
                     {"reason": "compiler-artifact", "target": {"name": "jt_outbound", "kind": ["lib"]}, "features": self.features, "profile": {"test": False}},
                     {"reason": "compiler-artifact", "target": {"name": "jeeta", "kind": ["bin"]}, "features": [], "profile": {"test": False}, "executable": str(self.binary)},
                 ])
+            messages.append({"reason": "build-script-executed",
+                             "package_id": "registry+https://github.com/rust-lang/crates.io-index#openh264-sys2@0.9.10",
+                             "out_dir": str(self.encoder_out)})
             messages.append({"reason": "build-finished", "success": self.cargo_success})
             return "\n".join(json.dumps(message) for message in messages)
         if args == ["pnpm", "--dir", "panel", "build"]:
@@ -164,6 +171,10 @@ class PackageReleaseTests(unittest.TestCase):
 
     def test_refuses_test_loopback_build(self):
         self.features = ["test-loopback"]
+        self.assert_refused()
+
+    def test_refuses_an_encoder_built_without_its_assembly(self):
+        (self.encoder_out / "satd_sad.o").unlink()
         self.assert_refused()
 
     def test_requires_successful_cargo_artifact_evidence(self):

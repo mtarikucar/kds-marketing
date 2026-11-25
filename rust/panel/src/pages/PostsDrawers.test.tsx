@@ -57,6 +57,20 @@ describe('Dosyalar', () => {
     expect(within(drawer).getByText(P.files.state.waiting)).toBeInTheDocument();
   });
 
+  it('shows a file the server drew with a role and frame this panel does not know', async () => {
+    const later = { renderer: 'jeeta-later', role: 'some_new_role', variant: 'v1', frame: 'some_new_frame', sources: ['m1'] };
+    const { router } = open('/posts?files=1', {
+      ...files,
+      'GET /api/studio/materials': [material('m1', { title: 'Raf fotoğrafı' }), material('m9', { title: 'Yeni bir çizim', composition: later })],
+      'GET /api/studio/materials/m9': { material: material('m9', { title: 'Yeni bir çizim', composition: later }), used_in: [] },
+    });
+    const drawer = await screen.findByRole('dialog', { name: P.files.title });
+    const user = userEvent.setup();
+    await user.click(await within(drawer).findByRole('button', { name: /Yeni bir çizim/ }));
+    await waitFor(() => expect(router.state.location.search).toBe('?files=1&file=m9'));
+    expect(await screen.findByTestId('material-editor')).toBeInTheDocument();
+  });
+
   it('narrows to a category and confirms a proposed one', async () => {
     const user = userEvent.setup();
     const { calls, router } = open('/posts?files=1', files);

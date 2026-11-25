@@ -200,6 +200,11 @@ jobs:
           shared-key: rust-test
           env-vars: ImageOS CI_CARGO_CONFIG
           save-if: ${{ matrix.partition == 2 && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/design/')) }}
+      # OpenH264 (the photo reel encoder, compiled from source by openh264-sys2) assembles its SIMD
+      # routines with nasm when it finds it, and falls back to plain C (several times slower)
+      # without. A build-time tool only: nothing is installed on the production host.
+      - name: Install nasm
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends nasm
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest@0.9
@@ -503,6 +508,11 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: rust/panel/pnpm-lock.yaml
+      # OpenH264 (the photo reel encoder, compiled from source by openh264-sys2) assembles its SIMD
+      # routines with nasm when it finds it, and falls back to plain C (several times slower)
+      # without. A build-time tool only: nothing is installed on the production host.
+      - name: Install nasm
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends nasm
       - name: Verify packaging boundaries
         run: python3 -m unittest discover -s scripts -p 'test_package_release.py'
       # The packager owns the controlled production/panel builds and checks Cargo features.
