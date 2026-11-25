@@ -1527,12 +1527,22 @@ async fn a_composition_a_later_release_made_follows_every_rule() {
 
     // Read, and written back unchanged when the material is saved again (a permission set).
     let p = real_photo(&w, "p", 1, o).await;
-    let c = from_a_later_release(&w, render_from(&w, "c", "cover", "full_top", p.id).await.unwrap().material.id).await;
+    let c = from_a_later_release(
+        &w,
+        render_from(&w, "c", "cover", "full_top", p.id)
+            .await
+            .unwrap()
+            .material
+            .id,
+    )
+    .await;
     let stored = material(&w, c.id);
     let raw = serde_json::to_value(&stored).unwrap();
     assert_eq!(raw["composition"]["role"], "some_new_role");
     assert_eq!(raw["composition"]["frame"], "some_new_frame");
-    library::materials_list(&w.d, &w.ctx, input(json!({}))).await.unwrap();
+    library::materials_list(&w.d, &w.ctx, input(json!({})))
+        .await
+        .unwrap();
     permit(&w, c.id, "product_only").await;
     let again = serde_json::to_value(material(&w, c.id)).unwrap();
     assert_eq!(again["composition"], raw["composition"]);
@@ -1550,8 +1560,10 @@ async fn a_composition_a_later_release_made_follows_every_rule() {
     library::material_tag(
         &w.d,
         &w.ctx,
-        input(json!({"material_id":p.id,"expected_revision":material(&w, p.id).revision,
-            "people":[ada],"quality":"unusable"})),
+        input(
+            json!({"material_id":p.id,"expected_revision":material(&w, p.id).revision,
+            "people":[ada],"quality":"unusable"}),
+        ),
     )
     .await
     .unwrap();
@@ -1578,7 +1590,15 @@ async fn a_composition_a_later_release_made_follows_every_rule() {
 
     // Its source deleted: redacted with it.
     let q = real_photo(&w, "q", 2, o).await;
-    let d1 = from_a_later_release(&w, render_from(&w, "d", "cover", "full_top", q.id).await.unwrap().material.id).await;
+    let d1 = from_a_later_release(
+        &w,
+        render_from(&w, "d", "cover", "full_top", q.id)
+            .await
+            .unwrap()
+            .material
+            .id,
+    )
+    .await;
     library::material_delete(
         &w.d,
         &w.ctx,
@@ -1590,7 +1610,15 @@ async fn a_composition_a_later_release_made_follows_every_rule() {
 
     // An area's while its source is; it is no analysis work.
     let s = real_photo(&w, "s", 3, o).await;
-    let e1 = from_a_later_release(&w, render_from(&w, "e", "cover", "full_top", s.id).await.unwrap().material.id).await;
+    let e1 = from_a_later_release(
+        &w,
+        render_from(&w, "e", "cover", "full_top", s.id)
+            .await
+            .unwrap()
+            .material
+            .id,
+    )
+    .await;
     assert!(!analysis_items(&w).await.contains(&e1.id));
     let area = projects::project_create(
         &w.d,
@@ -1659,7 +1687,15 @@ async fn a_composition_a_later_release_made_follows_every_rule() {
     .unwrap()
     .material;
     analysed(&w, face.id).await;
-    let g1 = from_a_later_release(&w, render_from(&w, "g", "cover", "full_top", face.id).await.unwrap().material.id).await;
+    let g1 = from_a_later_release(
+        &w,
+        render_from(&w, "g", "cover", "full_top", face.id)
+            .await
+            .unwrap()
+            .material
+            .id,
+    )
+    .await;
     let mut w = w;
     w.d.clock = Arc::new(jt_testkit::fakes::FixedClock(time::macros::datetime!(
         2028-10-23 12:00 UTC
