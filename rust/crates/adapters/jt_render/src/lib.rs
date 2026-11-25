@@ -285,7 +285,7 @@ impl Compositor for Renderer {
             .clone()
             .ok_or_else(|| ComposeError::Internal("the bundled fonts do not parse".into()))?;
         let limits = self.limits;
-        let photos = job.photos.len();
+        let count = job.photos.len();
         let started = std::time::Instant::now();
         let result = tokio::task::spawn_blocking(move || {
             // The turn is held until the reel is encoded; the time limit counts from here.
@@ -304,7 +304,7 @@ impl Compositor for Renderer {
         .map_err(|e| ComposeError::Internal(format!("reel task failed: {e}")))?;
         tracing::info!(
             elapsed_ms = started.elapsed().as_millis() as u64,
-            photos,
+            photos = count,
             ok = result.is_ok(),
             bytes = result.as_ref().map_or(0, |r| r.bytes.len()),
             "reel rendered"

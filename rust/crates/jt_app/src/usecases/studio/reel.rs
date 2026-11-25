@@ -379,26 +379,31 @@ pub async fn reel_render(
     drop(r);
 
     let (announce, done) = tokio::sync::watch::channel(None);
-    {
+    // Registered under the lock, which is released before anything is awaited: another call with
+    // the key that started meanwhile is joined instead.
+    let started_meanwhile = {
         let mut map = running()
             .lock()
             .map_err(|_| AppError::internal("the reel registry is poisoned"))?;
-        // Another call with the key started meanwhile: join it.
-        if let Some(run) = map.get(&run_key) {
-            if run.payload != payload {
+        match map.get(&run_key) {
+            Some(run) if run.payload != payload => {
                 return Err(AppError::conflict("request key payload mismatch"));
             }
-            let done = run.done.clone();
-            drop(map);
-            return wait(done).await;
+            Some(run) => Some(run.done.clone()),
+            None => {
+                map.insert(
+                    run_key.clone(),
+                    Running {
+                        payload: payload.clone(),
+                        done: done.clone(),
+                    },
+                );
+                None
+            }
         }
-        map.insert(
-            run_key.clone(),
-            Running {
-                payload: payload.clone(),
-                done: done.clone(),
-            },
-        );
+    };
+    if let Some(theirs) = started_meanwhile {
+        return wait(theirs).await;
     }
     let registered = Registered(run_key);
     let (d, ctx) = (d.clone(), ctx.clone());
