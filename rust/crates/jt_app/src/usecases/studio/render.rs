@@ -216,14 +216,16 @@ fn brand_out(record: Option<BrandRecord>) -> BrandOut {
     }
 }
 
-/// The workspace's composed materials, newest first.
+/// The workspace's composed materials, newest first: those of a role this build knows (a
+/// later release's are no template here, so they hold no variant to rotate).
 fn renders(materials: &[Material]) -> Vec<RecentRender> {
     let mut out: Vec<RecentRender> = materials
         .iter()
         .filter_map(|m| {
-            m.composition.as_ref().map(|c| RecentRender {
+            let c = m.composition.as_ref()?;
+            Some(RecentRender {
                 material_id: m.id,
-                role: c.role,
+                role: c.role.get()?,
                 variant: c.variant.clone(),
                 created_at: m.created_at,
             })
@@ -383,6 +385,13 @@ async fn source(
         .is_some_and(|s| s.permission == SharePermission::NotShareable)
     {
         Some(("source_not_shareable", "the material may not be shared"))
+    } else if m.composition.as_ref().is_some_and(|c| !c.is_known()) {
+        // Made by a later release (a role or frame this build does not know): kept and followed
+        // as a composition, never drawn from here.
+        Some((
+            "source_unknown_composition",
+            "the material was composed by a later release; this one cannot draw from it",
+        ))
     } else if blocked.contains(&m.id) {
         // A derivative whose own source is restricted now (the publication fence): drawing it
         // would launder the restriction into a new material.
@@ -1039,9 +1048,9 @@ async fn store(
         upload_for: None,
         composition: Some(Composition {
             renderer: RENDERER.into(),
-            role: t.role,
+            role: t.role.into(),
             variant: t.variant.to_owned(),
-            frame: t.frame,
+            frame: t.frame.into(),
             sources: sources_ids.clone(),
             logo: logo.as_ref().map(|m| m.id),
         }),

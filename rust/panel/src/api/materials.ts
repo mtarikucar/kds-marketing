@@ -126,6 +126,20 @@ export interface Material {
   revision: number;
   created_at: string;
   erased_at: string | null;
+  /** Present when the server drew it from other materials. The panel shows such a material
+   * like any other and reads nothing in it by its role or frame: a later release may add values
+   * this panel does not know, so they stay plain strings. */
+  composition?: Composition | null;
+}
+/** How the server drew a material (a slide, a story frame, a video): read as data, never
+ * matched against a closed list. */
+export interface Composition {
+  renderer: string;
+  role: string;
+  variant: string;
+  frame: string;
+  sources: string[];
+  logo?: string | null;
 }
 export type UseRole = 'anchor' | 'support';
 export interface PublishedIn {
