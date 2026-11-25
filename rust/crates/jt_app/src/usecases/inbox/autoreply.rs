@@ -765,10 +765,7 @@ pub async fn work(
     // them.
     let state_note = request.system_note.clone();
     let mut repairs = 0;
-    loop {
-        let Ok(current) = &answer else {
-            break;
-        };
+    while let Ok(current) = &answer {
         let Some(repair) = repair_note(current, &snapshot, ctx.now.year()) else {
             break;
         };
