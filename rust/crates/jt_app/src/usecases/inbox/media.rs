@@ -3,7 +3,7 @@
 //!
 //! - **Recorded with the message, fetched apart.** When the consumer stores a customer's image or
 //!   document message it records the file `pending` with the provider's media id
-//!   ([`record_inbound`]), in the message's own transaction and without calling the provider: an
+//!   (`record_inbound`), in the message's own transaction and without calling the provider: an
 //!   inbound message is never held up by its file. The `inbox_media` job ([`run_workspace`])
 //!   fetches it through the provider's media API by that id, with the capability's own credential
 //!   (`MessagingSender::fetch_media`: no address from a webhook is ever followed), outside any
@@ -28,7 +28,7 @@
 //!   A file that is not there to open is `CONFLICT` `media_unavailable`, saying why.
 //! - **Older messages.** A WhatsApp image or document message stored before this release has no
 //!   row; the first read of its page records one when its event still names the media id
-//!   ([`backfill`]), and the job fetches it if the provider still serves it (`failed` `expired`
+//!   (`backfill`), and the job fetches it if the provider still serves it (`failed` `expired`
 //!   when it does not).
 //!
 //! No log line, ledger entry or error names a file, an address, a token or a media id: codes only.
