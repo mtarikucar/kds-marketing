@@ -157,11 +157,12 @@ pub enum Job {
     KnowledgeSettle,
     InboxAutoReply,
     OwnerNotices,
+    InboxMedia,
 }
 
 impl Job {
     /// Every job.
-    pub const ALL: [Job; 39] = [
+    pub const ALL: [Job; 40] = [
         Job::RefreshTokens,
         Job::RefreshTenantHosts,
         Job::ProbeAll,
@@ -201,6 +202,7 @@ impl Job {
         Job::KnowledgeSettle,
         Job::InboxAutoReply,
         Job::OwnerNotices,
+        Job::InboxMedia,
     ];
 
     /// The job's name, e.g. `"probe_all"`: in its lock's name, its log lines and its ledger
@@ -246,6 +248,7 @@ impl Job {
             Job::KnowledgeSettle => "knowledge_settle",
             Job::InboxAutoReply => "inbox_auto_reply",
             Job::OwnerNotices => "owner_notices",
+            Job::InboxMedia => "inbox_media",
         }
     }
 
@@ -296,6 +299,7 @@ impl Job {
             Job::KnowledgeSettle => run_knowledge_settle(deps, now).await,
             Job::InboxAutoReply => run_inbox_auto_reply(deps, now).await,
             Job::OwnerNotices => run_owner_notices(deps, now).await,
+            Job::InboxMedia => run_inbox_media(deps, now).await,
         }
     }
 }
@@ -1778,6 +1782,37 @@ pub async fn run_inbox_auto_reply(deps: &Deps, now: OffsetDateTime) -> JobReport
 pub async fn run_owner_notices(deps: &Deps, now: OffsetDateTime) -> JobReport {
     let report = super::inbox::notices::run(deps, now).await;
     finish(Job::OwnerNotices, report)
+}
+
+/// How long one run of `inbox_media` fetches customers' files, across workspaces.
+const INBOX_MEDIA_BUDGET: std::time::Duration = std::time::Duration::from_secs(50);
+
+/// The customers' chat files (`inbox::media`), in every workspace that takes in messages: those
+/// past their retention go, then the due ones are fetched from their provider and stored, within
+/// a time budget. `touched` counts the files fetched (and purged), `changed` those stored,
+/// refused (recorded `failed` with why) or purged, `skipped` the fetches that wait to be tried
+/// again, `failed` the workspaces whose turn failed.
+pub async fn run_inbox_media(deps: &Deps, now: OffsetDateTime) -> JobReport {
+    let job = Job::InboxMedia;
+    let mut report = JobReport::default();
+    let deadline = std::time::Instant::now() + INBOX_MEDIA_BUDGET;
+    for ws in workspaces(deps, job, RECEIVING, &mut report).await {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        match super::inbox::media::run_workspace(deps, ws, now, deadline).await {
+            Ok(run) => {
+                report.touched += run.fetched + run.purged;
+                report.changed += run.stored + run.refused + run.purged;
+                report.skipped += run.retried;
+            }
+            Err(e) => {
+                report.failed += 1;
+                step_failed(job, ws, None, &Failure::App(e));
+            }
+        }
+    }
+    finish(job, report)
 }
 
 /// Hand overdue agent conversations to their journey owner or the unassigned queue.

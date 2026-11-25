@@ -13,6 +13,9 @@ import { InboxCompliance } from './InboxCompliance';
 import { InboxErasure } from './InboxErasure';
 import { InboxJourneyPanel } from './InboxJourneyPanel';
 import { InboxPublic } from './InboxPublic';
+import { MessageFiles, shownBody } from './inbox/MessageFiles';
+import { ReplyAttach, type ReplyImage } from './inbox/ReplyAttach';
+import { uploadFile } from './content/uploads';
 import {
   conversationClass,
   journeyClass,
@@ -48,19 +51,36 @@ export function InboxConversation({ id }: { id: string }) {
   const [text, setText] = useState('');
   const [subject, setSubject] = useState('');
   const [until, setUntil] = useState('');
-  const request = useRef<{ text: string; subject?: string; key: string }>();
+  const [image, setImage] = useState<ReplyImage | null>(null);
+  const request = useRef<{ text: string; subject?: string; image?: ReplyImage | null; key: string }>();
+  // A file from the computer is stored once (`studio.file_upload`), then the reply names it.
+  const uploaded = useRef<{ file: File; id: string }>();
   const send = useInboxMutation(
     async () => {
       // An empty subject lets the server answer the original one ("Re: <subject>").
       const emailSubject = conversation.data?.kind_key === 'mailbox' ? subject.trim() || undefined : undefined;
-      if (!request.current || request.current.text !== text.trim() || request.current.subject !== emailSubject)
-        request.current = { text: text.trim(), subject: emailSubject, key: crypto.randomUUID() };
-      return api.reply(id, request.current.text, request.current.key, request.current.subject);
+      if (
+        !request.current ||
+        request.current.text !== text.trim() ||
+        request.current.subject !== emailSubject ||
+        request.current.image !== image
+      )
+        request.current = { text: text.trim(), subject: emailSubject, image, key: crypto.randomUUID() };
+      let ref: api.ReplyImageRef | undefined;
+      if (image?.kind === 'material') ref = { material_id: image.material.id };
+      if (image?.kind === 'file') {
+        if (uploaded.current?.file !== image.file)
+          uploaded.current = { file: image.file, id: await uploadFile(image.file, `${request.current.key}:image`) };
+        ref = { file_id: uploaded.current.id };
+      }
+      return api.reply(id, request.current.text, request.current.key, request.current.subject, ref);
     },
     () => {
       setText('');
       setSubject('');
+      setImage(null);
       request.current = undefined;
+      uploaded.current = undefined;
     },
   );
   const action = useInboxMutation((value: 'take-over' | 'hand-to-agent' | 'unsnooze' | 'close') =>
@@ -86,6 +106,10 @@ export function InboxConversation({ id }: { id: string }) {
       ? send.error.details.reason
       : null;
   const disabled = !!reason || (!!refusal && refusal !== 'human_holds_conversation');
+  const imageRefusal =
+    isApiError(send.error) && send.error.code === 'VALIDATION' && send.error.details.field === 'image'
+      ? String(send.error.details.reason ?? '')
+      : null;
   return (
     <>
       <section className={conversationClass} aria-label={t('inbox.thread')}>
@@ -193,9 +217,12 @@ export function InboxConversation({ id }: { id: string }) {
                           </span>
                           <InboxTime at={message.at} />
                         </div>
-                        <p className="my-1.5 whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere]">
-                          {message.body}
-                        </p>
+                        {(shownBody(message) || !message.attachments?.length) && (
+                          <p className="my-1.5 whitespace-pre-wrap text-sm leading-6 [overflow-wrap:anywhere]">
+                            {shownBody(message)}
+                          </p>
+                        )}
+                        <MessageFiles message={message} />
                         {message.held ? (
                           <HeldActions outboxId={message.held} />
                         ) : (
@@ -216,7 +243,7 @@ export function InboxConversation({ id }: { id: string }) {
                 className="flex flex-col gap-3 border-t border-border pt-5"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (text.trim() && !disabled && ctx) send.mutate();
+                  if ((text.trim() || image) && !disabled && ctx) send.mutate();
                 }}
               >
                   {row.kind_key === 'mailbox' && <Input aria-label={t('inbox.emailSubject')} placeholder={t('inbox.emailSubject')} value={subject} onChange={(e) => setSubject(e.target.value)} maxLength={998} />}
@@ -230,7 +257,13 @@ export function InboxConversation({ id }: { id: string }) {
                     className="resize-y rounded-md bg-surface"
                   />
                 </label>
-                <ErrorCallout error={send.error} />
+                {imageRefusal ? (
+                  <Callout tone="warning">
+                    {t(`inbox.media.refused.${imageRefusal}`, { defaultValue: t('inbox.media.refused.other') })}
+                  </Callout>
+                ) : (
+                  <ErrorCallout error={send.error} />
+                )}
                 {refusal && (
                   <Button
                     type="button"
@@ -244,9 +277,16 @@ export function InboxConversation({ id }: { id: string }) {
                     {t('common.retry')}
                   </Button>
                 )}
-                <Button className="self-end" type="submit" loading={send.isPending} disabled={disabled || !text.trim() || !ctx}>
-                  {t('inbox.send')}
-                </Button>
+                <div className="flex items-center justify-between gap-2">
+                  {row.kind_key === 'whatsapp_cloud' ? (
+                    <ReplyAttach value={image} onChange={setImage} disabled={disabled || send.isPending || !ctx} />
+                  ) : (
+                    <span />
+                  )}
+                  <Button type="submit" loading={send.isPending} disabled={disabled || (!text.trim() && !image) || !ctx}>
+                    {t('inbox.send')}
+                  </Button>
+                </div>
               </form>
                 </>
               )}

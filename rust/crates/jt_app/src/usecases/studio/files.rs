@@ -333,8 +333,16 @@ pub async fn cleanup_files(d: &Deps, ws: WorkspaceId) -> Result<u32, AppError> {
         .await?
         .into_iter()
         .collect();
+    // A chat message's image or document too (`ports::message_media`): kept while a stored row
+    // names it; an erased or purged one's bytes go here when its own delete did not.
+    let chat: std::collections::HashSet<FileId> = r
+        .message_media()
+        .kept(&candidates)
+        .await?
+        .into_iter()
+        .collect();
     for id in candidates {
-        if !device.contains(&id.0) && !mail.contains(&id) {
+        if !device.contains(&id.0) && !mail.contains(&id) && !chat.contains(&id) {
             d.files.delete(ws, id).await?;
         }
     }

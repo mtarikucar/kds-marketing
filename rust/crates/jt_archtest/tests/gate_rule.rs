@@ -43,6 +43,7 @@ const EXEMPT_INBOX: &[&str] = &[
     "inbox.conversations.list",
     "inbox.conversations.get",
     "inbox.messages.list",
+    "inbox.message_media",
     "inbox.take_over",
     "inbox.hand_to_agent",
     "inbox.snooze",
@@ -395,7 +396,7 @@ fn the_inbox_answers_customers_without_a_strategy_but_outreach_stays_gated() {
         .iter()
         .filter(|uc| uc.id.starts_with("inbox."))
         .collect();
-    assert_eq!(rows.len(), 50);
+    assert_eq!(rows.len(), 51);
     for row in rows {
         // Exempt exactly when listed; a row nobody listed is gated.
         assert_eq!(

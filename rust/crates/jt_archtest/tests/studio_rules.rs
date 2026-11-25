@@ -206,7 +206,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 259);
+    assert_eq!(jt_mcp::registry().len(), 260);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -235,8 +235,9 @@ async fn studio_exact_catalog_and_gate_set() {
     // the ad campaigns of 0040_ads_campaigns, the agents' wake rows of 0045_agent_wake, and the
     // five knowledge base tables of 0046_knowledge_base, and the automatic replies' queue and runs
     // of 0047_inbox_auto_reply, and the owner's notices of 0049_owner_notices, and the automatic
-    // replies' orders of 0050_auto_reply_orders, and the brand tokens of 0053_studio_brand.
-    assert_eq!(all_tables.len(), 117);
+    // replies' orders of 0050_auto_reply_orders, and the brand tokens of 0053_studio_brand, and
+    // the chat files of 0055_message_media.
+    assert_eq!(all_tables.len(), 118);
 
     // All 28 Studio tables are tenant-scoped, including intelligence, productions and the brand
     // tokens.

@@ -368,6 +368,14 @@ pub enum ConnectorCall {
         recipient_id: String,
         text: String,
     },
+    /// `MessagingSender::send_image`: the image's address and type, and its caption.
+    SendImage {
+        public: Value,
+        recipient_id: String,
+        url: String,
+        mime: String,
+        caption: String,
+    },
     SetDailyBudget {
         credential: Credential,
         entity_id: String,
@@ -1233,6 +1241,26 @@ impl MessagingSender for ScriptedConnector {
         });
         self.after_send().await;
         self.next(&self.send_text, "send_text result")
+    }
+
+    async fn send_image(
+        &self,
+        _cred: &Credential,
+        public: &Value,
+        recipient_id: &str,
+        image: &jt_app::ports::connectors::OutboundImage,
+        caption: &str,
+    ) -> Result<SendReceipt, ConnectorError> {
+        self.record(ConnectorCall::SendImage {
+            public: public.clone(),
+            recipient_id: recipient_id.to_owned(),
+            url: image.url.clone(),
+            mime: image.mime.clone(),
+            caption: caption.to_owned(),
+        });
+        self.after_send().await;
+        // A sent image answers from the same script as a text.
+        self.next(&self.send_text, "send_image result")
     }
 
     async fn sender_name(

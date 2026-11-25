@@ -1455,6 +1455,20 @@ pub trait MessagingSender: Send + Sync {
         recipient_id: &str,
         text: &str,
     ) -> Result<SendReceipt, ConnectorError>;
+    /// Sends the image at `image.url` (an address of the platform's file store the provider
+    /// fetches, signed for a short while) to `recipient_id`, with `caption` under it (empty for
+    /// none). A channel that sends no images refuses before any call (`Permanent`), the default.
+    async fn send_image(
+        &self,
+        cred: &Credential,
+        public: &Value,
+        recipient_id: &str,
+        image: &OutboundImage,
+        caption: &str,
+    ) -> Result<SendReceipt, ConnectorError> {
+        let _ = (cred, public, recipient_id, image, caption);
+        Err(ConnectorError::permanent("this channel sends no images"))
+    }
     /// The name the provider shows for `sender_id`, the provider's id of a person who wrote to
     /// the capability (`public` as [`Connector::probe`] gets it); `None` when it tells none.
     /// Best-effort: the inbox only asks for a person it has no name for, and goes on without one.
@@ -1494,6 +1508,22 @@ pub trait MessagingSender: Send + Sync {
     ) -> Result<Option<Media>, ConnectorError> {
         let _ = (cred, public, media_id, max_bytes);
         Ok(None)
+    }
+}
+
+/// An image [`MessagingSender::send_image`] sends: where the provider fetches it and its type
+/// (checked by its bytes when it was stored). The address is never logged.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OutboundImage {
+    pub url: String,
+    pub mime: String,
+}
+
+impl std::fmt::Debug for OutboundImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutboundImage")
+            .field("mime", &self.mime)
+            .finish_non_exhaustive()
     }
 }
 

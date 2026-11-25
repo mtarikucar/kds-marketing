@@ -11,6 +11,7 @@ pub mod email_settings;
 pub mod erasure;
 pub mod journeys;
 mod leadgen;
+pub mod media;
 pub mod merge;
 mod moderation;
 pub mod notices;
@@ -21,7 +22,7 @@ pub mod replies;
 pub mod tasks;
 
 use crate::{ctx::Ctx, error::AppError, ports::TenantRepos};
-pub use jt_inbox::{ConversationId, JourneyId, MergeId, PersonId, PublicItemId, TaskId};
+pub use jt_inbox::{ConversationId, JourneyId, MergeId, MessageId, PersonId, PublicItemId, TaskId};
 use serde_json::Value;
 
 pub(crate) async fn record(

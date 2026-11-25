@@ -2440,6 +2440,7 @@ async fn enqueue(
     send: &replies::AutoSend<'_>,
 ) -> Result<Result<Uuid, String>, AppError> {
     let input = replies::ReplyInput {
+        image: None,
         text: text.to_owned(),
         intent: SendIntent::Reply,
         request_key: None,

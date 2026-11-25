@@ -91,8 +91,54 @@ pub async fn erase(
     // The materials that show the person, and the olays naming them (spec 2026-11-03 §9.2), in
     // the same transaction; the materials' bytes go once it is committed (best effort:
     // `StudioFilesCleanup` deletes an erased material's file too).
-    let files =
+    let mut files =
         crate::usecases::studio::library::erase_person(deps, r.as_mut(), ctx, person).await?;
+    // The files the person sent or was sent, by email (spec 2026-10-30 §3.15) and on chat
+    // channels (`media`): their rows lose their names and become `deleted` here; their bytes go
+    // once this is committed (best effort: the store's daily sweep deletes a file no row keeps).
+    files.extend(r.mail_files().erase_person(person, ctx.now).await?);
+    let chat = r.message_media().erase_person(person, ctx.now).await?;
+    files.extend(chat.customer);
+    // A photo the team uploaded and sent only to this person goes with them: its studio record is
+    // marked deleted and its bytes go. One that is a library material's stays under the
+    // library's own rules (its share, its retention, its own erasure of who it shows), and so does
+    // one studio still uses (a piece's medium, planned or published, or a publish attempt's): its
+    // chat row is cleared and its bytes are left to the store's own rules (`cleanup_files`), so
+    // a post never loses its medium and bytes stay while a publication is queued, sending or
+    // uncertain. The Studio control lock (taken above) keeps new references out meanwhile.
+    if !chat.uploads.is_empty() {
+        let library: std::collections::BTreeSet<_> = r
+            .studio_materials()
+            .list_materials()
+            .await?
+            .into_iter()
+            .map(|m| m.file_id)
+            .collect();
+        let usage = r.studio().file_usage().await?;
+        let in_use = |id: jt_studio::FileId| {
+            usage
+                .pieces
+                .iter()
+                .any(|(_, p)| crate::usecases::studio::files::uses(p, id))
+                || usage
+                    .attempts
+                    .iter()
+                    .any(|a| crate::usecases::studio::files::uses(a.piece(), id))
+        };
+        for id in chat
+            .uploads
+            .into_iter()
+            .filter(|id| !library.contains(id) && !in_use(*id))
+        {
+            if let Some(mut file) = r.studio().get_file(id).await?
+                && file.deleted_at.is_none()
+            {
+                file.deleted_at = Some(ctx.now);
+                r.studio().save_file(file).await?;
+            }
+            files.push(id);
+        }
+    }
     r.commit().await?;
     for file in files {
         let _ = deps.files.delete(ctx.workspace_id, file).await;

@@ -308,6 +308,7 @@ fn every_job_has_a_lock_named_after_it() {
             "knowledge_settle",
             "inbox_auto_reply",
             "owner_notices",
+            "inbox_media",
         ]
     );
     for job in Job::ALL {

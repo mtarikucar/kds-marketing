@@ -38,7 +38,7 @@ pub fn input(action: &str) -> Value {
             &["channel", "reason"],
         ),
         "send" => object(
-            json!({"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998}}),
+            json!({"channel":{"enum":["sms","email","whats_app","messenger","instagram_dm"]},"text":{"type":"string","minLength":1},"intent":{"enum":["commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"image":{"type":["object","null"],"additionalProperties":false,"properties":{"file_id":{"type":["string","null"],"format":"uuid"},"material_id":{"type":["string","null"],"format":"uuid"}}}}),
             &["channel", "text", "intent"],
         ),
         "conversations.list" => object(
@@ -49,12 +49,16 @@ pub fn input(action: &str) -> Value {
             json!({"cursor":{"type":["string","null"]},"limit":{"type":["integer","null"],"minimum":1,"maximum":499,"default":50}}),
             &[],
         ),
+        "message_media" => object(
+            json!({"index":{"type":["integer","null"],"minimum":0,"maximum":9,"default":0}}),
+            &[],
+        ),
         "snooze" => object(
             json!({"until":{"type":"string","format":"date-time"}}),
             &["until"],
         ),
         "reply" => object(
-            json!({"text":{"type":"string","minLength":1},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}},"item_id":{"type":["string","null"],"format":"uuid"},"visibility":{"enum":["public","private",null]}}),
+            json!({"text":{"type":"string"},"intent":{"type":"string","enum":["reply","commercial"]},"request_key":{"type":["string","null"]},"subject":{"type":["string","null"],"maxLength":998},"in_reply_to":{"type":["string","null"],"maxLength":998},"references":{"type":"array","maxItems":50,"items":{"type":"string","maxLength":998}},"item_id":{"type":["string","null"],"format":"uuid"},"visibility":{"enum":["public","private",null]},"image":{"type":["object","null"],"additionalProperties":false,"properties":{"file_id":{"type":["string","null"],"format":"uuid"},"material_id":{"type":["string","null"],"format":"uuid"}}}}),
             &["text", "intent"],
         ),
         "merges.apply" => object(json!({"keep":{"type":"string","format":"uuid"}}), &["keep"]),
@@ -160,6 +164,7 @@ pub fn tool(action: &str) -> Value {
         "appointments.cancel" | "appointments.held" => Some("appointment_id"),
         "public.hide" | "public.delete" => Some("item_id"),
         "public.approve" | "public.discard" => Some("outbox_id"),
+        "message_media" => Some("message_id"),
         _ => None,
     };
     if let Some(id) = id {

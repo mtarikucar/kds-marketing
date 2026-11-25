@@ -871,6 +871,7 @@ async fn one(
         r.as_mut(),
         Target::PersonVia(e.person_id, c.mailbox_id),
         ReplyInput {
+            image: None,
             text: rendered.text,
             intent: SendIntent::Commercial,
             request_key: Some(format!("outreach:{}:{step}", e.id)),

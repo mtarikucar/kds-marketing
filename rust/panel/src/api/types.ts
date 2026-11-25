@@ -1163,6 +1163,30 @@ export interface InboxMessage {
   automatic?: boolean;
   /** A reply held for approval: its outbox id, what approve and discard take. */
   held?: Uuid;
+  /** The files the message carries (an email's, a chat image or document), each by index. */
+  attachments?: InboxAttachment[];
+}
+/** `jt_app::usecases::inbox::attachments::AttachmentView`. */
+export interface InboxAttachment {
+  index: number;
+  kind: 'image' | 'document' | 'file';
+  file_id: Uuid | null;
+  filename: string;
+  declared_mime: string;
+  mime: string | null;
+  size_bytes: number | null;
+  width: number | null;
+  height: number | null;
+  state: 'pending' | 'stored' | 'staged' | 'attached' | 'skipped' | 'failed' | 'deleted';
+  /** Why it is not there to open: `expired`, `too_large`, `not_allowed`, `erased`, `retention`, … */
+  reason: string | null;
+  skip_reason?: string | null;
+}
+/** `inbox.message_media`: one file of a message with a short-lived address of its own. */
+export interface InboxMediaOut extends InboxAttachment {
+  message_id: Uuid;
+  url?: string;
+  expires_at?: Rfc3339;
 }
 export type PublicKind = 'comment';
 export type Visibility = 'public' | 'private';

@@ -181,6 +181,7 @@ async fn enqueue_mail(
         r,
         replies::Target::Person(person, Channel::Email),
         replies::ReplyInput {
+            image: None,
             text: "Appointment confirmation".into(),
             intent,
             request_key: None,
