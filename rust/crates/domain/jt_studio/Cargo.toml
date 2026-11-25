@@ -15,8 +15,7 @@ uuid.workspace = true
 time.workspace = true
 thiserror.workspace = true
 url.workspace = true
-
-[dev-dependencies]
+# Fields a later release added to a stored material or composition are kept as JSON values.
 serde_json.workspace = true
 
 [lints]

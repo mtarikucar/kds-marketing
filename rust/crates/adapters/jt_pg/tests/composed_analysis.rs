@@ -37,10 +37,11 @@ async fn composite(
         composition: Some(Composition {
             logo: None,
             renderer: "jeeta-compose".into(),
-            role: jt_studio::compose::Role::Cover,
+            role: jt_studio::compose::Role::Cover.into(),
             variant: "full_top".into(),
-            frame: jt_studio::compose::Frame::Slide,
+            frame: jt_studio::compose::Frame::Slide.into(),
             sources,
+            unknown: Default::default(),
         }),
         ..from.clone()
     };
@@ -69,6 +70,72 @@ async fn status(uow: &PgUnitOfWork, m: &Material) -> Option<AnalysisStatus> {
         .await
         .unwrap()
         .map(|row| row.intelligence.status)
+}
+
+/// A material a later release stored, with a role, a frame and fields this build does not know
+/// (on the material and on its composition), reads through the repository and keeps them all
+/// when this build saves it again; a material with nothing unknown reads back exactly as written.
+#[tokio::test]
+async fn fields_and_values_a_later_release_added_survive_a_save() {
+    let db = TestDb::new().await;
+    let uow = PgUnitOfWork::new(db.pool.clone());
+    let f = jt_testkit::studio_contract::ready(&uow).await;
+    let photo = jt_testkit::studio_contract::seed_material(&uow, f.ws).await;
+    let made = composite(&uow, &photo, vec![photo.id], 4).await;
+    // As the later release would write it (through the same repository).
+    let mut v = serde_json::to_value(&made).unwrap();
+    v["composition"]["role"] = serde_json::json!("some_new_role");
+    v["composition"]["frame"] = serde_json::json!("some_new_frame");
+    v["composition"]["added_later"] = serde_json::json!({"n": 1});
+    v["added_later"] = serde_json::json!(["kept"]);
+    v["revision"] = serde_json::json!(made.revision + 1);
+    let later: Material = serde_json::from_value(v.clone()).unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    r.studio_materials()
+        .update_material(later, made.revision)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let all = r.studio_materials().list_materials().await.unwrap();
+    let read = all
+        .iter()
+        .find(|m| m.id == made.id)
+        .expect("listed")
+        .clone();
+    assert_eq!(serde_json::to_value(&read).unwrap(), v);
+    // Saved again by this build (a new title): everything it did not know is still there.
+    let mut changed = read.clone();
+    changed.title = "renamed".into();
+    changed.revision += 1;
+    r.studio_materials()
+        .update_material(changed, read.revision)
+        .await
+        .unwrap();
+    r.commit().await.unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let stored = serde_json::to_value(
+        r.studio_materials()
+            .get_material(made.id)
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(stored["added_later"], serde_json::json!(["kept"]));
+    assert_eq!(stored["composition"], v["composition"]);
+    assert_eq!(stored["title"], "renamed");
+    // A material with nothing unknown reads back exactly as it was written: no extra key.
+    let plain = serde_json::to_value(
+        r.studio_materials()
+            .get_material(photo.id)
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plain, serde_json::to_value(&photo).unwrap());
+    assert!(plain.get("unknown").is_none());
 }
 
 #[tokio::test]
