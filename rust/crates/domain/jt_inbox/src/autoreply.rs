@@ -1051,7 +1051,18 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
             }
             continue;
         }
+        // Beside a price word (`Fiyatı 12.50 olur`, `Ücreti 9,90`, `1250 olur`), a number that is
+        // no count with its unit, no size and no day with a month's name is a price: refused as
+        // money, so the model is never coached into another form of it.
+        let priced =
+            prev.is_some_and(is_number_price_word) || next.is_some_and(is_number_price_word);
         if glued.is_empty() && date_or_time(num) {
+            // A clock time after `saat`, and a full date with its year, are no price.
+            let clock = prev.is_some_and(|p| is(&p.stem, "saat"));
+            let full_date = num.split(['.', '/']).count() == 3;
+            if priced && !clock && !full_date {
+                out.terms.push(i);
+            }
             continue;
         }
         // A size before a length unit (`20x30 cm`, `20 × 30 × 40 cm`, `20x30cm`).
@@ -1169,11 +1180,17 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
         if bare_year {
             continue;
         }
-        out.numbers.push(i);
+        if priced {
+            out.terms.push(i);
+        } else {
+            out.numbers.push(i);
+        }
     }
     end_phone(&mut out, &mut phone, &mut phone_digits);
-    // A price in number words: a run of them beside a price word (`Tanesi elli olur`, `Fiyatı
-    // doksan dokuz`, `kırk beş olur`). A lone `bir` before one is an article (`bir fiyat`).
+    // A price in number words: a run of them within two words of a price word (`Tanesi elli
+    // olur`, `Fiyatı da kırk beş`, `elli civarı olur`), unless a count noun or a unit follows the
+    // run (`Fiyatı iki gün içinde bildiririz`, `iki fotoğraf yeterli olur`). A lone `bir` before
+    // a price word is an article (`bir fiyat`).
     let mut k = 0;
     while k < words.len() {
         if !numberish(&words[k]) {
@@ -1185,11 +1202,16 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
             k += 1;
         }
         let article = k - start == 1 && is(&words[start].stem, "bir");
-        let before = start
-            .checked_sub(1)
-            .is_some_and(|p| is_number_price_word(&words[p]));
-        let after = !article && words.get(k).is_some_and(is_number_price_word);
-        if before || after {
+        let counted = words
+            .get(k)
+            .is_some_and(|n| is_unit(n) || COUNT_NOUNS.iter().any(|c| n.stem.starts_with(c)));
+        let near = |j: Option<usize>| {
+            j.and_then(|j| words.get(j))
+                .is_some_and(is_number_price_word)
+        };
+        let before = near(start.checked_sub(1)) || near(start.checked_sub(2));
+        let after = !article && (near(Some(k)) || near(Some(k + 1)));
+        if !counted && (before || after) {
             for j in start..k {
                 if !out.number_words.contains(&j) {
                     out.terms.push(j);
@@ -1879,6 +1901,65 @@ mod tests {
             "Size bir fiyat hazırlayalım.",
             "Yüz yüze görüşebiliriz.",
             "Bir de arka tarafı olsun.",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_time_date_or_number_beside_a_price_word_is_money() {
+        for text in [
+            "Fiyatı 12.50 olur",
+            "Tanesi 15.30",
+            "15.30 olur",
+            "Ücreti 9,90",
+            "12:50 eder",
+            "tutarı 15.12",
+            "fiyati 12.50",
+            "Fiyatı 1250 olur",
+            "adedi 12",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+            let parts = refused_parts(text, "", YEAR);
+            assert!(
+                parts.iter().any(|p| p.kind == PartKind::Term),
+                "{text}: refused as money, {parts:?}"
+            );
+            assert!(states_money(text, YEAR), "{text}");
+        }
+        for text in [
+            "Teslim 15 Aralık olur",
+            "7 gün olur",
+            "saat 15.30 olur",
+            "Toplantı 15.30'da",
+            "Tanesi 500 gram",
+            "adedi 20x30 cm",
+            "21.11.2026 olur",
+            "Yarın 14:30'da hazır.",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+        }
+    }
+
+    #[test]
+    fn number_words_near_a_price_word_are_a_price_unless_counted() {
+        for text in [
+            "Tanesi sadece elli",
+            "Fiyatı da kırk beş",
+            "elli civarı olur",
+            "fiyati da kirk bes",
+            "Tanesi yalnızca on iki",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+        for text in [
+            "Fiyatı iki gün içinde bildiririz.",
+            "iki fotoğraf yeterli olur",
+            "bir tane olur mu?",
+            "Üç renk de olur.",
+            "İki kişilik olur.",
+            "Her iki durumda da olur.",
+            "Size bir fiyat hazırlayalım.",
         ] {
             assert_eq!(reply(text), Ok(()), "{text}");
         }
