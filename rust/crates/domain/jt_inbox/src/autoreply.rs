@@ -25,7 +25,7 @@
 //!   kapora, vade, ödeme, havale, nakit, iban, eft, hediye çeki.
 //!
 //! The lexicon and the number words are read as typed with or without Turkish letters
-//! ([`stands_for`]: `ucretsiz`, `yuz`, `kirk` are `ücretsiz`, `yüz`, `kırk`), while a word written
+//! (letter by letter: `ucretsiz`, `yuz`, `kirk` are `ücretsiz`, `yüz`, `kırk`), while a word written
 //! with Turkish letters is read exactly as written.
 //!
 //! A reply ([`check_reply`]), and a hand-over's line, may hold none of it; [`refused_parts`] names
