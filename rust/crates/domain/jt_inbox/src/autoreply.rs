@@ -13,14 +13,20 @@
 //!   number, a count or a range of counts followed by an allowed unit (gün, saat, hafta, ay, cm,
 //!   mm, adet …), a one-digit count before a count noun, an age (`5 yaşında`), the work's
 //!   dimension (`3D`, `3 boyutlu`), a short number before `numara` (`10 numara`), a one-digit list
-//!   number opening a line (`1.`, `2)`), or the bare current or next calendar year with no
-//!   separator and no money next to it; a number beside a currency is an amount whatever its form;
+//!   number opening a line (`1.`, `2)`), a day before a month's name, or the bare current or
+//!   next calendar year beside a month's name or before `yıl` and beside no price word; a range
+//!   rises and its first end has no more digits than its second; a count of months stands beside
+//!   no payment word; a number beside a currency is an amount whatever its form;
 //! - **number words** that build an amount are refused: "bin" with any suffix, "buçuk" next to
 //!   "bin" or "yüz", a number word before "yüz" (any suffix), "yüz" before a number word, a tens
 //!   word with a case suffix ("elliye"); plain "yüz" (face) and "bir/iki/üç" before a noun stay;
 //! - **the money lexicon** is refused, with any suffix: the currency words and symbols, indirim,
 //!   iskonto, kdv, yüzde, %, bedava, beleş, ücretsiz, yarı fiyat, yarı yarıya, taksit, peşin,
-//!   kapora, hediye çeki.
+//!   kapora, vade, ödeme, havale, nakit, iban, eft, hediye çeki.
+//!
+//! The lexicon and the number words are read as typed with or without Turkish letters
+//! ([`stands_for`]: `ucretsiz`, `yuz`, `kirk` are `ücretsiz`, `yüz`, `kırk`), while a word written
+//! with Turkish letters is read exactly as written.
 //!
 //! A reply ([`check_reply`]), and a hand-over's line, may hold none of it; [`refused_parts`] names
 //! what a refused one held, word by word and by kind ([`PartKind`]). A quote
@@ -81,7 +87,7 @@ pub fn states_money(text: &str, year: i32) -> bool {
     }
     let words = words_of(text);
     words.iter().enumerate().any(|(i, w)| {
-        w.stem.starts_with("buçuk")
+        starts(&w.stem, "buçuk")
             && (i.checked_sub(1).is_some_and(|p| is_number_word(&words[p]))
                 || words.get(i + 1).is_some_and(is_number_word))
     })
@@ -97,8 +103,22 @@ pub struct Range {
 /// A reply the model wrote (or a hand-over's line), checked in calendar year `year`: its
 /// length, no money, no number but an allowed form, only the cards' links.
 pub fn check_reply(text: &str, cards: &str, year: i32) -> Result<(), Refusal> {
+    check_reply_in(text, cards, year, Reading::Reply)
+}
+
+/// How a reply is read: as any reply, or while the customer is ordering (the order tool is
+/// offered and collects card or bank transfer), when the payment method's words
+/// ([`PAYMENT_METHOD_STEMS`]) are allowed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reading {
+    Reply,
+    Ordering,
+}
+
+/// [`check_reply`] read as `reading` says.
+pub fn check_reply_in(text: &str, cards: &str, year: i32, reading: Reading) -> Result<(), Refusal> {
     check_text(text, cards)?;
-    if !scan(text, year).clean() {
+    if !scan_in(text, year, reading).clean() {
         return Err(Refusal::PriceWithoutQuote);
     }
     Ok(())
@@ -166,8 +186,8 @@ pub struct AllowedForm {
 /// Every form a number may take in a reply or a hand-over's line: anything else is refused.
 pub const ALLOWED_FORMS: &[AllowedForm] = &[
     AllowedForm {
-        what: "a date or a clock time",
-        examples: &["21.11", "21.11.2026", "14:30"],
+        what: "a date or a clock time, or a day before a month's name",
+        examples: &["21.11", "21.11.2026", "14:30", "15 Aralık"],
     },
     AllowedForm {
         what: "a count, or a range of counts, right before its unit ({units}); months only up to 24",
@@ -183,7 +203,7 @@ pub const ALLOWED_FORMS: &[AllowedForm] = &[
     },
     AllowedForm {
         what: "a one-digit count, or two of them, right before what is counted ({nouns})",
-        examples: &["3 figür", "2-3 fotoğraf", "2 ya da 3 fotoğraf", "2 tane"],
+        examples: &["2 fotoğraf", "2-3 fotoğraf", "2 ya da 3 fotoğraf", "2 tane"],
     },
     AllowedForm {
         what: "an age: one or two digits right before `yaş` in any form",
@@ -195,15 +215,15 @@ pub const ALLOWED_FORMS: &[AllowedForm] = &[
     },
     AllowedForm {
         what: "one or two digits right before `numara` in any form, such as a jersey's number",
-        examples: &["10 numara", "7 numaralı forma"],
+        examples: &["10 numara", "7 numaralı"],
     },
     AllowedForm {
         what: "a one-digit list number opening a line, the line's words after it",
         examples: &["1. Kaç kişilik olsun?", "2) Boyu ne kadar olsun?"],
     },
     AllowedForm {
-        what: "a full phone number, or the current or next year on its own, only as the cards \
-               give them",
+        what: "a full phone number, or the current or next year beside a month's name or before \
+               `yıl`, only as the cards give them",
         examples: &[],
     },
 ];
@@ -286,8 +306,13 @@ pub struct RefusedPart {
 /// they are written, then its links the cards lack; each (kind, word) once. Empty for a text the
 /// rules pass (and for one refused only for its length).
 pub fn refused_parts(text: &str, cards: &str, year: i32) -> Vec<RefusedPart> {
+    refused_parts_in(text, cards, year, Reading::Reply)
+}
+
+/// [`refused_parts`] read as `reading` says ([`check_reply_in`]).
+pub fn refused_parts_in(text: &str, cards: &str, year: i32, reading: Reading) -> Vec<RefusedPart> {
     let words = words_of(text);
-    let s = scan(text, year);
+    let s = scan_in(text, year, reading);
     let mut at: Vec<(usize, PartKind)> = Vec::new();
     at.extend(s.amounts.iter().map(|(i, _)| (*i, PartKind::Amount)));
     at.extend(s.currency.iter().map(|i| (*i, PartKind::Currency)));
@@ -501,10 +526,27 @@ const TERM_STEMS: &[&str] = &[
     "taksit",
     "peşin",
     "kapora",
+    "vade",
+    "ödeme",
+    "havale",
+    "nakit",
+    "iban",
     "free",
     "discount",
     "percent",
 ];
+/// The payment method's words, allowed in a reply while the customer is ordering
+/// ([`Reading::Ordering`]), with `eft`: the order tool asks for card or bank transfer.
+pub const PAYMENT_METHOD_STEMS: &[&str] = &["havale", "ödeme"];
+/// Money and payment words, as a whole stem (`EFT'yle`).
+const TERM_EXACT: &[&str] = &["eft"];
+/// The months, by a stem the word starts with: a year beside one reads as a date.
+const MONTHS: &[&str] = &[
+    "ocak", "şubat", "mart", "nisan", "mayıs", "haziran", "temmuz", "ağustos", "eylül", "ekim",
+    "kasım", "aralık",
+];
+/// Words beside which a bare number is a price (`Fiyatı 2026`, `2027 olur`).
+const PRICE_WORDS: &[&str] = &["fiyat", "ücret", "tutar", "olur"];
 /// Words after which "hediye" (a gift) is a free item.
 const GIFT_AFTER: &[&str] = &["ikincisi", "ikinci", "üçüncü", "üçüncüsü", "yanında"];
 /// Units a count is allowed with: a stem the next word starts with.
@@ -537,20 +579,72 @@ const COUNT_NOUNS: &[&str] = &[
 /// Units that may be glued to a count (`15cm`).
 const GLUED_UNITS: &[&str] = &["cm", "mm", "m", "kg", "gr", "dk"];
 
+/// What a Turkish letter is typed as on a keyboard without it.
+fn plain(c: char) -> char {
+    match c {
+        'ç' => 'c',
+        'ğ' => 'g',
+        'ı' => 'i',
+        'ö' => 'o',
+        'ş' => 's',
+        'ü' => 'u',
+        c => c,
+    }
+}
+
+/// Whether `w`, a letter as written, may stand for `t`, a letter of a word of the rules: the
+/// same letter, the plain letter typed for a Turkish one (`u` for `ü`, `s` for `ş`), or `ı` for
+/// `i` (a capital `I` typed for `İ`, which reads as `ı`). A Turkish letter stands only for
+/// itself, so a word written with Turkish letters is read exactly as before (`ön` is never `on`).
+fn stands_for(w: char, t: char) -> bool {
+    w == t || (w.is_ascii() && plain(t) == w) || (w == 'ı' && t == 'i')
+}
+
+/// `word` read as starting with `prefix`, letter by letter ([`stands_for`]): what follows it.
+fn strip<'a>(word: &'a str, prefix: &str) -> Option<&'a str> {
+    let mut at = 0;
+    let mut letters = word.chars();
+    for t in prefix.chars() {
+        let w = letters.next()?;
+        if !stands_for(w, t) {
+            return None;
+        }
+        at += w.len_utf8();
+    }
+    Some(&word[at..])
+}
+
+/// Whether `word` starts with `prefix`, read as [`strip`] reads it.
+fn starts(word: &str, prefix: &str) -> bool {
+    strip(word, prefix).is_some()
+}
+
+/// Whether `word` is `target`, read as [`strip`] reads it.
+fn is(word: &str, target: &str) -> bool {
+    strip(word, target) == Some("")
+}
+
+fn is_any(word: &str, targets: &[&str]) -> bool {
+    targets.iter().any(|t| is(word, t))
+}
+
+fn starts_any(word: &str, prefixes: &[&str]) -> bool {
+    prefixes.iter().any(|p| starts(word, p))
+}
+
 /// `stem` is `base` followed by one of [`NUMBER_SUFFIXES`].
 fn with_suffix(stem: &str, base: &str) -> bool {
-    stem.strip_prefix(base)
-        .is_some_and(|rest| NUMBER_SUFFIXES.contains(&rest))
+    strip(stem, base).is_some_and(|rest| is_any(rest, NUMBER_SUFFIXES))
 }
 
 /// "bin" (a thousand) in any form (`bine`, `binliğe`, `biner`): every word starting so but
 /// "bina" (a building) and its forms. "milyon" likewise.
 fn is_bin(w: &Word) -> bool {
-    (w.stem.starts_with("bin") && !w.stem.starts_with("bina")) || w.stem.starts_with("milyon")
+    (starts(&w.stem, "bin") && !starts(&w.stem, "bina")) || starts(&w.stem, "milyon")
 }
 
 fn is_yuz(w: &Word) -> bool {
-    with_suffix(&w.stem, "yüz") || w.stem.starts_with("yüzlü") || w.stem.starts_with("yüzlük")
+    with_suffix(&w.stem, "yüz") || starts(&w.stem, "yüzlü")
 }
 
 /// The distributive forms of the numbers (`kırkar`, `beşer`, `yüzer`): an amount each.
@@ -586,12 +680,12 @@ fn glued_number_words(stem: &str) -> bool {
         "milyon",
     ];
     fn go(rest: &str, parts: usize) -> bool {
-        if parts >= 2 && NUMBER_SUFFIXES.contains(&rest) {
+        if parts >= 2 && is_any(rest, NUMBER_SUFFIXES) {
             return true;
         }
         PARTS
             .iter()
-            .any(|p| rest.strip_prefix(p).is_some_and(|r| go(r, parts + 1)))
+            .any(|p| strip(rest, p).is_some_and(|r| go(r, parts + 1)))
     }
     go(stem, 0)
 }
@@ -607,17 +701,28 @@ fn mixed_script(w: &Word) -> bool {
 }
 
 fn is_number_word(w: &Word) -> bool {
-    NUMBER_WORDS.contains(&w.stem.as_str())
+    is_any(&w.stem, NUMBER_WORDS)
 }
 
 fn is_currency(w: &Word) -> bool {
     w.text.contains(['₺', '$', '€', '£'])
-        || CURRENCY_CODES.contains(&w.stem.as_str())
-        || CURRENCY_STEMS.iter().any(|s| w.stem.starts_with(s))
+        || is_any(&w.stem, CURRENCY_CODES)
+        || starts_any(&w.stem, CURRENCY_STEMS)
 }
 
 fn is_term(w: &Word) -> bool {
-    w.text.contains('%') || TERM_STEMS.iter().any(|s| w.stem.starts_with(s))
+    // `vadetmek` (to promise: `vadediyoruz`) is no `vade` (a payment's term).
+    let promise = starts(&w.stem, "vadet") || starts(&w.stem, "vaded");
+    w.text.contains('%')
+        || TERM_STEMS
+            .iter()
+            .any(|s| starts(&w.stem, s) && !(*s == "vade" && promise))
+        || is_any(&w.stem, TERM_EXACT)
+}
+
+/// Whether `w` is a word beside which a bare number is a price ([`PRICE_WORDS`]).
+fn is_price_word(w: &Word) -> bool {
+    starts_any(&w.stem, PRICE_WORDS)
 }
 
 fn is_unit(w: &Word) -> bool {
@@ -707,6 +812,28 @@ fn count_part(p: &str) -> bool {
             .all(|c| c.is_ascii_digit() || matches!(c, '.' | ','))
 }
 
+/// `num` as one value or a range of two (`3-5`), each `part`: a range rises (`3500-7` is a price
+/// and a count) and its first end has no more whole digits than its second.
+fn range_of(num: &str, part: fn(&str) -> bool) -> bool {
+    match num.split('-').collect::<Vec<_>>().as_slice() {
+        [one] => part(one),
+        [a, b] => part(a) && part(b) && rising(a, b),
+        _ => false,
+    }
+}
+
+/// Whether `a` is less than `b` (decimals with `.` or `,`), with no more whole digits.
+fn rising(a: &str, b: &str) -> bool {
+    let value = |p: &str| p.replace(',', ".").parse::<f64>().ok();
+    let whole = |p: &str| p.split(['.', ',']).next().map_or(0, str::len);
+    // `3.500` is three thousand five hundred, never three and a half.
+    let thousands = |p: &str| p.split(['.', ',']).nth(1).is_some_and(|f| f.len() >= 3);
+    matches!((value(a), value(b)), (Some(x), Some(y)) if x < y)
+        && whole(a) <= whole(b)
+        && !thousands(a)
+        && !thousands(b)
+}
+
 /// `p` as an age: one or two digits, the first not `0`.
 fn age_part(p: &str) -> bool {
     matches!(p.as_bytes(), [b'1'..=b'9'] | [b'1'..=b'9', b'0'..=b'9'])
@@ -719,11 +846,14 @@ fn age_after(words: &[Word], j: usize) -> bool {
 
 /// Whether the count `num` at `words[j]` stands before an allowed unit ([`UNITS`],
 /// [`UNITS_EXACT`], `iş günü`); a count of months only up to 24 (`36 ay` is a price's
-/// instalments).
+/// instalments), and never beside a payment word.
 fn unit_after(words: &[Word], j: usize, num: &str) -> bool {
     let next = words.get(j + 1);
+    // A count of months beside a payment word is a price's term (`12 ay vadeli`, `2 ayda bir
+    // ödeme`).
+    let payment = (j + 2..=j + 3).any(|k| words.get(k).is_some_and(is_term));
     let months = next.is_some_and(|n| n.stem.starts_with("ay"))
-        && !num.parse::<u32>().is_ok_and(|n| n <= 24);
+        && (payment || !num.parse::<u32>().is_ok_and(|n| n <= 24));
     (next.is_some_and(is_unit) && !months)
         || (next.is_some_and(|n| n.stem == "iş")
             && words.get(j + 2).is_some_and(|n| n.stem.starts_with("gün")))
@@ -731,6 +861,11 @@ fn unit_after(words: &[Word], j: usize, num: &str) -> bool {
 
 /// What `text` says, read in calendar year `year` (see the module docs and [`Scan`]).
 pub fn scan(text: &str, year: i32) -> Scan {
+    scan_in(text, year, Reading::Reply)
+}
+
+/// [`scan`] read as `reading` says: while ordering, the payment method's words are no terms.
+fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
     let words = words_of(text);
     let mut out = Scan::default();
     // The phone number being read: its words and its digits so far.
@@ -751,30 +886,33 @@ pub fn scan(text: &str, year: i32) -> Scan {
         if is_currency(w) {
             out.currency.push(i);
         }
-        if is_term(w)
+        let method = reading == Reading::Ordering
+            && (starts_any(&w.stem, PAYMENT_METHOD_STEMS) || is(&w.stem, "eft"));
+        if (is_term(w) && !method)
             || mixed_script(w)
-            || (w.stem == "yarı"
-                && next.is_some_and(|n| n.stem.starts_with("fiyat") || n.stem.starts_with("yarı")))
-            || w.stem.starts_with("yarısı")
-            || w.stem == "yarıya"
-            || (w.stem.starts_with("hediye")
-                && (next.is_some_and(|n| n.stem.starts_with("çek"))
-                    || prev.is_some_and(|p| GIFT_AFTER.contains(&p.stem.as_str()))))
-            || (w.stem == "bizden"
-                && prev.is_some_and(|p| p.stem.starts_with("kargo") || p.stem == "ikincisi"))
+            || (is(&w.stem, "yarı")
+                && next.is_some_and(|n| starts(&n.stem, "fiyat") || starts(&n.stem, "yarı")))
+            || starts(&w.stem, "yarısı")
+            || is(&w.stem, "yarıya")
+            || (starts(&w.stem, "hediye")
+                && (next.is_some_and(|n| starts(&n.stem, "çek"))
+                    || prev.is_some_and(|p| is_any(&p.stem, GIFT_AFTER))))
+            || (is(&w.stem, "bizden")
+                && prev.is_some_and(|p| starts(&p.stem, "kargo") || is(&p.stem, "ikincisi")))
             || (w.stem == "half" && next.is_some_and(|n| n.stem.starts_with("price")))
         {
             out.terms.push(i);
         }
         // Number words.
-        let tens_suffixed = TENS.iter().any(|t| w.stem != *t && with_suffix(&w.stem, t));
+        let tens_suffixed = TENS
+            .iter()
+            .any(|t| !is(&w.stem, t) && with_suffix(&w.stem, t));
         if is_bin(w)
             || tens_suffixed
-            || DISTRIBUTIVE.contains(&w.stem.as_str())
-            || w.stem.starts_with("yüzlü")
-            || w.stem.starts_with("yüzlük")
+            || is_any(&w.stem, DISTRIBUTIVE)
+            || starts(&w.stem, "yüzlü")
             || glued_number_words(&w.stem)
-            || (w.stem == "buçuk"
+            || (is(&w.stem, "buçuk")
                 && (prev.is_some_and(|p| is_bin(p) || is_yuz(p))
                     || next.is_some_and(|n| is_bin(n) || is_yuz(n))))
             || (is_number_word(w) && next.is_some_and(is_yuz))
@@ -836,11 +974,10 @@ pub fn scan(text: &str, year: i32) -> Scan {
             continue;
         }
         // An age, or a range of two, before `yaş` in any form (`5 yaşında`, `3-5 yaş`).
-        let ends: Vec<&str> = num.split('-').collect();
-        if bare && ends.len() <= 2 && ends.iter().all(|p| age_part(p)) && age_after(&words, i) {
+        if bare && range_of(num, age_part) && age_after(&words, i) {
             continue;
         }
-        // One or two digits before `numara` in any form (`10 numara`, `7 numaralı forma`).
+        // One or two digits before `numara` in any form (`10 numara`, `7 numaralı`).
         if bare
             && digits_only
             && num.len() <= 2
@@ -848,8 +985,17 @@ pub fn scan(text: &str, year: i32) -> Scan {
         {
             continue;
         }
+        // A day of the month before a month's name (`15 Aralık`).
+        if bare
+            && digits_only
+            && num.len() <= 2
+            && num.parse::<u32>().is_ok_and(|d| (1..=31).contains(&d))
+            && next.is_some_and(|n| starts_any(&n.stem, MONTHS))
+        {
+            continue;
+        }
         // A count, or a range of counts (`3-5`), before an allowed unit or with one glued.
-        if num.split('-').all(count_part)
+        if range_of(num, count_part)
             && ((glued.is_empty() && unit_after(&words, i, num)) || GLUED_UNITS.contains(&glued))
         {
             continue;
@@ -871,8 +1017,7 @@ pub fn scan(text: &str, year: i32) -> Scan {
                     return false;
                 };
                 let (m_num, m_glued) = split_number(&m.stem);
-                let value = |p: &str| p.replace(',', ".").parse::<f64>().ok();
-                let rising = matches!((value(num), value(m_num)), (Some(a), Some(b)) if a < b);
+                let rising = rising(num, m_num);
                 let units = count_part(num)
                     && count_part(m_num)
                     && (GLUED_UNITS.contains(&m_glued)
@@ -885,12 +1030,13 @@ pub fn scan(text: &str, year: i32) -> Scan {
             continue;
         }
         // A one-digit count or range before a count noun: `2-3 fotoğraf`, `2 ya da 3 fotoğraf`.
-        let one_digit = |t: &str| t.len() == 1 && t.as_bytes()[0].is_ascii_digit();
+        fn one_digit(t: &str) -> bool {
+            t.len() == 1 && t.as_bytes()[0].is_ascii_digit()
+        }
         let counted =
             |n: Option<&Word>| n.is_some_and(|n| COUNT_NOUNS.iter().any(|c| n.stem.starts_with(c)));
         if glued.is_empty() && !w.suffixed {
-            let parts: Vec<&str> = num.split('-').collect();
-            if parts.len() <= 2 && parts.iter().all(|p| one_digit(p)) && counted(next) {
+            if range_of(num, one_digit) && counted(next) {
                 continue;
             }
             let (other, noun) = match (
@@ -905,13 +1051,17 @@ pub fn scan(text: &str, year: i32) -> Scan {
                 continue;
             }
         }
+        // The current or next year, bare, only where it reads as a date: beside a month's name,
+        // or before `yıl` (`yılı`, `yılında`, `yılbaşı`); never beside a price's word.
+        let month = |n: Option<&Word>| n.is_some_and(|n| starts_any(&n.stem, MONTHS));
         let bare_year = glued.is_empty()
             && !w.suffixed
             && digits_only
             && num.len() == 4
             && num.parse::<i32>().is_ok_and(|y| y == year || y == year + 1)
-            && !prev.is_some_and(|p| is_currency(p) || is_term(p))
-            && !next.is_some_and(|n| is_currency(n) || is_term(n) || is_bin(n));
+            && (month(prev) || month(next) || next.is_some_and(|n| starts(&n.stem, "yıl")))
+            && !prev.is_some_and(|p| is_currency(p) || is_term(p) || is_price_word(p))
+            && !next.is_some_and(|n| is_currency(n) || is_term(n) || is_bin(n) || is_price_word(n));
         if bare_year {
             continue;
         }
@@ -1069,7 +1219,9 @@ mod tests {
     fn replies_that_name_no_money_pass() {
         for text in [
             "2026 yılbaşı siparişleri",
-            "2027 için de alıyoruz",
+            "2027 yılında da alıyoruz",
+            "Aralık 2026",
+            "2027 Ocak ayında",
             "21.11.2026",
             "21/11 teslim",
             "Saat 14.30'da",
@@ -1210,33 +1362,32 @@ mod tests {
         assert!(!prompt.contains("{units}") && !prompt.contains("{nouns}"));
         // The forms with no example of their own.
         assert_eq!(reply("0532 123 45 67"), Ok(()));
-        assert_eq!(reply("2026 siparişleri"), Ok(()));
+        assert_eq!(reply("2026 yılı siparişleri"), Ok(()));
+        assert_eq!(reply("Aralık 2026"), Ok(()));
     }
 
     #[test]
     fn the_ordinary_numbers_of_a_sales_conversation_pass() {
         for text in [
-            // The dimension of the work.
-            "3D figür yapıyoruz.",
+            // The dimension.
+            "3D baskı yapıyoruz.",
             "3D'li baskı",
             "3d baskı",
-            "3 boyutlu figür",
+            "3 boyutlu baskı",
             "2D çizim",
-            "3B figür",
+            "3B baskı",
             // Ages.
-            "12 yaşındaki oğlunuz için",
+            "12 yaşında",
+            "12 yaşındaki biri için",
             "5 yaşında",
             "3-5 yaş arası",
             "3 ila 5 yaş",
             // A short number before `numara`.
-            "10 numaralı forma",
-            "Forması 7 numara olsun",
+            "10 numara",
+            "7 numaralı olsun",
             // List numbers opening a line.
-            "Birkaç sorum var:
-1. Kaç figür olsun?
-2. Boyu ne kadar olsun?",
-            "1) Fotoğraf
-2) Boyut",
+            "Birkaç sorum var:\n1. Kaç adet olsun?\n2. Boyu ne kadar olsun?",
+            "1) Fotoğraf\n2) Boyut",
             // Ranges with a dash, spaces or words between their ends.
             "15–20 cm arası",
             "15 - 20 cm",
@@ -1244,11 +1395,13 @@ mod tests {
             "15 ile 20cm",
             "10 ila 15 gün",
             "2 veya 3 hafta",
-            "2 tane figür",
+            "2 tane fotoğraf",
+            "3 adet",
+            // A day before a month's name.
+            "15 Aralık'a kadar",
             // All of it together, as a first answer may be.
-            "Merhaba! 12 yaşındaki oğlunuz için 3D figür yapabiliriz.
-1. Boyu 15–20 cm arası              mı olsun?
-2. Fotoğraf gönderebilir misiniz?",
+            "Merhaba! 12 yaşında biri için 3D baskı yapabiliriz.\n1. Boyu 15–20 cm arası mı \
+             olsun?\n2. 2 fotoğraf gönderebilir misiniz?",
         ] {
             assert_eq!(reply(text), Ok(()), "{text}");
             assert!(!states_money(text, YEAR), "{text}");
@@ -1261,8 +1414,8 @@ mod tests {
         for text in [
             // The dimension beside money, glued to it or in another form.
             "3D 500 TL",
-            "3D figür 3500",
-            "3D figür 3500 olur",
+            "3D baskı 3500",
+            "3D 3500 olur",
             "3dtl",
             "3D₺",
             "₺3D",
@@ -1273,7 +1426,7 @@ mod tests {
             "4D",
             "13D",
             "3 D",
-            "3D figür %20 indirimli",
+            "3D baskı %20 indirimli",
             // Ages beside money or out of their form.
             "12 yaşında 1500",
             "120 yaşında",
@@ -1282,6 +1435,7 @@ mod tests {
             "5 yaşına 500 TL",
             "5 yaş indirimi var",
             "150 ile 200 yaş",
+            "5-3 yaş",
             // `numara` with more than two digits or beside money.
             "100 numara",
             "1.000 numara",
@@ -1292,10 +1446,8 @@ mod tests {
             "1) 3500",
             "12. Soru",
             "Fiyat 1. sınıf",
-            "1500.
-Başka",
-            "Kaç tane?
-3.",
+            "1500.\nBaşka",
+            "Kaç tane?\n3.",
             // Ranges: falling, beside money, with no unit, or months over 24.
             "3500 - 7 gün",
             "20 ile 15 cm",
@@ -1305,18 +1457,178 @@ Başka",
             "2 ile 36 ay",
             "12 tane",
             "2 tane 500",
+            // A day before a month only up to 31, with no more than two digits.
+            "32 Aralık",
+            "1500 Aralık",
         ] {
             assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
         }
-        for text in ["3D figür 3500 olur", "12 yaşında 1500", "10 numara 500"] {
+        for text in ["3D 3500 olur", "12 yaşında 1500", "10 numara 500"] {
             assert!(states_money(text, YEAR), "{text}");
         }
         let quote = |text| check_quote(1_250, text, RANGE, "", YEAR);
-        assert_eq!(quote("3D figür için teklifimiz 1.250 TL."), Ok(125_000));
+        assert_eq!(quote("3D baskı için teklifimiz 1.250 TL."), Ok(125_000));
         assert_eq!(
-            quote("3D figür 1.250 TL, 10 numara forma 500 TL"),
+            quote("3D baskı 1.250 TL, 10 numara 500 TL"),
             Err(Refusal::QuoteTextMismatch)
         );
+    }
+
+    #[test]
+    fn money_typed_without_turkish_letters_is_refused() {
+        for text in [
+            "Fiyatı dokuz yuz elli olur.",
+            "ucretsiz kargo",
+            "pesin odersen",
+            "yuzde on daha uygun",
+            "kirka olur",
+            "kirk bin",
+            "kurus",
+            "yuzelli",
+            "dokuzyuzelli",
+            "iki bucuk bin",
+            "UCRETSIZ KARGO",
+            "ikincisi bedava",
+            "yari fiyatina",
+            "yarisina",
+            "hediye ceki",
+            "IBAN'a gönderin",
+            "sekiz yuze olur",
+            "iki bine",
+            "kirkar",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+        assert!(states_money("iki bucuk", YEAR));
+        // Ordinary words that read onto a number or a money word stay as they were.
+        for text in [
+            "Yüzünü net gösteren bir fotoğraf olsun.",
+            "yuzunu gosteren bir fotograf",
+            "Yüz yüze görüşebiliriz.",
+            "yuz yuze gorusebiliriz",
+            "Önce bir fotoğraf gönderin.",
+            "Ön yüz ve arka yüz",
+            "Binanıza teslim ederiz.",
+            "Elli kere teşekkürler",
+            "Kırk yıllık usta",
+            "kirk yillik usta",
+            "Bir de arka taraf",
+            "Uç kısmı ince olsun.",
+            "Kuru bir yerde saklayın.",
+            "Yarın kargoda.",
+            "yarin kargoda",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+        }
+    }
+
+    #[test]
+    fn payment_terms_and_a_count_of_months_beside_them_are_refused() {
+        for text in [
+            "12 ay vadeli",
+            "6 aylık vade farksız",
+            "2 ayda bir ödeme",
+            "2 ayda bir odeme",
+            "Havale ile",
+            "havaleyle olur",
+            "Nakit olur",
+            "EFT yapabilirsiniz",
+            "EFT'yle",
+            "IBAN gönderelim",
+            "Ödemeyi kapıda alırız",
+            "Vadesiz",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+        assert!(
+            scan("12 ay vadeli", YEAR).numbers.contains(&0),
+            "the count too"
+        );
+        for text in [
+            "12 ay garanti",
+            "6 aylık bakım",
+            "2 ayda bir kontrol",
+            "3 ay sonra",
+            "Kalite vadediyoruz.",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+        }
+    }
+
+    #[test]
+    fn while_ordering_the_payment_method_may_be_asked() {
+        let ordering = |t: &str| check_reply_in(t, "", YEAR, Reading::Ordering);
+        for text in [
+            "Kartla mı havaleyle mi ödemek istersiniz?",
+            "Ödemeyi kartla mı yaparsınız, EFT ile mi?",
+            "odemeyi havale ile mi yaparsiniz",
+        ] {
+            assert_eq!(ordering(text), Ok(()), "{text}");
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+        // Everything else of money stays refused while ordering.
+        for text in [
+            "12 ay vadeli",
+            "Nakit olur",
+            "IBAN gönderelim",
+            "950 TL",
+            "peşin olur",
+        ] {
+            assert_eq!(ordering(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_range_rises_and_its_first_end_is_no_longer() {
+        for text in [
+            "3500-7 gün",
+            "3500–7 gün",
+            "9500-1 hafta",
+            "3.500-7 gün",
+            "20-15 cm",
+            "100-20 adet",
+            "5-3 fotoğraf",
+            "1-2-3 gün",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+            assert!(states_money(text, YEAR), "{text}");
+        }
+        for text in [
+            "3-5 iş günü",
+            "15-20 cm",
+            "1-2 hafta",
+            "2.5-3 cm",
+            "10-15 gün",
+            "2-3 fotoğraf",
+            "9-10 gün",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_bare_year_passes_only_as_a_date() {
+        for text in [
+            "Fiyatı 2026",
+            "2027 olur",
+            "2026",
+            "Ücreti 2026",
+            "ucreti 2026",
+            "Tutarı 2027",
+            "2027 için de alıyoruz",
+            "Aralık 2026 olur",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+        for text in [
+            "Aralık 2026",
+            "2026 Aralık ayında",
+            "2027 yılında",
+            "2026 yılbaşı",
+            "21.11.2026",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+        }
     }
 
     #[test]
@@ -1342,7 +1654,7 @@ Başka",
                 ("link", "ornek.test"),
             ]
         );
-        assert!(refused_parts("3D figür, 12 yaşında, 15–20 cm", "", YEAR).is_empty());
+        assert!(refused_parts("3D baskı, 12 yaşında, 15–20 cm", "", YEAR).is_empty());
         assert!(refused_parts("ornek.test", "ornek.test", YEAR).is_empty());
         // What check_reply refuses, refused_parts names.
         for text in ["450 olur", "ücretsiz kargo", "dokuz yüz elli", "baska.shop"] {

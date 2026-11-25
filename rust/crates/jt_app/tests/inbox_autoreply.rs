@@ -3648,8 +3648,8 @@ fn payloads(t: &T, action: &str) -> Vec<serde_json::Value> {
 async fn a_first_answer_with_an_age_the_dimension_a_size_range_and_a_list_goes_out() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
-    let text = "Merhaba! 12 yaşındaki oğlunuz için 3D figür yapabiliriz.\n1. Boyu 15–20 cm \
-                arası mı olsun?\n2. 10 numaralı forması da olsun mu?";
+    let text = "Merhaba! 12 yaşında biri için 3D baskı yapabiliriz.\n1. Boyu 15–20 cm arası \
+                mı olsun?\n2. 10 numara mı olsun?";
     t.model.answer(reply(text));
     t.meta.push_send_text(accepted());
     job(&t, due(0)).await;
@@ -3661,33 +3661,36 @@ async fn a_first_answer_with_an_age_the_dimension_a_size_range_and_a_list_goes_o
 }
 
 #[tokio::test]
-async fn the_repair_names_the_refused_parts_of_the_models_own_answer() {
+async fn the_repair_names_the_refused_numbers_and_links_of_the_models_own_answer() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
     t.model.answer(reply(
-        "Figür 12 haftada hazır, 950 liraya olur. Bakın: ornek-dukkan.test",
+        "2 haftada hazır olur, 12 fotoğraf yeterli. Bakın: ornek-dukkan.test",
     ));
-    t.model.answer(reply("Figür birkaç haftada hazır olur."));
+    t.model
+        .answer(reply("2 haftada hazır olur, birkaç fotoğraf yeterli."));
     t.meta.push_send_text(accepted());
     job(&t, due(0)).await;
     let requests = t.model.requests();
     assert_eq!(requests.len(), 2);
     let note = requests[1].system_note.clone().unwrap();
     for named in [
-        "\"950\" (an amount of money)",
-        "\"liraya\" (a currency)",
+        "\"12\" (a number in a form that is not allowed)",
         "\"ornek-dukkan.test\" (a link the cards do not hold)",
     ] {
         assert!(note.contains(named), "{named}: {note}");
     }
     assert!(
-        !note.contains("\"12\""),
-        "12 hafta is an allowed form: {note}"
+        !note.contains("\"2\""),
+        "2 hafta is an allowed form: {note}"
     );
     assert!(note.contains("`quote`") && note.contains("`hand_over`"));
     // The customer's turns are as they were; only the server's note is new.
     assert_eq!(requests[1].history, requests[0].history);
-    assert_eq!(texts_sent(&t), ["Figür birkaç haftada hazır olur."]);
+    assert_eq!(
+        texts_sent(&t),
+        ["2 haftada hazır olur, birkaç fotoğraf yeterli."]
+    );
     // The refused answer's row is skipped, the repair's is the reply.
     let rows: Vec<(RunOutcome, Option<String>)> = runs(&t)
         .into_iter()
@@ -3699,33 +3702,30 @@ async fn the_repair_names_the_refused_parts_of_the_models_own_answer() {
     let refused = payloads(&t, "inbox.autoreply.refused");
     assert_eq!(refused.len(), 1);
     assert_eq!(refused[0]["reason"], "link_in_reply");
-    assert_eq!(refused[0]["refused"], json!(["amount", "currency", "link"]));
+    assert_eq!(refused[0]["refused"], json!(["number", "link"]));
     assert_eq!(refused[0]["repair"], 1);
     let kept = refused[0].to_string();
-    for word in ["950", "liraya", "ornek-dukkan", "Figür", "hafta"] {
+    for word in ["fotoğraf", "ornek-dukkan", "hafta"] {
         assert!(!kept.contains(word), "{word}: {kept}");
     }
 }
 
 #[tokio::test]
-async fn a_second_repair_is_asked_and_may_go_out() {
+async fn a_second_repair_of_numbers_is_asked_and_may_go_out() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
-    t.model.answer(reply("Fiyatı 1250 olur."));
-    t.model.answer(reply("İki bin civarı olur."));
-    t.model.answer(reply("Fiyat için ekibimiz size dönecek."));
+    t.model.answer(reply("12 fotoğraf yeterli."));
+    t.model.answer(reply("Bakın: ornek-dukkan.test"));
+    t.model.answer(reply("Birkaç fotoğraf yeterli."));
     t.meta.push_send_text(accepted());
     job(&t, due(0)).await;
     let requests = t.model.requests();
     assert_eq!(requests.len(), 3, "two repairs");
     // Each note names the answer just refused, not the one before.
     let second = requests[2].system_note.clone().unwrap();
-    assert!(
-        second.contains("\"bin\" (a number word that makes an amount)"),
-        "{second}"
-    );
-    assert!(!second.contains("\"1250\""), "{second}");
-    assert_eq!(texts_sent(&t), ["Fiyat için ekibimiz size dönecek."]);
+    assert!(second.contains("\"ornek-dukkan.test\""), "{second}");
+    assert!(!second.contains("\"12\""), "{second}");
+    assert_eq!(texts_sent(&t), ["Birkaç fotoğraf yeterli."]);
     let rows: Vec<(RunOutcome, Option<String>)> = runs(&t)
         .into_iter()
         .map(|r| (r.outcome, r.reason))
@@ -3736,7 +3736,7 @@ async fn a_second_repair_is_asked_and_may_go_out() {
     let refused = payloads(&t, "inbox.autoreply.refused");
     assert_eq!(refused.len(), 2);
     assert_eq!(refused[0]["refused"], json!(["number"]));
-    assert_eq!(refused[1]["refused"], json!(["number_word"]));
+    assert_eq!(refused[1]["refused"], json!(["link"]));
     assert_eq!(refused[1]["repair"], 2);
 }
 
@@ -3744,9 +3744,9 @@ async fn a_second_repair_is_asked_and_may_go_out() {
 async fn a_reply_refused_after_two_repairs_goes_to_a_person() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
-    t.model.answer(reply("Fiyatı 1250 olur."));
-    t.model.answer(reply("İki bin civarı olur."));
-    t.model.answer(reply("İndirimli olur."));
+    t.model.answer(reply("12 fotoğraf yeterli."));
+    t.model.answer(reply("Bakın: ornek-dukkan.test"));
+    t.model.answer(reply("15 fotoğraf da olur."));
     t.model.answer(reply("Never asked: a third repair."));
     job(&t, due(0)).await;
     assert_eq!(t.model.requests().len(), 3, "at most two repairs");
@@ -3756,12 +3756,12 @@ async fn a_reply_refused_after_two_repairs_goes_to_a_person() {
         reasons(&t, "inbox.autoreply.refused"),
         [
             "price_without_quote",
-            "price_without_quote",
+            "link_in_reply",
             "price_without_quote"
         ]
     );
     let refused = payloads(&t, "inbox.autoreply.refused");
-    assert_eq!(refused[2]["refused"], json!(["term"]));
+    assert_eq!(refused[2]["refused"], json!(["number"]));
     assert!(
         refused[2].get("repair").is_none(),
         "the last one hands over"
@@ -3784,6 +3784,64 @@ async fn a_reply_refused_after_two_repairs_goes_to_a_person() {
             (RunOutcome::HandedOver, Some("price_without_quote".into())),
         ]
     );
+}
+
+#[tokio::test]
+async fn after_money_the_one_repair_names_nothing_and_a_reply_is_not_sent() {
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(reply("Bunun fiyatı 950 TL olur."));
+    t.model.answer(reply("Fiyat için ekibimiz yazacak."));
+    t.model
+        .answer(reply("Never asked: a second repair after money."));
+    job(&t, due(0)).await;
+    let requests = t.model.requests();
+    assert_eq!(requests.len(), 2, "one repair after money");
+    let note = requests[1].system_note.clone().unwrap();
+    assert!(note.contains("only with `quote`") && note.contains("`hand_over`"));
+    for word in ["950", "TL", "\""] {
+        assert!(!note.contains(word), "{word}: no part is named: {note}");
+    }
+    assert!(texts_sent(&t).is_empty(), "a reply after money is not sent");
+    handed_to_a_person(&t);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.handed_over"),
+        ["price_without_quote"]
+    );
+    let refused = payloads(&t, "inbox.autoreply.refused");
+    assert_eq!(refused.len(), 1);
+    assert_eq!(refused[0]["refused"], json!(["amount", "currency"]));
+    let rows: Vec<(RunOutcome, Option<String>)> = runs(&t)
+        .into_iter()
+        .map(|r| (r.outcome, r.reason))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (RunOutcome::HandedOver, Some("price_without_quote".into())),
+            (RunOutcome::Skipped, Some("repair_not_quote".into())),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn after_money_a_quote_from_the_repair_goes_out() {
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(reply("Yaklaşık 1250 olur."));
+    t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    assert_eq!(t.model.requests().len(), 2);
+    assert_eq!(texts_sent(&t), ["Teklifimiz 1.250 TL."]);
+    let rows: Vec<(RunOutcome, Option<String>)> = runs(&t)
+        .into_iter()
+        .map(|r| (r.outcome, r.reason))
+        .collect();
+    assert_eq!(rows[0], (RunOutcome::Skipped, Some("repaired".into())));
+    assert_eq!(rows[1].0, RunOutcome::Quoted);
+    let refused = payloads(&t, "inbox.autoreply.refused");
+    assert_eq!(refused[0]["refused"], json!(["number"]));
 }
 
 #[tokio::test]
