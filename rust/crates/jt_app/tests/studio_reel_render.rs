@@ -800,3 +800,129 @@ async fn a_reel_goes_through_a_post_request_and_its_slot() {
     assert_eq!(done.slot.state, SlotState::Ready);
     assert_eq!(done.post.unwrap().format, PostFormat::Reel);
 }
+
+/// The real renderer behind a gate: each reel waits until the test opens the gate, and the
+/// reels it was asked for are counted.
+struct Gated {
+    inner: jt_render::Renderer,
+    gate: Arc<tokio::sync::Semaphore>,
+    reels: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl jt_app::ports::compose::Compositor for Gated {
+    async fn reserve(
+        &self,
+    ) -> Result<jt_app::ports::compose::RenderTicket, jt_app::ports::compose::ComposeError> {
+        self.inner.reserve().await
+    }
+    async fn compose(
+        &self,
+        ticket: jt_app::ports::compose::RenderTicket,
+        job: jt_app::ports::compose::ComposeJob,
+    ) -> Result<jt_app::ports::compose::Composed, jt_app::ports::compose::ComposeError> {
+        self.inner.compose(ticket, job).await
+    }
+    fn uncovered(&self, text: &str) -> Vec<char> {
+        self.inner.uncovered(text)
+    }
+    async fn reserve_reel(
+        &self,
+    ) -> Result<jt_app::ports::compose::RenderTicket, jt_app::ports::compose::ComposeError> {
+        self.inner.reserve_reel().await
+    }
+    async fn render_reel(
+        &self,
+        ticket: jt_app::ports::compose::RenderTicket,
+        job: jt_app::ports::compose::ReelJob,
+        photos: Box<dyn jt_app::ports::compose::ReelPhotoBytes>,
+    ) -> Result<jt_app::ports::compose::RenderedReel, jt_app::ports::compose::ComposeError> {
+        self.reels.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.gate.acquire().await.expect("gate").forget();
+        self.inner.render_reel(ticket, job, photos).await
+    }
+}
+
+/// [`reel_world`] with the gated renderer.
+async fn gated_world() -> (World, Arc<Gated>) {
+    let mut w = reel_world().await;
+    let gated = Arc::new(Gated {
+        inner: jt_render::Renderer::new(jt_render::Limits::default()),
+        gate: Arc::new(tokio::sync::Semaphore::new(0)),
+        reels: Default::default(),
+    });
+    w.d.compositor = gated.clone();
+    (w, gated)
+}
+
+/// Waits (a bounded while) until `done` holds.
+async fn until(mut done: impl FnMut() -> bool) {
+    for _ in 0..600 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("never happened");
+}
+
+fn reels_stored(w: &World) -> Vec<Material> {
+    w.uow
+        .snapshot()
+        .materials
+        .materials
+        .into_iter()
+        .filter(|m| m.composition.is_some())
+        .collect()
+}
+
+/// A call that goes away mid-render (its client disconnected) does not lose the reel: the
+/// render goes on detached, the reel and its receipt are stored, and the key's replay answers
+/// it without a second render.
+#[tokio::test]
+async fn a_reel_whose_caller_went_away_is_stored_and_replayed() {
+    let (w, gated) = gated_world().await;
+    let o = olay(&w).await;
+    let ps = photos(&w, "p", o).await;
+    let call = {
+        let (d, ctx, input) = (w.d.clone(), w.ctx.clone(), request("gone", &ids(&ps)));
+        tokio::spawn(async move { reel::reel_render(&d, &ctx, input).await })
+    };
+    until(|| gated.reels.load(std::sync::atomic::Ordering::SeqCst) == 1).await;
+    // The client disconnects: the call's future is dropped mid-render.
+    call.abort();
+    let _ = call.await;
+    gated.gate.add_permits(8);
+    until(|| reels_stored(&w).len() == 1).await;
+    let again = render(&w, "gone", &ids(&ps)).await.unwrap();
+    assert_eq!(again.material.id, reels_stored(&w)[0].id);
+    assert_eq!(gated.reels.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// Two calls with one key while its reel is being made: one render, both answered with it. A
+/// different input under that key is refused while it renders, as it is once stored.
+#[tokio::test]
+async fn one_key_renders_once_and_refuses_another_input_meanwhile() {
+    let (w, gated) = gated_world().await;
+    let o = olay(&w).await;
+    let ps = photos(&w, "p", o).await;
+    let spawn = |input: reel::ReelRenderInput| {
+        let (d, ctx) = (w.d.clone(), w.ctx.clone());
+        tokio::spawn(async move { reel::reel_render(&d, &ctx, input).await })
+    };
+    let first = spawn(request("twice", &ids(&ps)));
+    until(|| gated.reels.load(std::sync::atomic::Ordering::SeqCst) == 1).await;
+    let second = spawn(request("twice", &ids(&ps)));
+    let mut other = request("twice", &ids(&ps));
+    other.photo_ms = Some(3000);
+    let e = reel::reel_render(&w.d, &w.ctx, other).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict);
+    gated.gate.add_permits(8);
+    let (a, b) = (
+        first.await.unwrap().unwrap(),
+        second.await.unwrap().unwrap(),
+    );
+    assert_eq!(a.material.id, b.material.id);
+    assert_eq!(gated.reels.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(reels_stored(&w).len(), 1);
+}

@@ -20,7 +20,8 @@ mod text;
 
 use async_trait::async_trait;
 use jt_app::ports::compose::{
-    ComposeError, ComposeJob, Composed, Compositor, ReelJob, RenderTicket, RenderedReel,
+    ComposeError, ComposeJob, Composed, Compositor, ReelJob, ReelPhotoBytes, RenderTicket,
+    RenderedReel,
 };
 use jt_studio::compose::SlotKind;
 use std::sync::Arc;
@@ -123,7 +124,11 @@ impl Renderer {
 
     /// Renders the reel `job` on the calling thread within the reel time limit (what
     /// [`Compositor::render_reel`] runs on the blocking pool).
-    pub fn render_reel_blocking(&self, job: ReelJob) -> Result<RenderedReel, ComposeError> {
+    pub fn render_reel_blocking(
+        &self,
+        job: ReelJob,
+        photos: &mut dyn ReelPhotoBytes,
+    ) -> Result<RenderedReel, ComposeError> {
         let fonts = self
             .fonts
             .as_ref()
@@ -132,6 +137,7 @@ impl Renderer {
         reel::render(
             fonts,
             job,
+            photos,
             &self.limits.decode,
             &self.limits.reel.encode,
             deadline,
@@ -272,6 +278,7 @@ impl Compositor for Renderer {
         &self,
         ticket: RenderTicket,
         job: ReelJob,
+        mut photos: Box<dyn ReelPhotoBytes>,
     ) -> Result<RenderedReel, ComposeError> {
         let fonts = self
             .fonts
@@ -284,7 +291,14 @@ impl Compositor for Renderer {
             // The turn is held until the reel is encoded; the time limit counts from here.
             let _ticket = ticket;
             let deadline = std::time::Instant::now() + limits.reel.time_limit;
-            reel::render(&fonts, job, &limits.decode, &limits.reel.encode, deadline)
+            reel::render(
+                &fonts,
+                job,
+                photos.as_mut(),
+                &limits.decode,
+                &limits.reel.encode,
+                deadline,
+            )
         })
         .await
         .map_err(|e| ComposeError::Internal(format!("reel task failed: {e}")))?;

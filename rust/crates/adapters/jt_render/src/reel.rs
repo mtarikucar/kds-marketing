@@ -13,7 +13,9 @@ use crate::h264::{EncodeLimits, H264};
 use crate::layout::{Canvas, Ground};
 use crate::raster::{self, Fit, Limits as DecodeLimits};
 use crate::text::{self, Align};
-use jt_app::ports::compose::{ComposeError, ComposeJob, OutputFormat, ReelJob, RenderedReel};
+use jt_app::ports::compose::{
+    ComposeError, ComposeJob, OutputFormat, ReelJob, ReelPhotoBytes, RenderedReel,
+};
 use jt_studio::compose::{BrandTokens, Color, FontRole, Role, Template, reel, template};
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -296,9 +298,9 @@ impl Drawer<'_> {
         Ok(c.pixmap)
     }
 
-    /// Prepares part `kind`: a card is drawn, a photo decoded, reduced to its working copy and
-    /// its source dropped.
-    fn part(&self, kind: &Kind, bytes: &mut [Option<Vec<u8>>]) -> Result<Part, ComposeError> {
+    /// Prepares part `kind`: a card is drawn; a photo's bytes are read now (never before its
+    /// part), decoded, reduced to its working copy, and both dropped.
+    fn part(&self, kind: &Kind, photos: &mut dyn ReelPhotoBytes) -> Result<Part, ComposeError> {
         match kind {
             Kind::Title => {
                 let text = self.job.title.as_deref().unwrap_or_default();
@@ -308,9 +310,13 @@ impl Drawer<'_> {
             Kind::Photo(i) => {
                 let p = &self.job.photos[*i];
                 let field = format!("photos.{i}.material_id");
-                let encoded = bytes[*i]
-                    .take()
-                    .ok_or_else(|| ComposeError::Internal("a reel photo is drawn twice".into()))?;
+                let encoded = photos.read(*i).map_err(|e| match e {
+                    ComposeError::Internal(reason) => ComposeError::Image {
+                        slot: field.clone(),
+                        reason,
+                    },
+                    other => other,
+                })?;
                 let (ww, wh) = (
                     (W as f32 * (1.0 + ZOOM)).ceil() as u32,
                     (H as f32 * (1.0 + ZOOM)).ceil() as u32,
@@ -318,7 +324,7 @@ impl Drawer<'_> {
                 let mut work = Pixmap::new(ww, wh)
                     .ok_or_else(|| ComposeError::Internal("cannot allocate a frame".into()))?;
                 {
-                    let source = raster::decode(&encoded, &p.image.mime, &field, self.limits)?;
+                    let source = raster::decode(&encoded, &p.mime, &field, self.limits)?;
                     drop(encoded);
                     work.fill(raster::color(self.job.brand.ink, 1.0));
                     raster::draw_image(
@@ -326,7 +332,7 @@ impl Drawer<'_> {
                         &source,
                         (0.0, 0.0, ww as f32, wh as f32),
                         0.0,
-                        p.image.focus,
+                        p.focus,
                         Fit::Cover,
                     );
                 }
@@ -495,7 +501,8 @@ fn draw_frame(shots: &[(Shot<'_>, u32)], a: &mut [u8], b: &mut [u8], yuv: &mut [
 /// encodes the previous one: three frame buffers circulate between them, no more.
 pub(crate) fn render(
     fonts: &FontSet,
-    mut job: ReelJob,
+    job: ReelJob,
+    photos: &mut dyn ReelPhotoBytes,
     limits: &DecodeLimits,
     encode: &EncodeLimits,
     deadline: Instant,
@@ -516,12 +523,6 @@ pub(crate) fn render(
     }
     let t = reel_template()?;
     measure(fonts, &t, &job)?;
-    // The photos' encoded bytes move out of the job: each is dropped once decoded.
-    let mut bytes: Vec<Option<Vec<u8>>> = job
-        .photos
-        .iter_mut()
-        .map(|p| Some(std::mem::take(&mut p.image.bytes)))
-        .collect();
     let title = job.title.is_some();
     let closing =
         job.closing_heading.is_some() || job.closing_site.is_some() || job.closing_slogan.is_some();
@@ -561,7 +562,7 @@ pub(crate) fn render(
     let mut drawing = std::time::Duration::ZERO;
     std::thread::scope(|s| {
         let encoder = s.spawn(move || {
-            let mut h264 = H264::new(W, H, reel::FPS, &encode)?;
+            let mut h264 = H264::new(W, H, reel::FPS, total, &encode)?;
             let mut encoding = std::time::Duration::ZERO;
             for frame in frames_in {
                 let began = Instant::now();
@@ -588,7 +589,7 @@ pub(crate) fn render(
                         continue;
                     }
                     if live[k].is_none() {
-                        live[k] = Some(drawer.part(kind, &mut bytes)?);
+                        live[k] = Some(drawer.part(kind, &mut *photos)?);
                     }
                     let p = (f - start) as f32 / (len - 1).max(1) as f32;
                     // The incoming part fades in over the crossfade.

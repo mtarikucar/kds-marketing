@@ -29,7 +29,8 @@ pub struct EncodeLimits {
     pub draw_threads: usize,
     /// The target bit rate.
     pub bitrate: u32,
-    /// The largest encoded stream kept, in bytes; past it the reel is refused.
+    /// The largest encoded stream kept, in bytes; past it the reel is refused. The longest reel
+    /// at the target rate is about 25 MB.
     pub max_bytes: usize,
 }
 
@@ -39,7 +40,7 @@ impl Default for EncodeLimits {
             threads: 1,
             draw_threads: 2,
             bitrate: 6_000_000,
-            max_bytes: 80_000_000,
+            max_bytes: 48_000_000,
         }
     }
 }
@@ -56,7 +57,11 @@ pub(crate) struct H264 {
     gop: u32,
     sps: Option<Vec<u8>>,
     pps: Option<Vec<u8>>,
+    /// The file being written: room for its header first (`reserved` bytes, then the `mdat`
+    /// box's 8), then the samples as they are encoded. The header is written into that room at
+    /// the end, so the stream is never copied.
     media: Vec<u8>,
+    reserved: usize,
     sizes: Vec<u32>,
     sync: Vec<u32>,
     max_bytes: usize,
@@ -99,6 +104,7 @@ impl H264 {
         width: u32,
         height: u32,
         fps: u32,
+        frames: u32,
         limits: &EncodeLimits,
     ) -> Result<Self, ComposeError> {
         let gop = fps * 2;
@@ -120,6 +126,13 @@ impl H264 {
         let encoder = Encoder::with_api_config(OpenH264API::from_source(), config)
             .map_err(|e| failed("cannot start the H.264 encoder", e))?;
         let (w, h) = (width as usize, height as usize);
+        let reserved = crate::mp4::header_room(width, height, frames);
+        // Room for the whole stream at once (half again the target rate's length), within the
+        // cap: the buffer seldom has to grow, and growing would copy it.
+        let expected = u64::from(limits.bitrate) / 8 * u64::from(frames) / u64::from(fps.max(1));
+        let capacity = (expected as usize * 3 / 2).min(limits.max_bytes) + reserved + 8;
+        let mut media = Vec::with_capacity(capacity);
+        media.resize(reserved + 8, 0);
         Ok(Self {
             encoder,
             width: w,
@@ -128,7 +141,8 @@ impl H264 {
             gop,
             sps: None,
             pps: None,
-            media: Vec::new(),
+            media,
+            reserved,
             sizes: Vec::new(),
             sync: Vec::new(),
             max_bytes: limits.max_bytes,
@@ -217,7 +231,10 @@ impl H264 {
             sync: self.sync,
             chunk_samples: self.fps,
         };
-        Ok((crate::mp4::write(&track, self.media), frames))
+        Ok((
+            crate::mp4::finish(&track, self.media, self.reserved),
+            frames,
+        ))
     }
 }
 

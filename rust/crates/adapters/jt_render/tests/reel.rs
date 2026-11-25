@@ -3,7 +3,7 @@
 //! the expected length; texts that do not fit are refused before anything is encoded, naming
 //! their field; the time limit stops a render; reels wait in their own bounded queue.
 use image::{ImageBuffer, Rgb, RgbImage};
-use jt_app::ports::compose::{ComposeError, Compositor, ReelJob, ReelPhoto, SourceImage};
+use jt_app::ports::compose::{ComposeError, Compositor, ReelJob, ReelPhoto, ReelPhotoBytes};
 use jt_render::{Limits, ReelLimits, Renderer};
 use jt_studio::compose::{BrandTokens, reel};
 use std::io::Cursor;
@@ -59,15 +59,30 @@ fn numbered(n: u8, w: u32, h: u32) -> Vec<u8> {
     out.into_inner()
 }
 
+/// `n` numbered test photos, in memory.
+fn photos(n: usize) -> Vec<Vec<u8>> {
+    (0..n).map(|i| numbered(i as u8 + 1, 1600, 1200)).collect()
+}
+
+/// Photos made only when the renderer asks for each, as a store reads them: a measurement sees
+/// what the renderer holds, not the test's photos.
+struct Made {
+    width: u32,
+    height: u32,
+}
+
+impl ReelPhotoBytes for Made {
+    fn read(&mut self, index: usize) -> Result<Vec<u8>, ComposeError> {
+        Ok(numbered(index as u8 + 1, self.width, self.height))
+    }
+}
+
 fn job(photos: usize) -> ReelJob {
     ReelJob {
         photos: (0..photos)
             .map(|i| ReelPhoto {
-                image: SourceImage {
-                    bytes: numbered(i as u8 + 1, 1600, 1200),
-                    mime: "image/jpeg".into(),
-                    focus: (0.5, 0.5),
-                },
+                mime: "image/jpeg".into(),
+                focus: (0.5, 0.5),
                 caption: Some(format!("Adım {}: tezgâhta özenle hazırlanıyor", i + 1)),
             })
             .collect(),
@@ -103,13 +118,15 @@ fn top(file: &[u8]) -> Vec<[u8; 4]> {
 #[test]
 fn a_reel_is_a_fast_start_h264_mp4_of_its_length() {
     let renderer = Renderer::new(Limits::default());
-    let out = renderer.render_reel_blocking(job(3)).expect("reel");
+    let out = renderer
+        .render_reel_blocking(job(3), &mut photos(3))
+        .expect("reel");
     assert_eq!(out.mime, "video/mp4");
     assert_eq!((out.width, out.height, out.fps), (1080, 1920, 30));
     let parts = reel::parts(3, reel::DEFAULT_PHOTO_MS, true, true);
     assert_eq!(out.frames, reel::total_frames(&parts));
     assert_eq!(out.duration_ms, reel::duration_ms(out.frames));
-    assert_eq!(top(&out.bytes), [*b"ftyp", *b"moov", *b"mdat"]);
+    assert_eq!(top(&out.bytes), [*b"ftyp", *b"moov", *b"free", *b"mdat"]);
     // The SPS in avcC: Constrained Baseline (66, constraint_set1) at level 4.0.
     let at = out.bytes.windows(4).position(|w| w == b"avcC").unwrap() + 4;
     assert_eq!(out.bytes[at], 1);
@@ -130,14 +147,14 @@ fn a_text_that_does_not_fit_is_refused_naming_its_field() {
     let mut j = job(3);
     // Short enough for max_chars, too wide for three lines at the caption's size.
     j.photos[1].caption = Some("WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW WWWW".into());
-    match renderer.render_reel_blocking(j) {
+    match renderer.render_reel_blocking(j, &mut photos(3)) {
         Err(ComposeError::Overflow { slot, .. }) => assert_eq!(slot, "photos.1.text"),
         Err(e) => panic!("{e:?}"),
         Ok(_) => panic!("rendered"),
     }
     let mut j = job(3);
     j.closing_site = Some("WWWWWWWWWWWWWWWWWWWWWWWWWWW".into());
-    match renderer.render_reel_blocking(j) {
+    match renderer.render_reel_blocking(j, &mut photos(3)) {
         Err(ComposeError::Overflow {
             slot,
             word_too_wide,
@@ -161,7 +178,7 @@ fn the_time_limit_stops_a_render() {
         ..Limits::default()
     });
     assert!(matches!(
-        renderer.render_reel_blocking(job(3)),
+        renderer.render_reel_blocking(job(3), &mut photos(3)),
         Err(ComposeError::TimedOut)
     ));
 }
@@ -169,9 +186,9 @@ fn the_time_limit_stops_a_render() {
 #[test]
 fn an_unreadable_photo_is_refused_naming_it() {
     let renderer = Renderer::new(Limits::default());
-    let mut j = job(3);
-    j.photos[2].image.bytes = b"not an image".to_vec();
-    match renderer.render_reel_blocking(j) {
+    let mut bytes = photos(3);
+    bytes[2] = b"not an image".to_vec();
+    match renderer.render_reel_blocking(job(3), &mut bytes) {
         Err(ComposeError::Image { slot, .. }) => assert_eq!(slot, "photos.2.material_id"),
         Err(e) => panic!("{e:?}"),
         Ok(_) => panic!("rendered"),
@@ -220,7 +237,16 @@ fn sample() {
     {
         j.photo_ms = ms;
     }
-    let out = renderer.render_reel_blocking(j).expect("reel");
+    // `JT_REEL_SAMPLE_PX`: the photos' long side (6000 makes 24 MP camera-sized photos).
+    let long: u32 = std::env::var("JT_REEL_SAMPLE_PX")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1600);
+    let mut made = Made {
+        width: long,
+        height: long * 2 / 3,
+    };
+    let out = renderer.render_reel_blocking(j, &mut made).expect("reel");
     let elapsed = started.elapsed();
     std::fs::write(&path, &out.bytes).expect("write sample");
     println!(

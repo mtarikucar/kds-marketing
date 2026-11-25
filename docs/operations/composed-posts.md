@@ -232,6 +232,10 @@ chip sits on every photo, an optional title card opens it and an optional closin
 site, slogan) ends it. It is made the way a slide is: from the workspace's own analysed photos,
 with texts drawn by the server exactly as given, in the brand tokens.
 
+A reel published by the server through the platforms' APIs goes out without sound: the file has
+no audio track. Music can be added only when a person posts it by hand in the Instagram or TikTok
+app.
+
 ```text
 jeeta.studio.post_templates {}          -> reel: limits and text slots
 jeeta.studio.reel_render {
@@ -266,8 +270,8 @@ atom at the front and no edit lists, H.264 or HEVC, progressive scan, closed GOP
 60 fps, at most 1920 px wide, 3 s to 15 min and at most 300 MB; it describes the audio codec
 (AAC) but does not require an audio track. TikTok's Content Posting API takes MP4 (recommended),
 H.264 (recommended), 23 to 60 fps, 360 to 4096 px a side, up to 10 minutes and 4 GB, and states no
-audio requirement. So the reel has no audio track, not a silent one: the owner adds music in the
-Instagram or TikTok app. Only a real upload proves that a platform accepts it.
+audio requirement. So the reel has no audio track, not a silent one. Only a real upload proves
+that a platform accepts it.
 
 ### Limits and texts
 
@@ -297,12 +301,12 @@ TikTok draw the account, the caption, the sound and the buttons.
 | `VALIDATION` | `text_overflow`, `invalid_text`, `empty_text`, `unsupported_character` | shorten or fix the named text |
 | `VALIDATION` | `photo_ms_out_of_range`, `focus_out_of_range`, `title_invalid` | fix the value |
 | `VALIDATION` | `source_erased`, `source_unfiled`, `source_not_image`, `source_not_shareable`, `source_too_large`, `source_restricted`, `source_not_freed`, `mixed_olays` | as for a slide's photo; a video, a reel included, is no photo |
-| `VALIDATION` | `sources_too_large` | the photos and the logo take at most 100 MB stored, together |
 | `VALIDATION` | `source_unreadable` | the named photo cannot be decoded |
 | `CONFLICT` | `source_not_analysed` (`retryable: true`, `unanalysed_material_id`) | analyse it, then call again |
 | `CONFLICT` | `source_not_in_area` (`details.missing`) | add the photos to the area, or use its own |
 | `CONFLICT` | `render_erased`, `brand_logo_changed`, `duplicate_material_file`, another input under the key | as for a slide |
 | `UPSTREAM_UNAVAILABLE` | `renderer_busy` | a reel is rendering and two wait already, or the wait passed 90 s: try again shortly |
+| `UPSTREAM_UNAVAILABLE` | `reel_rendering` (`retryable: true`, `retry_after_seconds`) | the reel is still being made (a call waits up to 50 s): call again with the **same** `request_key` and the same input to get it, never a new key |
 | `UPSTREAM_UNAVAILABLE` | `render_timed_out` | the render passed its 150 s limit and was stopped; nothing was stored |
 
 ### What a reel becomes
@@ -320,8 +324,20 @@ source, stays behind the publication fence, and is an area's while all its photo
 aside). The same request key answers the same reel again.
 
 A reel's composition names a role (`reel`) and a frame (`reel`) that a build before photo reels
-does not read: rolling the server back past this release after reels were made breaks reading
-the library until it is rolled forward again.
+does not know. Builds from the forward-compatible composition release on read such values, keep
+them unchanged and apply every composition rule to the material (they only never draw from it),
+so rolling back to such a build after reels were made is safe; rolling back further is not.
+
+### One reel per key, even when the caller goes away
+
+A reel is made by a task of its own, detached from the call: a caller that disconnects (an agent
+timing out, a proxy closing the connection) does not stop it, and the reel and its receipt are
+stored when it ends. While it is being made, another call with the same `request_key` and input
+waits for that reel instead of making a second one (another input under the key is `CONFLICT`,
+as it is once stored). A call waits up to 50 s, then answers `UPSTREAM_UNAVAILABLE`
+`reel_rendering` with `retryable: true` and `retry_after_seconds`; calling again with the same
+key then answers the stored reel. A server restart during a render loses it: the key then
+renders again.
 
 ### The three paths
 
@@ -350,27 +366,53 @@ On a TikTok account the format is `tiktok_video`. A reel is also a valid Instagr
 
 ### On the server
 
-The video is encoded by OpenH264 (Cisco's encoder, BSD-2-Clause), compiled from its source into
-the `jeeta` binary by the `openh264` crate: nothing is installed on the host, no ffmpeg is used,
-and no Cisco-provided binary is downloaded or loaded. The MP4 container is written by `jt_render`
-itself. Cisco's patent coverage applies only to its own binary (and only for personal,
-non-remunerated use), so a commercial deployment's H.264 patent position (the Via LA AVC pool) is
-the operator's to settle, whichever encoder is used.
+The video is encoded by OpenH264 (Cisco's encoder, BSD-2-Clause, notice in
+[`licenses/OpenH264-BSD-2-Clause.txt`](licenses/OpenH264-BSD-2-Clause.txt)), compiled from its
+source into the `jeeta` binary by the `openh264` crate: nothing is installed on the host, no
+ffmpeg is used, and no Cisco-provided binary is downloaded or loaded. The MP4 container is written
+by `jt_render` itself.
+
+**The H.264 patent position is the operator's decision.** The BSD licence covers OpenH264's code,
+not the patents of the H.264 standard. Cisco's patent coverage applies only to the binary Cisco
+distributes, and only for personal or non-remunerated use, so it covers neither a source build
+nor a commercial service. Any H.264 encoder, ffmpeg included, raises the same question, and
+Instagram Reels take only H.264 or HEVC. Whether to take a licence from the Via LA AVC pool
+(which has a royalty-free tier for small volumes) is for whoever runs the service to settle.
+
+OpenH264 uses its SIMD assembly when `nasm` is present at build time and silently builds plain C
+otherwise, about three times slower. The CI test and release jobs install `nasm` (a build tool;
+nothing on the host), and the release packager (`scripts/package-release.py`) refuses a build
+whose encoder lacks the assembled objects, so a release never runs the slow build unnoticed.
 
 One reel renders at a time, in a queue of its own, so slides and stories are not held up; at most
-two wait, each up to 90 s, and a render is stopped past 150 s. It runs on the blocking thread
-pool with two encoder threads. A reel waiting for its turn holds no photo. Every text is measured
-before any photo is decoded. Each photo is decoded only when its part begins, reduced at once to
-a working copy 12 % larger than the frame (about 10 MB), and its encoded bytes and decoded pixels
-are dropped there; at most two parts are held at once (during a crossfade), and each frame is
-converted and encoded as soon as it is drawn: no frame is kept. The encoded stream is kept until
-it is stored, at most 80 MB (a 33 s reel is about 20 MB).
+two wait, each up to 90 s, and a render is stopped past 150 s. The render runs on the blocking
+thread pool: each frame is drawn and converted to YUV in two bands on two threads while the
+encoder, on a third, encodes the frame before. A reel waiting for its turn holds no photo.
 
-Each frame is drawn and converted to YUV in two bands on two threads while the encoder, on a
-third, encodes the frame before; three frame buffers circulate between them. OpenH264 uses its
-SIMD assembly when `nasm` is present at build time (the CI test and release jobs install it; it
-is a build tool, nothing on the host) and plain C otherwise, several times slower. Measured on a
-8-thread laptop, release build with the assembly: 8 photos at 3 s with both cards (24.9 s, 747
-frames) in 21.7 s, peak 132 MB for the whole process; 8 photos at 4 s with both cards (32.9 s,
-987 frames, the longest) in 28 s, peak 136 MB. Built without the assembly, the longest took
-76 s (the same file, bit for bit), still inside the 150 s limit.
+Memory, by construction:
+
+- Every text is measured before any photo is read.
+- A photo's stored bytes are read only when its part begins (never all at once), decoded, reduced
+  at once to a working copy 12 % larger than the frame (about 10 MB), and both dropped there.
+- At most two parts are held (during a crossfade): two working copies and two overlays.
+- Two RGBA frames of scratch and three YUV frames circulate between drawing and the encoder; no
+  frame is kept.
+- The encoded stream is written once into a buffer that keeps room for the MP4 header at its
+  front: the header is written there at the end (a `free` box fills what is left), so the stream
+  is never copied. It is at most 48 MB; the longest reel at the target rate is about 25 MB.
+
+Worst case of one reel while it renders, derived from those bounds: the encoded stream (48 MB)
++ one photo's stored bytes (25 MB) + the logo's stored bytes (25 MB) + one decode at a time,
+of a photo or of the logo (100 MB of pixels at the decode limit plus up to about 72 MB of a
+progressive JPEG decoder's buffers) + working copies and overlays (2 x 10.4 + 2 x 8.3 MB) +
+frames (2 x 8.3 + 3 x 3.1 MB) + the encoder's own buffers (a few frames, about 30 MB):
+about 365 MB, reached only with 24-megapixel progressive JPEG sources and a 25 MB logo. A typical
+reel of 12-megapixel baseline JPEGs stays near 150 MB. Storing the finished file afterwards
+holds it (and the check that reads it back) at once, at most 2 x 48 MB, after the render's
+memory is freed.
+
+Measured on an 8-thread laptop, release build with the assembly, before the photos were read
+lazily (all 8 generated 1600 x 1200 photos held from the start): 8 photos at 3 s with both cards
+(24.9 s, 747 frames) in 21.7 s, peak 132 MB for the whole process; 8 photos at 4 s with both
+cards (32.9 s, 987 frames, the longest) in 28 s, peak 136 MB. Built without the assembly, the
+longest took 76 s (the same file, bit for bit), still inside the 150 s limit.

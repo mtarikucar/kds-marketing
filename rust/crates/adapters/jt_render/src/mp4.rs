@@ -274,6 +274,53 @@ fn moov(t: &Track, base: u64) -> Vec<u8> {
     boxed(b"moov", &concat(&[full(b"mvhd", 0, 0, &mvhd.done()), trak]))
 }
 
+/// The most room a header for `frames` samples takes: `ftyp`, then `moov` as if every sample were
+/// its own chunk and a sync sample and each parameter set 256 bytes, then a `free` box's header.
+pub(crate) fn header_room(width: u32, height: u32, frames: u32) -> usize {
+    let t = Track {
+        width,
+        height,
+        timescale: 1,
+        sample_delta: 1,
+        sps: vec![0; 256],
+        pps: vec![0; 256],
+        sizes: vec![0; frames as usize],
+        sync: (1..=frames).collect(),
+        chunk_samples: 1,
+    };
+    // `stsc` may take a second entry (12 bytes) that this layout does not.
+    ftyp().len() + moov(&t, 0).len() + 8 + 16
+}
+
+/// Completes a file written into `media`, whose first `reserved + 8` bytes were left for the
+/// header and the samples follow: `ftyp` and `moov` are written at its start, a `free` box fills
+/// the rest of the room, then the `mdat` header. Nothing is copied but the header.
+pub(crate) fn finish(t: &Track, mut media: Vec<u8>, reserved: usize) -> Vec<u8> {
+    let header = [ftyp(), moov(t, (reserved + 8) as u64)].concat();
+    let gap = reserved.checked_sub(header.len());
+    match gap {
+        Some(gap) if gap == 0 || gap >= 8 => {
+            media[..header.len()].copy_from_slice(&header);
+            if gap > 0 {
+                let at = header.len();
+                media[at..at + 4].copy_from_slice(&(gap as u32).to_be_bytes());
+                media[at + 4..at + 8].copy_from_slice(b"free");
+                media[at + 8..reserved].fill(0);
+            }
+            let size = (media.len() - reserved) as u32;
+            media[reserved..reserved + 4].copy_from_slice(&size.to_be_bytes());
+            media[reserved + 4..reserved + 8].copy_from_slice(b"mdat");
+            media
+        }
+        // The room was too small (not expected): the samples are copied behind a header.
+        _ => {
+            let samples = media.split_off(reserved + 8);
+            drop(media);
+            write(t, samples)
+        }
+    }
+}
+
 /// The whole file: `ftyp`, `moov`, then `mdat` holding `media` (the samples, in order).
 pub(crate) fn write(t: &Track, media: Vec<u8>) -> Vec<u8> {
     let ftyp = ftyp();
@@ -324,6 +371,46 @@ mod tests {
             at += size.max(8);
         }
         None
+    }
+
+    #[test]
+    fn a_file_finished_in_place_is_the_file_written_whole_with_a_free_box() {
+        let sizes: Vec<u32> = (0..75).map(|i| 10 + i % 7).collect();
+        let mut samples = Vec::new();
+        for (i, s) in sizes.iter().enumerate() {
+            samples.extend_from_slice(&(i as u32).to_be_bytes());
+            samples.extend(std::iter::repeat_n(0xcd, *s as usize - 4));
+        }
+        let t = Track {
+            width: 1080,
+            height: 1920,
+            timescale: 15360,
+            sample_delta: 512,
+            sps: vec![0x67, 66, 0xc0, 40, 1, 2],
+            pps: vec![0x68, 3],
+            sizes: sizes.clone(),
+            sync: vec![1, 61],
+            chunk_samples: 30,
+        };
+        let reserved = header_room(1080, 1920, 75);
+        let mut media = vec![0u8; reserved + 8];
+        media.extend_from_slice(&samples);
+        let file = finish(&t, media, reserved);
+        let boxes = top(&file);
+        let kinds: Vec<_> = boxes.iter().map(|b| b.0).collect();
+        assert_eq!(kinds, [*b"ftyp", *b"moov", *b"free", *b"mdat"]);
+        let moov = &file[boxes[1].1 + 8..boxes[1].1 + boxes[1].2];
+        let stco = find(moov, &[b"trak", b"mdia", b"minf", b"stbl", b"stco"]).unwrap();
+        for (chunk, first) in [0u32, 30, 60].into_iter().enumerate() {
+            let off = u32::from_be_bytes(stco[8 + chunk * 4..12 + chunk * 4].try_into().unwrap())
+                as usize;
+            assert_eq!(
+                u32::from_be_bytes(file[off..off + 4].try_into().unwrap()),
+                first
+            );
+        }
+        // The samples are where the index says, unchanged.
+        assert_eq!(&file[file.len() - samples.len()..], &samples[..]);
     }
 
     #[test]

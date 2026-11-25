@@ -17,7 +17,7 @@ use crate::{
     error::AppError,
     ports::{
         TenantRepos,
-        compose::{ReelJob, ReelPhoto, RenderedReel, SourceImage},
+        compose::{ComposeError, ReelJob, ReelPhoto, ReelPhotoBytes, RenderedReel, SourceImage},
         files::StoredFile,
         materials::{Material, MaterialId, Origin},
     },
@@ -32,10 +32,6 @@ use jt_tenancy::Permission;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-
-/// The most a reel's sources (its photos and the logo) may take stored, together: they are read
-/// before the render, and each is dropped once decoded.
-pub const REEL_SOURCES_BYTES_LIMIT: u64 = 100_000_000;
 
 const USE_CASE: &str = "studio.reel_render";
 
@@ -121,7 +117,7 @@ struct ReelReceipt {
     reused: bool,
 }
 
-const NEXT: &str = "Content area: jeeta.content.area_deliver with versions [{format: \"reel\" (Instagram) or \"tiktok_video\" (TikTok), material_ids: [material.id], ...}] (render with the area's project_id). Post request: jeeta.studio.posts_propose with posts [{format: \"reel\" or \"tiktok_video\", material_ids: [material.id], ...}]. Planned slot (reel or TikTok video): jeeta.studio.piece_submit with media [{\"kind\": \"file\", \"id\": file.id}]. The video has no audio track: the owner adds music in the app when posting.";
+const NEXT: &str = "Content area: jeeta.content.area_deliver with versions [{format: \"reel\" (Instagram) or \"tiktok_video\" (TikTok), material_ids: [material.id], ...}] (render with the area's project_id). Post request: jeeta.studio.posts_propose with posts [{format: \"reel\" or \"tiktok_video\", material_ids: [material.id], ...}]. Planned slot (reel or TikTok video): jeeta.studio.piece_submit with media [{\"kind\": \"file\", \"id\": file.id}]. The video has no audio track: published by the server it goes out without sound; music can be added only when a person posts it by hand in the app.";
 
 fn slot(key: &str) -> Result<SlotSpec, AppError> {
     template(Role::Reel, reel::VARIANT)
@@ -234,28 +230,6 @@ async fn sources(
     Ok((photos, logo))
 }
 
-/// The sources' stored bytes together are at most [`REEL_SOURCES_BYTES_LIMIT`].
-async fn within_bytes(
-    r: &mut dyn TenantRepos,
-    photos: &[Material],
-    logo: Option<&Material>,
-) -> Result<(), AppError> {
-    let mut total = 0u64;
-    for m in photos.iter().chain(logo) {
-        if let Some(f) = r.studio().get_file(m.file_id).await? {
-            total += f.size_bytes;
-        }
-    }
-    if total > REEL_SOURCES_BYTES_LIMIT {
-        return Err(AppError::validation(
-            "a reel's photos take at most 100 MB stored together; use smaller copies or fewer photos",
-            json!({"field":"photos","reason":"sources_too_large","bytes":total,
-                   "max_bytes":REEL_SOURCES_BYTES_LIMIT}),
-        ));
-    }
-    Ok(())
-}
-
 fn answer(
     file: StoredFile,
     material: Material,
@@ -314,8 +288,58 @@ async fn read_receipt(
     ))
 }
 
+/// How long a call waits for its reel before it answers that the reel is still rendering
+/// (`UPSTREAM_UNAVAILABLE` `reel_rendering`, retryable): short enough that a proxy in front of
+/// the server does not cut the call first. The render goes on, and the same key answers it.
+pub const REEL_WAIT: std::time::Duration = std::time::Duration::from_secs(50);
+
+/// A reel being made: its input's digest and where its outcome is announced.
+struct Running {
+    payload: Value,
+    done: tokio::sync::watch::Receiver<Option<Result<ReelRenderOut, AppError>>>,
+}
+
+/// The store (the unit of work's address), the workspace and the request key of a reel.
+type RunKey = (usize, uuid::Uuid, String);
+
+/// The reels being made in this process, by key. A reel is made by a task of its own, detached
+/// from the call that asked for it: a caller that goes away does not stop it, and its outcome
+/// (the stored reel and its receipt, or its error) is announced to every call waiting on the key.
+fn running() -> &'static std::sync::Mutex<std::collections::HashMap<RunKey, Running>> {
+    static RUNNING: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<RunKey, Running>>,
+    > = std::sync::OnceLock::new();
+    RUNNING.get_or_init(Default::default)
+}
+
+/// Takes a reel's key off the running list when its task ends, however it ends.
+struct Registered(RunKey);
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        if let Ok(mut map) = running().lock() {
+            map.remove(&self.0);
+        }
+    }
+}
+
+/// Waits (at most [`REEL_WAIT`]) for the reel announced on `done`.
+async fn wait(
+    mut done: tokio::sync::watch::Receiver<Option<Result<ReelRenderOut, AppError>>>,
+) -> Result<ReelRenderOut, AppError> {
+    match tokio::time::timeout(REEL_WAIT, done.wait_for(Option::is_some)).await {
+        Ok(Ok(outcome)) => outcome.clone().expect("announced"),
+        Ok(Err(_)) => Err(AppError::internal("the reel's render stopped")),
+        Err(_) => Err(AppError {
+            code: crate::error::ErrorCode::UpstreamUnavailable,
+            message: "the reel is still rendering; call again with the same request_key and the same input in about 30 seconds to get it".into(),
+            details: json!({"reason":"reel_rendering","retryable":true,"retry_after_seconds":30}),
+        }),
+    }
+}
+
 /// Renders a photo reel and adds it to the library (see the module documentation). Replayed by
-/// `request_key`.
+/// `request_key`; a key whose reel is being made waits for that reel instead of making another.
 pub async fn reel_render(
     d: &Deps,
     ctx: &Ctx,
@@ -325,6 +349,16 @@ pub async fn reel_render(
     key(&i.request_key)?;
     let photo_ms = checked(&i)?;
     let payload = json!(crate::usecases::hash_token(&encode(&i)?.to_string()));
+    let run_key: RunKey = (
+        std::sync::Arc::as_ptr(&d.uow) as *const () as usize,
+        ctx.workspace_id.0,
+        i.request_key.clone(),
+    );
+    // The same key already being made: wait for that reel (another input under it is refused,
+    // as a stored receipt refuses it).
+    if let Some(done) = joined(&run_key, &payload)? {
+        return wait(done).await;
+    }
     let mut r = open(d, ctx, Permission::ContentWork).await?;
     if let Some(v) = r
         .studio()
@@ -335,27 +369,107 @@ pub async fn reel_render(
     }
     let stored = r.studio_materials().brand().await?;
     let tokens = stored.map(|b| b.tokens).unwrap_or_default();
-    let (brand, mut fallbacks) = tokens.effective();
-    let (photos, logo) = sources(r.as_mut(), &i, &brand, &mut fallbacks, ctx.now).await?;
-    derive(&photos, logo.as_ref())?;
-    in_area(r.as_mut(), i.project_id, &photos).await?;
-    within_bytes(r.as_mut(), &photos, logo.as_ref()).await?;
+    let (brand, fallbacks) = {
+        let (brand, mut fallbacks) = tokens.effective();
+        let (photos, logo) = sources(r.as_mut(), &i, &brand, &mut fallbacks, ctx.now).await?;
+        derive(&photos, logo.as_ref())?;
+        in_area(r.as_mut(), i.project_id, &photos).await?;
+        (brand, fallbacks)
+    };
     drop(r);
 
+    let (announce, done) = tokio::sync::watch::channel(None);
+    {
+        let mut map = running()
+            .lock()
+            .map_err(|_| AppError::internal("the reel registry is poisoned"))?;
+        // Another call with the key started meanwhile: join it.
+        if let Some(run) = map.get(&run_key) {
+            if run.payload != payload {
+                return Err(AppError::conflict("request key payload mismatch"));
+            }
+            let done = run.done.clone();
+            drop(map);
+            return wait(done).await;
+        }
+        map.insert(
+            run_key.clone(),
+            Running {
+                payload: payload.clone(),
+                done: done.clone(),
+            },
+        );
+    }
+    let registered = Registered(run_key);
+    let (d, ctx) = (d.clone(), ctx.clone());
+    tokio::spawn(async move {
+        let _registered = registered;
+        let outcome = produce(&d, &ctx, &i, &payload, photo_ms, brand, fallbacks).await;
+        let _ = announce.send(Some(outcome));
+    });
+    wait(done).await
+}
+
+/// The running reel of `key`, when there is one with the same input.
+#[allow(clippy::type_complexity)]
+fn joined(
+    key: &RunKey,
+    payload: &Value,
+) -> Result<Option<tokio::sync::watch::Receiver<Option<Result<ReelRenderOut, AppError>>>>, AppError>
+{
+    let map = running()
+        .lock()
+        .map_err(|_| AppError::internal("the reel registry is poisoned"))?;
+    match map.get(key) {
+        Some(run) if run.payload != *payload => {
+            Err(AppError::conflict("request key payload mismatch"))
+        }
+        Some(run) => Ok(Some(run.done.clone())),
+        None => Ok(None),
+    }
+}
+
+/// Reads a reel photo's bytes from the file store when the renderer reaches it (on the
+/// renderer's blocking thread, through the runtime that runs the call).
+struct StoredPhotos {
+    files: std::sync::Arc<dyn crate::ports::files::FileStore>,
+    workspace: jt_tenancy::WorkspaceId,
+    ids: Vec<jt_studio::FileId>,
+    runtime: tokio::runtime::Handle,
+}
+
+impl ReelPhotoBytes for StoredPhotos {
+    fn read(&mut self, index: usize) -> Result<Vec<u8>, ComposeError> {
+        let id = *self
+            .ids
+            .get(index)
+            .ok_or_else(|| ComposeError::Internal(format!("no reel photo {index}")))?;
+        self.runtime
+            .block_on(self.files.read(self.workspace, id))
+            .map(|u| u.bytes)
+            .map_err(|e| ComposeError::Internal(e.message))
+    }
+}
+
+/// Makes the reel: a turn, the render (each photo read when its part begins), then the stored
+/// file, material and receipt.
+async fn produce(
+    d: &Deps,
+    ctx: &Ctx,
+    i: &ReelRenderInput,
+    payload: &Value,
+    photo_ms: u32,
+    brand: BrandTokens,
+    fallbacks: Vec<BrandFallback>,
+) -> Result<ReelRenderOut, AppError> {
     // A turn first: a reel waiting for its turn holds no source in memory.
     let ticket = d.compositor.reserve_reel().await.map_err(compose_error)?;
-    let mut shown = Vec::with_capacity(photos.len());
-    for (p, m) in i.photos.iter().zip(&photos) {
-        let bytes = d.files.read(ctx.workspace_id, m.file_id).await?;
-        shown.push(ReelPhoto {
-            image: SourceImage {
-                bytes: bytes.bytes,
-                mime: m.mime.clone(),
-                focus: (p.focus_x.unwrap_or(0.5), p.focus_y.unwrap_or(0.5)),
-            },
-            caption: p.text.clone(),
-        });
-    }
+    // The sources again, now that the turn came: the photos to read and the logo to draw.
+    let (photos, logo) = {
+        let mut r = open(d, ctx, Permission::ContentWork).await?;
+        let mut notes = Vec::new();
+        sources(r.as_mut(), i, &brand, &mut notes, ctx.now).await?
+    };
     let logo_image = match &logo {
         Some(m) => Some(SourceImage {
             bytes: d.files.read(ctx.workspace_id, m.file_id).await?.bytes,
@@ -363,6 +477,22 @@ pub async fn reel_render(
             focus: (0.5, 0.5),
         }),
         None => None,
+    };
+    let shown = i
+        .photos
+        .iter()
+        .zip(&photos)
+        .map(|(p, m)| ReelPhoto {
+            mime: m.mime.clone(),
+            focus: (p.focus_x.unwrap_or(0.5), p.focus_y.unwrap_or(0.5)),
+            caption: p.text.clone(),
+        })
+        .collect();
+    let reader = StoredPhotos {
+        files: d.files.clone(),
+        workspace: ctx.workspace_id,
+        ids: photos.iter().map(|m| m.file_id).collect(),
+        runtime: tokio::runtime::Handle::current(),
     };
     let closing = i.closing.clone().unwrap_or_default();
     let rendered = d
@@ -382,6 +512,7 @@ pub async fn reel_render(
                     ..brand
                 },
             },
+            Box::new(reader),
         )
         .await
         .map_err(compose_error)?;
@@ -389,7 +520,7 @@ pub async fn reel_render(
     let drawn_logo = logo.as_ref().map(|m| m.id);
     let mut stage = Staging::new();
     let result = store(
-        d, ctx, &i, &payload, rendered, fallbacks, drawn_logo, &mut stage,
+        d, ctx, i, payload, rendered, fallbacks, drawn_logo, &mut stage,
     )
     .await;
     stage.compensate(d, ctx.workspace_id).await;
