@@ -1060,6 +1060,9 @@ async fn composed(t: &T, file: FileId, sources: &[jt_studio::MaterialId]) -> jt_
     id
 }
 
+/// A change made while a send waits: the material sent, the change, the reason it is refused.
+type Change = (jt_studio::MaterialId, Box<dyn Fn(&T)>, &'static str);
+
 /// Changes material `id` as a person (or an analysis) would while a send waits.
 fn change_material(t: &T, id: jt_studio::MaterialId, change: impl Fn(&mut jt_studio::Material)) {
     t.w.uow.edit(|s| {
@@ -1146,7 +1149,7 @@ async fn a_waiting_image_is_checked_again_when_it_goes_out() {
     )
     .await;
     // Each change happens while the send waits (queued, as a held reply waits for approval).
-    let changes: [(jt_studio::MaterialId, Box<dyn Fn(&T)>, &str); 3] = [
+    let changes: [Change; 3] = [
         (
             plain,
             Box::new(move |t: &T| {
