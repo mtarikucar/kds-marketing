@@ -18,13 +18,19 @@ pub const MAX_BRAND_NAME_CHARS: usize = 32;
 pub const RENDERER: &str = "jeeta-compose";
 /// The generator a composition with an AI source is recorded with (an AI flag carries one).
 pub const COMPOSED_AI_GENERATOR: &str = "jeeta-compose";
+/// The photo reel renderer's name, recorded in each reel's composition.
+pub const REEL_RENDERER: &str = "jeeta-reel";
+/// The generator a reel with an AI source is recorded with.
+pub const REEL_AI_GENERATOR: &str = "jeeta-reel";
 
-/// The frame a template fills: a carousel slide (1080 x 1350) or a story frame (1080 x 1920).
+/// The frame a template fills: a carousel slide (1080 x 1350), a story frame (1080 x 1920), or a
+/// reel's video frame (1080 x 1920, [`reel`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Frame {
     Slide,
     Story,
+    Reel,
 }
 
 impl Frame {
@@ -32,7 +38,7 @@ impl Frame {
     pub fn size(self) -> (u32, u32) {
         match self {
             Self::Slide => (1080, 1350),
-            Self::Story => (1080, 1920),
+            Self::Story | Self::Reel => (1080, 1920),
         }
     }
 
@@ -40,7 +46,7 @@ impl Frame {
     pub fn text_free_band(self) -> u32 {
         match self {
             Self::Slide => 0,
-            Self::Story => 250,
+            Self::Story | Self::Reel => 250,
         }
     }
 }
@@ -58,9 +64,13 @@ pub enum Role {
     Moment,
     Question,
     Item,
+    /// A photo reel (`studio.reel_render`): not a template of `studio.post_render`, so not in
+    /// [`Role::ALL`]; recorded in a reel's composition.
+    Reel,
 }
 
 impl Role {
+    /// The roles `studio.post_render` draws (a reel is `studio.reel_render`'s).
     pub const ALL: [Role; 9] = [
         Self::Cover,
         Self::SecondCover,
@@ -84,6 +94,7 @@ impl Role {
             Self::Moment => "moment",
             Self::Question => "question",
             Self::Item => "item",
+            Self::Reel => "reel",
         }
     }
 
@@ -94,6 +105,7 @@ impl Role {
     pub fn frame(self) -> Frame {
         match self {
             Self::Moment | Self::Question | Self::Item => Frame::Story,
+            Self::Reel => Frame::Reel,
             _ => Frame::Slide,
         }
     }
@@ -195,6 +207,10 @@ impl Role {
                     "Dark frame, rounded photo, name, line, price and an empty link sticker area.",
                 ),
             ],
+            Self::Reel => &[(
+                reel::VARIANT,
+                "Vertical video: an opening title card, 3 to 8 photos each slowly panning and zooming with its caption, crossfades, a closing card with the site and slogan.",
+            )],
         }
     }
 }
@@ -454,6 +470,7 @@ fn slots(role: Role, variant: &str) -> Option<Vec<SlotSpec>> {
             label,
             S::text("heading", true, 56, 3, STORY_W, T::heading(84.0)),
         ],
+        (Role::Reel, reel::VARIANT) => reel::slots(),
         (Role::Item, "card_bottom" | "framed_dark") => vec![
             S::photo("photo", true),
             label,
@@ -766,6 +783,141 @@ impl Composition {
     }
 }
 
+/// The photo reel (`studio.reel_render`): a vertical MP4 made of 3 to 8 photos, each slowly
+/// panning and zooming under its caption, with an optional opening title card and closing card.
+/// Its texts follow the templates' rule: drawn exactly as given, refused when they do not fit.
+pub mod reel {
+    use super::{SlotSpec, TextStyle};
+    use serde::Serialize;
+
+    /// The one variant.
+    pub const VARIANT: &str = "photo_reel";
+    pub const MIN_PHOTOS: usize = 3;
+    pub const MAX_PHOTOS: usize = 8;
+    /// Frames per second.
+    pub const FPS: u32 = 30;
+    /// How long each photo shows, in milliseconds: the range a caller may ask for.
+    pub const PHOTO_MS: (u32, u32) = (2_500, 4_000);
+    pub const DEFAULT_PHOTO_MS: u32 = 3_000;
+    /// The opening title card's and the closing card's length.
+    pub const TITLE_MS: u32 = 2_000;
+    pub const CLOSING_MS: u32 = 2_500;
+    /// The crossfade between two consecutive parts (photo or card).
+    pub const CROSSFADE_MS: u32 = 400;
+    /// Rows at the top and bottom, and columns at the right, that hold no text: Reels and TikTok
+    /// draw the account, the caption, the sound and the buttons there.
+    pub const TOP_BAND: u32 = 250;
+    pub const BOTTOM_BAND: u32 = 420;
+    pub const RIGHT_BAND: u32 = 150;
+    /// The text slots: a photo's caption, the title card's title, the closing card's heading,
+    /// site and slogan.
+    pub const CAPTION: &str = "caption";
+    pub const TITLE: &str = "title";
+    pub const HEADING: &str = "heading";
+    pub const SITE: &str = "site";
+    pub const SLOGAN: &str = "slogan";
+
+    /// The reel's text slots and their limits (no photo slot: photos are a list).
+    pub fn slots() -> Vec<SlotSpec> {
+        let caption_w = (1080 - 72 - RIGHT_BAND) as u16;
+        vec![
+            SlotSpec::text(TITLE, false, 48, 4, 936, TextStyle::heading(100.0)),
+            SlotSpec::text(CAPTION, false, 60, 3, caption_w, TextStyle::heading(72.0)),
+            SlotSpec::text(HEADING, false, 44, 3, 936, TextStyle::heading(88.0)),
+            SlotSpec::text(SITE, false, 28, 1, 936, TextStyle::sub(48.0)),
+            SlotSpec::text(SLOGAN, false, 40, 2, 936, TextStyle::sub(40.0)),
+        ]
+    }
+
+    /// The frames a part of `ms` milliseconds takes.
+    pub fn frames_of(ms: u32) -> u32 {
+        ms * FPS / 1000
+    }
+
+    /// The crossfade's frames.
+    pub fn crossfade_frames() -> u32 {
+        frames_of(CROSSFADE_MS)
+    }
+
+    /// The parts' frame counts in order: the title card (when `title`), each photo, the closing
+    /// card (when `closing`).
+    pub fn parts(photos: usize, photo_ms: u32, title: bool, closing: bool) -> Vec<u32> {
+        let mut out = Vec::new();
+        if title {
+            out.push(frames_of(TITLE_MS));
+        }
+        out.extend(std::iter::repeat_n(frames_of(photo_ms), photos));
+        if closing {
+            out.push(frames_of(CLOSING_MS));
+        }
+        out
+    }
+
+    /// The reel's frame count: its parts, each crossfade shared by two parts.
+    pub fn total_frames(parts: &[u32]) -> u32 {
+        let overlaps = crossfade_frames() * (parts.len().saturating_sub(1) as u32);
+        parts.iter().sum::<u32>() - overlaps
+    }
+
+    /// The reel's length in milliseconds.
+    pub fn duration_ms(frames: u32) -> u64 {
+        u64::from(frames) * 1000 / u64::from(FPS)
+    }
+
+    /// What `studio.post_templates` tells an agent about reels.
+    #[derive(Clone, Debug, Serialize)]
+    pub struct ReelLimits {
+        pub variant: &'static str,
+        pub width: u32,
+        pub height: u32,
+        pub fps: u32,
+        pub min_photos: usize,
+        pub max_photos: usize,
+        pub photo_ms: (u32, u32),
+        pub default_photo_ms: u32,
+        pub title_ms: u32,
+        pub closing_ms: u32,
+        pub crossfade_ms: u32,
+        pub max_duration_ms: u64,
+        pub text_free: TextFree,
+        pub slots: Vec<SlotSpec>,
+        pub encoding: &'static str,
+    }
+
+    /// The bands no text is drawn in, in pixels.
+    #[derive(Clone, Debug, Serialize)]
+    pub struct TextFree {
+        pub top: u32,
+        pub bottom: u32,
+        pub right: u32,
+    }
+
+    pub fn limits() -> ReelLimits {
+        let longest = parts(MAX_PHOTOS, PHOTO_MS.1, true, true);
+        ReelLimits {
+            variant: VARIANT,
+            width: 1080,
+            height: 1920,
+            fps: FPS,
+            min_photos: MIN_PHOTOS,
+            max_photos: MAX_PHOTOS,
+            photo_ms: PHOTO_MS,
+            default_photo_ms: DEFAULT_PHOTO_MS,
+            title_ms: TITLE_MS,
+            closing_ms: CLOSING_MS,
+            crossfade_ms: CROSSFADE_MS,
+            max_duration_ms: duration_ms(total_frames(&longest)),
+            text_free: TextFree {
+                top: TOP_BAND,
+                bottom: BOTTOM_BAND,
+                right: RIGHT_BAND,
+            },
+            slots: slots(),
+            encoding: "MP4 (moov first), H.264 Constrained Baseline level 4.0, yuv420p BT.709, 30 fps, closed GOP of 2 s, no audio track",
+        }
+    }
+}
+
 /// The variant a cover should take after `last` (the workspace's last rendered cover's): the next
 /// one in order, so consecutive posts never open alike.
 pub fn next_cover_variant(last: Option<&str>) -> &'static str {
@@ -829,6 +981,25 @@ mod tests {
         assert_eq!(eff.accent, BrandTokens::default().accent);
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].token, "accent");
+    }
+
+    #[test]
+    fn a_reel_is_not_a_post_render_template_and_keeps_its_limits() {
+        assert_eq!(Role::parse("reel"), None);
+        assert!(!Role::ALL.contains(&Role::Reel));
+        assert_eq!(Role::Reel.frame(), Frame::Reel);
+        assert_eq!(Frame::Reel.size(), (1080, 1920));
+        let t = template(Role::Reel, reel::VARIANT).expect("reel template");
+        assert!(t.slots.iter().all(|s| s.kind == SlotKind::Text));
+        for s in &t.slots {
+            assert!(s.style.expect("style").size >= MIN_TEXT_PX);
+        }
+        // 3 photos at the shortest is a reel of at least 3 s (Instagram's minimum).
+        let short = reel::parts(reel::MIN_PHOTOS, reel::PHOTO_MS.0, false, false);
+        assert!(reel::duration_ms(reel::total_frames(&short)) >= 3_000);
+        let l = reel::limits();
+        assert!(l.max_duration_ms <= 60_000, "{}", l.max_duration_ms);
+        assert_eq!(reel::crossfade_frames(), 12);
     }
 
     #[test]

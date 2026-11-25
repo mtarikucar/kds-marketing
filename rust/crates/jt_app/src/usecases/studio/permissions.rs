@@ -39,7 +39,7 @@ pub fn for_use_case(id: &str) -> &'static [Permission] {
         "studio.budget_move" => &[AdsManage],
         // Composed posts: the content agents render; the brand tokens are the content module's
         // settings, read by whoever works it and set by who manages it.
-        "studio.post_templates" | "studio.post_render" => &[ContentWork],
+        "studio.post_templates" | "studio.post_render" | "studio.reel_render" => &[ContentWork],
         "studio.brand_get" => &[ContentWork, ContentManage],
         "studio.brand_set" => &[ContentManage],
         _ => match studio_module(id) {

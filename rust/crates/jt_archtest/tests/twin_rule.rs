@@ -163,7 +163,7 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
     ("outreach", 18),
     ("events", 3),
     ("inbox", 50),
-    ("studio", 58),
+    ("studio", 59),
     ("content", 5),
     ("social", 6),
     ("ads", 9),
@@ -172,9 +172,9 @@ const MCP_TOOLS_BY_DOMAIN: &[(&str, usize)] = &[
 #[test]
 fn the_registry_holds_exactly_the_documented_tools() {
     let specs = jt_mcp::registry();
-    assert_eq!(specs.len(), 259);
+    assert_eq!(specs.len(), 260);
     let total: usize = MCP_TOOLS_BY_DOMAIN.iter().map(|(_, n)| n).sum();
-    assert_eq!(total, 259);
+    assert_eq!(total, 260);
     for (domain, expected) in MCP_TOOLS_BY_DOMAIN {
         let prefix = format!("jeeta.{domain}.");
         let found = specs.iter().filter(|s| s.name.starts_with(&prefix)).count();
@@ -183,7 +183,7 @@ fn the_registry_holds_exactly_the_documented_tools() {
     // Every catalog tool is defined.
     assert!(jt_mcp::NOT_YET_DEFINED.is_empty());
     let catalog = CATALOG.iter().filter(|uc| uc.mcp_tool.is_some()).count();
-    assert_eq!(catalog, 259);
+    assert_eq!(catalog, 260);
 }
 
 /// These MCP-only use cases are agent workflows without a panel route.
@@ -218,6 +218,7 @@ fn agent_workflows_are_mcp_only() {
             // Composed posts: an agent renders; the brand tokens have no panel form yet.
             "studio.post_templates",
             "studio.post_render",
+            "studio.reel_render",
             "studio.brand_get",
             "studio.brand_set",
         ])
@@ -336,7 +337,7 @@ fn operational_health_is_operator_only_and_process_probes_have_no_catalog_rows()
     let row = jt_app::catalog::find("ops.health").unwrap();
     assert!(row.panel_only && row.mcp_tool.is_none());
     assert_eq!(row.panel_route, Some(("GET", "/api/platform/health")));
-    assert_eq!(CATALOG.len(), 336);
+    assert_eq!(CATALOG.len(), 337);
     for path in ["/readyz", "/metrics"] {
         assert!(
             CATALOG

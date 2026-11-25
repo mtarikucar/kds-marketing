@@ -405,7 +405,7 @@ fn expected_permissions(action: &str) -> &'static [Permission] {
         "hypothesis_propose" => &[ContentWork, SocialWork, AdsWork],
         "brake" => &[SocialManage, AdsManage, BudgetManage],
         "approve" => &[SocialManage, AdsManage],
-        "post_templates" | "post_render" => &[ContentWork],
+        "post_templates" | "post_render" | "reel_render" => &[ContentWork],
         "brand_get" => &[ContentWork, ContentManage],
         "brand_set" => &[ContentManage],
         _ => panic!("unlisted Studio action {action}"),
@@ -935,6 +935,13 @@ async fn call_studio(
         "post_templates" => studio::render::post_templates(d, ctx).await.map(|_| ()),
         "brand_get" => studio::render::brand_get(d, ctx).await.map(|_| ()),
         "post_render" => studio::render::post_render(
+            d,
+            ctx,
+            serde_json::from_value(v).unwrap_or_else(|e| panic!("{action}: {e}")),
+        )
+        .await
+        .map(|_| ()),
+        "reel_render" => studio::reel::reel_render(
             d,
             ctx,
             serde_json::from_value(v).unwrap_or_else(|e| panic!("{action}: {e}")),

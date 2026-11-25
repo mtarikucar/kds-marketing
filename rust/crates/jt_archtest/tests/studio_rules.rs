@@ -21,6 +21,7 @@ use syn::visit::Visit;
 const ACTIONS: &[&str] = &[
     "post_templates",
     "post_render",
+    "reel_render",
     "brand_get",
     "brand_set",
     "project_list",
@@ -130,6 +131,7 @@ const EXEMPT: &[&str] = &[
     // Composed posts: rendering the library's photos publishes nothing.
     "post_templates",
     "post_render",
+    "reel_render",
     "brand_get",
     "brand_set",
     "material_production_request",
@@ -165,7 +167,7 @@ async fn studio_exact_catalog_and_gate_set() {
         .iter()
         .filter(|r| r.id.starts_with("studio."))
         .collect();
-    assert_eq!(rows.len(), 73);
+    assert_eq!(rows.len(), 74);
     assert_eq!(
         set(rows.iter().map(|r| r.id.strip_prefix("studio.").unwrap())),
         set(ACTIONS.iter().chain(PANEL_ONLY).copied())
@@ -206,7 +208,7 @@ async fn studio_exact_catalog_and_gate_set() {
             assert_eq!(result.unwrap_err().code, ErrorCode::StrategyRequired);
         }
     }
-    assert_eq!(jt_mcp::registry().len(), 259);
+    assert_eq!(jt_mcp::registry().len(), 260);
     let tables = jt_archtest::tenant_tables();
     let mut all_tables = BTreeSet::new();
     for (_, sql) in jt_archtest::up_migrations() {
@@ -397,6 +399,7 @@ fn all_studio_rows_have_handler_tool_and_schema_parity() {
                 "material_policy_set" => &[jt_tenancy::Permission::ContentWork][..],
                 "post_templates" => &[jt_tenancy::Permission::ContentWork][..],
                 "post_render" => &[jt_tenancy::Permission::ContentWork][..],
+                "reel_render" => &[jt_tenancy::Permission::ContentWork][..],
                 "brand_get" => &[
                     jt_tenancy::Permission::ContentWork,
                     jt_tenancy::Permission::ContentManage,
@@ -645,6 +648,12 @@ fn write_args(w: &scenarios::world::World) -> Vec<(&'static str, Value)> {
             "post_render",
             json!({"request_key":"render","role":"cover","variant":"full_bottom",
                 "texts":{"heading":"Örnek başlık"},"photos":{"photo":{"material_id":w.material().id}}}),
+        ),
+        (
+            "reel_render",
+            json!({"request_key":"reel","photos":[{"material_id":w.material().id,"text":"Örnek"},
+                {"material_id":jt_studio::MaterialId::new_v7()},
+                {"material_id":jt_studio::MaterialId::new_v7()}]}),
         ),
         (
             "brand_set",

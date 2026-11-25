@@ -149,6 +149,10 @@ tiny-skia = { version = "0.12", default-features = false, features = ["std", "si
 # HarfBuzz ported to Rust (shaping) over read-fonts (outlines, variations, metrics).
 harfrust = "0.16"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# The photo reel's H.264 encoder: Cisco's OpenH264 (BSD-2-Clause) compiled from its source by
+# `openh264-sys2` (the `source` feature); the `libloading` feature, which would load a
+# Cisco-provided binary at run time, stays off. The MP4 container is written by jt_render itself.
+openh264 = { version = "0.9.10", default-features = false, features = ["source"] }
 
 # Mail protocol libraries are private to jt_mail (architecture tests enforce this).
 lettre = { version = "0.11.22", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls", "ring", "webpki-roots"] }
@@ -189,4 +193,13 @@ opt-level = 2
 [profile.dev.package.harfrust]
 opt-level = 2
 [profile.dev.package.read-fonts]
+opt-level = 2
+# The reel's frame drawing and its encoder (C++, compiled with this level by `cc`).
+[profile.dev.package.jt_render]
+opt-level = 2
+[profile.dev.package.openh264]
+opt-level = 2
+[profile.dev.package.openh264-sys2]
+opt-level = 2
+[profile.dev.package.wide]
 opt-level = 2

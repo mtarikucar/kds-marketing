@@ -87,6 +87,10 @@ deny = [
   { crate = "tiny-skia", wrappers = ["jt_render"] },
   { crate = "harfrust", wrappers = ["jt_render"] },
   { crate = "image", wrappers = ["jt_render"] },
+  # The photo reel's H.264 encoder (OpenH264 compiled from source, BSD-2-Clause): the renderer's
+  # alone, like the image codecs.
+  { crate = "openh264", wrappers = ["jt_render"] },
+  { crate = "openh264-sys2", wrappers = ["openh264"] },
   # AI / media / speech provider crates: never, anywhere (spec §4.2). One exception to the rule
   # behind it, not to this list (spec addendum C, 2026-11-21): the inbox's automatic replies call
   # the Claude API through `jt_claude`, as raw HTTP over `jt_outbound`; no SDK crate is added.

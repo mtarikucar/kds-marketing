@@ -7,6 +7,9 @@ pub fn input(action: &str) -> Value {
     if let Some(name) = action.strip_prefix("project_") {
         return super::projects::schema(name);
     }
+    if action == "reel_render" {
+        return super::reel::schema();
+    }
     if let Some(schema) = super::render::schema(action) {
         return schema;
     }

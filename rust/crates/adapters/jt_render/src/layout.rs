@@ -5,7 +5,7 @@
 use crate::fonts::FontSet;
 use crate::raster::{self, Fit, Limits, fill_rounded, solid, vertical_gradient};
 use crate::text::{self, Align, Block};
-use jt_app::ports::compose::{ComposeError, ComposeJob, Rect};
+use jt_app::ports::compose::{ComposeError, ComposeJob, Rect, SourceImage};
 use jt_studio::compose::{BrandTokens, Color, FontRole, Role, SlotKind, TextStyle};
 use tiny_skia::Pixmap;
 
@@ -14,7 +14,7 @@ const SM: f32 = 72.0;
 
 /// The colours a chip or a counter is drawn in.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Ground {
+pub(crate) enum Ground {
     /// On the light background.
     Light,
     /// On the ink, or a photo's dark scrim.
@@ -25,10 +25,12 @@ pub(crate) struct Canvas<'a> {
     pub pixmap: Pixmap,
     fonts: &'a FontSet,
     job: &'a ComposeJob,
+    /// The brand logo drawn in the chip (the job's, or a reel's, which is shared by its cards).
+    logo: Option<&'a SourceImage>,
     limits: &'a Limits,
-    brand: &'a BrandTokens,
-    w: f32,
-    h: f32,
+    pub(crate) brand: &'a BrandTokens,
+    pub(crate) w: f32,
+    pub(crate) h: f32,
 }
 
 impl<'a> Canvas<'a> {
@@ -37,6 +39,16 @@ impl<'a> Canvas<'a> {
         job: &'a ComposeJob,
         limits: &'a Limits,
     ) -> Result<Self, ComposeError> {
+        Self::with_logo(fonts, job, limits, job.logo.as_ref())
+    }
+
+    /// A transparent canvas of the job's frame whose brand chip draws `logo`.
+    pub fn with_logo(
+        fonts: &'a FontSet,
+        job: &'a ComposeJob,
+        limits: &'a Limits,
+        logo: Option<&'a SourceImage>,
+    ) -> Result<Self, ComposeError> {
         let (w, h) = job.template.frame.size();
         let pixmap = Pixmap::new(w, h)
             .ok_or_else(|| ComposeError::Internal("cannot allocate the canvas".into()))?;
@@ -44,6 +56,7 @@ impl<'a> Canvas<'a> {
             pixmap,
             fonts,
             job,
+            logo,
             limits,
             brand: &job.brand,
             w: w as f32,
@@ -67,7 +80,7 @@ impl<'a> Canvas<'a> {
     }
 
     /// The laid-out text of slot `key`, `None` when the slot is empty.
-    fn block(&self, key: &str) -> Result<Option<Block>, ComposeError> {
+    pub(crate) fn block(&self, key: &str) -> Result<Option<Block>, ComposeError> {
         let spec = self
             .job
             .template
@@ -98,7 +111,7 @@ impl<'a> Canvas<'a> {
     /// A text that is not a slot (the brand name, a counter, a step's digit) on one line. A
     /// character no bundled font draws is refused as the brand name's (`brand_set` refuses such a
     /// name; this catches one stored before that check).
-    fn free(&self, style: TextStyle, text: &str) -> Result<Block, ComposeError> {
+    pub(crate) fn free(&self, style: TextStyle, text: &str) -> Result<Block, ComposeError> {
         let spec = jt_studio::compose::SlotSpec {
             key: "brand_name",
             kind: SlotKind::Text,
@@ -120,7 +133,7 @@ impl<'a> Canvas<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn draw(
+    pub(crate) fn draw(
         &mut self,
         block: &Block,
         x: f32,
@@ -142,7 +155,7 @@ impl<'a> Canvas<'a> {
         );
     }
 
-    fn fill(&mut self, c: Color) {
+    pub(crate) fn fill(&mut self, c: Color) {
         self.pixmap.fill(raster::color(c, 1.0));
     }
 
@@ -194,9 +207,15 @@ impl<'a> Canvas<'a> {
     /// The brand chip at `(x, y)`, `size` its mark's side: the logo (contain-fitted) or the
     /// brand name's first letter with an accent dot, then the brand name. Its width; 0 when the
     /// brand has neither name nor logo.
-    fn chip(&mut self, x: f32, y: f32, size: f32, ground: Ground) -> Result<f32, ComposeError> {
+    pub(crate) fn chip(
+        &mut self,
+        x: f32,
+        y: f32,
+        size: f32,
+        ground: Ground,
+    ) -> Result<f32, ComposeError> {
         let name = self.brand.brand_name.clone();
-        let logo = self.job.logo.as_ref();
+        let logo = self.logo;
         if name.is_empty() && logo.is_none() {
             return Ok(0.0);
         }
@@ -338,7 +357,7 @@ impl<'a> Canvas<'a> {
         Ok(h)
     }
 
-    fn accent_bar(&mut self, x: f32, y: f32) {
+    pub(crate) fn accent_bar(&mut self, x: f32, y: f32) {
         fill_rounded(
             &mut self.pixmap,
             x,
@@ -351,7 +370,7 @@ impl<'a> Canvas<'a> {
     }
 
     /// A photo's dark scrim, in ink: `stops` are (offset, alpha), top to bottom.
-    fn scrim(&mut self, y: f32, h: f32, stops: &[(f32, f32)]) {
+    pub(crate) fn scrim(&mut self, y: f32, h: f32, stops: &[(f32, f32)]) {
         let w = self.w;
         vertical_gradient(&mut self.pixmap, (0.0, y, w, h), self.brand.ink, stops);
     }
@@ -383,6 +402,9 @@ pub(crate) fn compose(c: &mut Canvas<'_>) -> Result<Option<Rect>, ComposeError> 
         (Role::Moment, v) => moment(c, v == "text_bottom").map(|()| None),
         (Role::Question, v) => question(c, v == "photo_top").map(Some),
         (Role::Item, v) => item(c, v == "card_bottom").map(Some),
+        (Role::Reel, _) => Err(ComposeError::Internal(
+            "a reel is drawn frame by frame (render_reel)".into(),
+        )),
     }
 }
 
@@ -580,7 +602,7 @@ fn closeup(c: &mut Canvas<'_>, card_bottom: bool) -> Result<(), ComposeError> {
     c.photo("photo", (0.0, 0.0, w, hh), 0.0)?;
     let (pad_x, pad_y) = (52.0, 48.0);
     let inner = 952.0 - 2.0 * pad_x;
-    let has_chip = !c.brand.brand_name.is_empty() || c.job.logo.is_some();
+    let has_chip = !c.brand.brand_name.is_empty() || c.logo.is_some();
     let row = if card_bottom {
         if has_label { 52.0 } else { c.counter_height() }
     } else if has_chip {
@@ -659,10 +681,10 @@ fn closeup(c: &mut Canvas<'_>, card_bottom: bool) -> Result<(), ComposeError> {
 
 impl Canvas<'_> {
     /// The brand chip's width at `size`, without drawing it.
-    fn chip_width(&self, size: f32) -> Result<f32, ComposeError> {
+    pub(crate) fn chip_width(&self, size: f32) -> Result<f32, ComposeError> {
         let name = &self.brand.brand_name;
         if name.is_empty() {
-            return Ok(if self.job.logo.is_some() { size } else { 0.0 });
+            return Ok(if self.logo.is_some() { size } else { 0.0 });
         }
         Ok(size
             + 14.0

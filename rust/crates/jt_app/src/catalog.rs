@@ -349,6 +349,7 @@ pub static CATALOG: &[UseCase] = &[
     // brand tokens have no panel form yet).
     mcp_only("studio.post_templates", Exempt, "jeeta.studio.post_templates", Read),
     mcp_only("studio.post_render", Exempt, "jeeta.studio.post_render", Write),
+    mcp_only("studio.reel_render", Exempt, "jeeta.studio.reel_render", Write),
     mcp_only("studio.brand_get", Exempt, "jeeta.studio.brand_get", Read),
     mcp_only("studio.brand_set", Exempt, "jeeta.studio.brand_set", Write),
     // Releasing a slot's caption findings (spec 2026-11-03 §7, D19): a human's, behind the

@@ -107,6 +107,7 @@ pub fn studio_module(id: &str) -> Option<&'static str> {
         | "material_policy_set"
         | "post_templates"
         | "post_render"
+        | "reel_render"
         | "brand_get"
         | "brand_set" => CONTENT,
         "project_publication"
