@@ -1058,14 +1058,23 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
         // no count with its unit, no size and no day with a month's name is a price: refused as
         // money, so the model is never coached into another form of it.
         // A clause's end parts them (`Hazır olur, 12 fotoğraf`); a colon does not (`Fiyatı: 12.50`).
-        let priced = prev.is_some_and(|p| !p.ends_clause && is_number_price_word(p))
-            || (!w.ends_clause && next.is_some_and(is_number_price_word));
+        // `olur` alone beside a number is the weakest of them (`15.30 olur mu?`, `Boyu 20 olur`):
+        // such a number is refused as a number (the naming repair), not as money.
+        let beside = |f: &dyn Fn(&Word) -> bool| {
+            prev.is_some_and(|p| !p.ends_clause && f(p)) || (!w.ends_clause && next.is_some_and(f))
+        };
+        let priced = beside(&|p: &Word| is_number_price_word(p) && !is(&p.stem, "olur"));
+        let olur = beside(&|p: &Word| is(&p.stem, "olur"));
         if glued.is_empty() && date_or_time(num) {
             // A clock time after `saat`, and a full date with its year, are no price.
             let clock = prev.is_some_and(|p| is(&p.stem, "saat"));
             let full_date = num.split(['.', '/']).count() == 3;
-            if priced && !clock && !full_date {
-                out.terms.push(i);
+            if !clock && !full_date {
+                if priced {
+                    out.terms.push(i);
+                } else if olur {
+                    out.numbers.push(i);
+                }
             }
             continue;
         }
@@ -1915,7 +1924,6 @@ mod tests {
         for text in [
             "Fiyatı 12.50 olur",
             "Tanesi 15.30",
-            "15.30 olur",
             "Ücreti 9,90",
             "12:50 eder",
             "tutarı 15.12",
@@ -1943,6 +1951,38 @@ mod tests {
             "Hazır olur, 15.30'da teslim.",
         ] {
             assert_eq!(reply(text), Ok(()), "{text}");
+        }
+        // Beside `olur` alone, a digit form is refused as a number (the naming repair), not as
+        // money; beside any other price word, and number words beside `olur`, stay money.
+        for text in [
+            "15.30 olur mu?",
+            "14:30'da olur",
+            "Cuma 15.12'de olur",
+            "2 olur mu?",
+            "Boyu 20 olur",
+            "3'te olur mu?",
+            "1250 olur",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+            let kinds: Vec<PartKind> = refused_parts(text, "", YEAR)
+                .iter()
+                .map(|p| p.kind)
+                .collect();
+            assert_eq!(kinds, [PartKind::Number], "{text}");
+        }
+        for text in [
+            "Fiyatı 12.50 olur",
+            "Tanesi 15.30",
+            "15.30 eder",
+            "elli olur",
+        ] {
+            let parts = refused_parts(text, "", YEAR);
+            assert!(
+                parts
+                    .iter()
+                    .any(|p| matches!(p.kind, PartKind::Term | PartKind::NumberWord)),
+                "{text}: {parts:?}"
+            );
         }
         // A clause's end parts a number from the price word before it; a colon does not.
         let kinds = |t: &str| -> Vec<PartKind> {

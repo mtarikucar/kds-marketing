@@ -3132,14 +3132,22 @@ mod tests {
             "ucretsiz",
             "12 ay vadeli",
             "Tanesi elli olur",
-            "1250 olur",
             "Fiyatı 12.50 olur",
+            "15.30 eder",
         ] {
             let parts = rules::refused_parts(text, "", 2026);
             assert!(states_money_parts(&parts), "{text}");
         }
         // A bare number of any length gets the naming repair.
-        for text in ["2026 siparişleri", "2027'de", "15x20", "12345"] {
+        for text in [
+            "2026 siparişleri",
+            "2027'de",
+            "15x20",
+            "12345",
+            "1250 olur",
+            "15.30 olur mu?",
+            "Boyu 20 olur",
+        ] {
             let parts = rules::refused_parts(text, "", 2026);
             assert!(!parts.is_empty(), "{text}");
             assert!(!states_money_parts(&parts), "{text}");
