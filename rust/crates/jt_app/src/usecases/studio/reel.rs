@@ -410,7 +410,8 @@ pub async fn reel_render(
     tokio::spawn(async move {
         let _registered = registered;
         let outcome = produce(&d, &ctx, &i, &payload, photo_ms, brand, fallbacks).await;
-        let _ = announce.send(Some(outcome));
+        // `send_replace`: announced even when no call is waiting any more.
+        announce.send_replace(Some(outcome));
     });
     wait(done).await
 }
