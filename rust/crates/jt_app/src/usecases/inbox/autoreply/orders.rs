@@ -256,7 +256,7 @@ fn checked_line(
     if line.is_empty() {
         return Ok(None);
     }
-    rules::check_reply(line, &s.cards, year).map_err(|r| r.key())?;
+    rules::check_reply_in(line, &s.cards, year, s.reading()).map_err(|r| r.key())?;
     if let Some(reason) = verdict.refusal() {
         return Err(reason);
     }

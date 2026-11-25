@@ -45,8 +45,12 @@
 //! offered and the request is as it was.
 //!
 //! **What is kept.** One run row per model call (codes and numbers, the model's cost in
-//! millionths of a dollar) and ledger entries `inbox.autoreply.{replied, quoted, ordered,
-//! refused, handed_over, skipped, failed}` with codes and numbers only. No log line or ledger
+//! millionths of a dollar): a refused answer the model was asked to repair is `skipped`
+//! (`repaired`), a repair with no tool call `skipped` (`repair_unusable`), and the answer that
+//! went on carries what became of the conversation. Ledger entries `inbox.autoreply.{replied,
+//! quoted, ordered, refused, handed_over, skipped, failed}` hold codes and numbers only; a refused
+//! reply's entry names the kinds of what was refused (`refused`: `number`, `amount`, `currency`,
+//! `number_word`, `term`, `link`), never the words. No log line or ledger
 //! payload holds a customer's text, the model's answer, a quote's basis, a hand-over's summary or
 //! an order's details.
 
@@ -83,8 +87,18 @@ pub(crate) use orders::shop_in;
 /// The component the automatic replies act as.
 pub const COMPONENT: &str = "inbox_autoreply";
 
-/// The instructions every workspace's model reads first. The workspace's own part follows.
-pub const SYSTEM_FIXED: &str = "You answer a small business's customers on WhatsApp, on the \
+/// The instructions every workspace's model reads first. The workspace's own part follows. Its
+/// rule on numbers is the reply rules' own list ([`rules::allowed_forms_prompt`]), so what the
+/// model is told and what the server lets through cannot part.
+pub static SYSTEM_FIXED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    SYSTEM_FIXED_TEMPLATE.replace(NUMBERS_SLOT, &rules::allowed_forms_prompt())
+});
+
+/// Where [`SYSTEM_FIXED_TEMPLATE`] takes the rule on numbers.
+const NUMBERS_SLOT: &str = "{numbers}";
+
+/// [`SYSTEM_FIXED`] before the rule on numbers is put in.
+const SYSTEM_FIXED_TEMPLATE: &str = "You answer a small business's customers on WhatsApp, on the \
 business's behalf. The business's own words follow: who it is, its knowledge cards, its rules, its \
 notes and its price range.
 
@@ -110,9 +124,8 @@ size, the deadline, a photo when one helps); then quote within the price range, 
 time only as the cards give them; then move to the order.
 - A price is only ever given with the `quote` tool, whose message states that one amount. Never \
 write an amount in a `reply`.
-- Never write digits in a reply except inside a `quote`: write counts and durations in words \
-unless the cards give them as numbers. Never mention prices, discounts or payment outside a \
-`quote`.
+- {numbers}
+- Never mention prices, discounts or payment outside a `quote`.
 - Anything outside the standard work, not covered by the cards, a complaint, a payment problem, \
 a bulk or corporate order, or a customer who asks for a person: use `hand_over`, with a short \
 summary for the person and, when it helps, a short line telling the customer someone will \
@@ -713,6 +726,20 @@ struct Snapshot {
     bargain: Option<Bargain>,
     /// The workspace's setting, for the bargaining policy.
     policy: AutoReply,
+    /// The order tool is offered: a reply may ask for the payment method
+    /// ([`rules::Reading::Ordering`]).
+    ordering: bool,
+}
+
+impl Snapshot {
+    /// How the model's reply is read ([`rules::check_reply_in`]).
+    fn reading(&self) -> rules::Reading {
+        if self.ordering {
+            rules::Reading::Ordering
+        } else {
+            rules::Reading::Reply
+        }
+    }
 }
 
 /// Works conversation `id` of workspace `ws` at `now`; the customer's images are fetched only
@@ -740,41 +767,94 @@ pub async fn work(
     request.history = history(&looking.messages, &seen);
     drop(seen);
     let mut answer = model.answer(&request).await;
-    let ctx = system_ctx(ws, deps.clock.now().max(now));
+    let mut ctx = system_ctx(ws, deps.clock.now().max(now));
     let mut run = called(deps, &ctx, model.model(), &snapshot, &answer).await?;
-    // One repair: a reply the server's rules would refuse for a number, an amount or a link is
-    // asked for once more, with a line saying why; only if that one fails too does the first
-    // answer go on (and is refused with its own reason).
-    if let Ok(first) = &answer
-        && let Some(note) = repair_note(first, &snapshot, ctx.now.year())
-        && within_limits(deps, &ctx, &snapshot).await?
-    {
-        request.system_note = Some(match &request.system_note {
-            Some(state) => format!("{state}\n{note}"),
-            None => note.to_owned(),
+    // The repairs. A reply the server's rules refuse only for numbers in no allowed form (of any
+    // length) or for links is asked for again with a note naming those parts, at most
+    // [`MAX_REPAIRS`] times. A reply that stated money (an amount, a currency, a number word, a
+    // money or payment word) gets one repair whose note names nothing and asks for `quote` or
+    // `hand_over` only; any other answer to it is not sent. A discount that cannot be given,
+    // once. A usable new answer takes the refused one's place, which is never sent: its row is
+    // `skipped` (`repaired`) and the ledger names the kinds refused. An unusable one (an error, no
+    // tool, after money neither a quote nor a hand-over) ends the repairs, and the refused answer
+    // goes on to be refused with its own reason. Every call is a row of its own (`called`), so
+    // the day's limits and spend count each, and each repair is asked only within them.
+    let state_note = request.system_note.clone();
+    let mut repairs = 0;
+    let mut money_asked = false;
+    while let Ok(current) = &answer {
+        let Some(repair) = repair_note(current, &snapshot, ctx.now.year()) else {
+            break;
+        };
+        if repairs >= MAX_REPAIRS
+            || money_asked
+            || (repairs > 0 && repair.refused.is_none())
+            || !within_limits(deps, &ctx, &snapshot).await?
+        {
+            break;
+        }
+        money_asked = repair.money;
+        repairs += 1;
+        request.system_note = Some(match &state_note {
+            Some(state) => format!("{state}\n{}", repair.note),
+            None => repair.note,
         });
-        let second = model.answer(&request).await;
-        let ctx = system_ctx(ws, deps.clock.now().max(now));
-        let mut repair = called(deps, &ctx, model.model(), &snapshot, &second).await?;
+        let next = model.answer(&request).await;
+        ctx = system_ctx(ws, deps.clock.now().max(now));
+        let mut next_run = called(deps, &ctx, model.model(), &snapshot, &next).await?;
+        let usable = matches!(&next, Ok(n) if n.stop == ModelStop::ToolUse && n.tool.is_some());
+        // After money, only a quote or a hand-over may take the refused answer's place: a reply
+        // (or anything else) is not sent, and the refused answer hands the conversation over.
+        let allowed = !repair.money
+            || matches!(
+                &next,
+                Ok(ModelAnswer {
+                    tool: Some(ModelTool::Quote { .. } | ModelTool::HandOver { .. }),
+                    ..
+                })
+            );
+        let usable = usable && allowed;
         let mut r = deps.uow.tenant(ws).await?;
-        match second {
-            // A usable second answer: a tool call the rules do not refuse the same way.
-            Ok(second)
-                if second.stop == ModelStop::ToolUse
-                    && second.tool.is_some()
-                    && repair_note(&second, &snapshot, ctx.now.year()).is_none() =>
-            {
-                run.reason = Some("repaired".into());
-                r.auto_reply().run_update(&run).await?;
-                answer = Ok(second);
-                run = repair;
+        if usable {
+            run.outcome = RunOutcome::Skipped;
+            run.reason = Some("repaired".into());
+            r.auto_reply().run_update(&run).await?;
+            if let Some((reason, kinds)) = &repair.refused {
+                record(
+                    r.as_mut(),
+                    &ctx,
+                    "inbox.autoreply.refused",
+                    "conversation",
+                    snapshot.conversation.id,
+                    json!({
+                        "run_id": run.id,
+                        "reason": reason,
+                        "refused": kinds,
+                        "repair": repairs,
+                    }),
+                )
+                .await?;
             }
-            _ => {
-                repair.reason = Some("repair_refused".into());
-                r.auto_reply().run_update(&repair).await?;
-            }
+        } else if let Ok(n) = &next {
+            // An answer with no tool call to it, or after money neither a quote nor a hand-over:
+            // the refused one goes on.
+            next_run.outcome = RunOutcome::Skipped;
+            next_run.reason = Some(
+                if n.stop == ModelStop::ToolUse && n.tool.is_some() {
+                    "repair_not_quote"
+                } else {
+                    "repair_unusable"
+                }
+                .into(),
+            );
+            r.auto_reply().run_update(&next_run).await?;
         }
         r.commit().await?;
+        if !usable {
+            break;
+        }
+        answer = next;
+        run = next_run;
     }
     drop(request);
     match answer {
@@ -786,11 +866,85 @@ pub async fn work(
     }
 }
 
-/// What the model is told when its reply is asked for once more ([`repairable`]).
-const REPAIR_LINE: &str = "Your previous answer was not sent because it contained a number, an \
-amount, a discount word or a link. Answer again without digits, amounts, discount or payment \
-words or links (write counts as words), or use `hand_over` if the customer is asking about \
-price.";
+/// How many times a refused reply is asked for again ([`work`]).
+const MAX_REPAIRS: u32 = 2;
+/// How many refused parts a repair's note names, and how long each may be, in characters.
+const MAX_REPAIR_PARTS: usize = 8;
+const MAX_REPAIR_PART_CHARS: usize = 40;
+
+/// What the model is told when its reply is asked for again ([`repair_line`]): the parts of its
+/// own answer the rules refused go between the two.
+const REPAIR_LEAD: &str = "Your previous answer was not sent: the server's rules refused these \
+parts of it:";
+const REPAIR_TAIL: &str = "Write your answer again without them and keep the rest of what it \
+said. Digits are allowed only in the forms your instructions list; write any other number in \
+words. A price is given only with `quote`; use `hand_over` if the customer is asking about price.";
+
+/// What a refused part is, as the model is told.
+fn part_kind_text(kind: rules::PartKind) -> &'static str {
+    match kind {
+        rules::PartKind::Number => "a number in a form that is not allowed",
+        rules::PartKind::Amount => "an amount of money",
+        rules::PartKind::Currency => "a currency",
+        rules::PartKind::NumberWord => "a number word that makes an amount",
+        rules::PartKind::Term => "a price, discount or payment word",
+        rules::PartKind::Link => "a link the cards do not hold",
+    }
+}
+
+/// The repair's note for the refused `parts` of the model's own reply: each part (at most
+/// [`MAX_REPAIR_PARTS`]) and what it is, between [`REPAIR_LEAD`] and [`REPAIR_TAIL`].
+fn repair_line(parts: &[rules::RefusedPart]) -> String {
+    let named: Vec<String> = parts
+        .iter()
+        .take(MAX_REPAIR_PARTS)
+        .map(|p| {
+            let text: String = p.text.chars().take(MAX_REPAIR_PART_CHARS).collect();
+            format!("\"{text}\" ({})", part_kind_text(p.kind))
+        })
+        .collect();
+    let more = if parts.len() > MAX_REPAIR_PARTS {
+        ", and more of the same"
+    } else {
+        ""
+    };
+    format!("{REPAIR_LEAD} {}{more}. {REPAIR_TAIL}", named.join(", "))
+}
+
+/// The kinds of `parts` (their codes, each once, in a fixed order): what a ledger entry keeps of
+/// a refused text.
+fn part_kinds(parts: &[rules::RefusedPart]) -> Vec<&'static str> {
+    let mut kinds: Vec<rules::PartKind> = parts.iter().map(|p| p.kind).collect();
+    kinds.sort();
+    kinds.dedup();
+    kinds.into_iter().map(rules::PartKind::key).collect()
+}
+
+/// What a repair asks ([`repair_note`]).
+struct Repair {
+    /// The note to the model.
+    note: String,
+    /// For a reply the rules refused: the refusal's code and the kinds of the parts refused.
+    refused: Option<(&'static str, Vec<&'static str>)>,
+    /// The reply stated money ([`states_money_parts`]): the note names nothing and only a
+    /// `quote` or a `hand_over` may follow.
+    money: bool,
+}
+
+/// What the model is told after a reply that stated money: no part is named (a rephrase is
+/// never coached), and only a quote or a hand-over may follow.
+const MONEY_REPAIR: &str = "Your previous answer was not sent: it stated a price, an amount, a \
+discount or a payment term, which can be given only through `quote`. Answer now only with `quote` \
+or with `hand_over`; any other answer is not sent and the conversation goes to a person.";
+
+/// Whether the refused `parts` hold money: an amount, a currency, a number word, a money or
+/// payment word. A bare number of any length is not: it gets the naming repair, whose note says
+/// a price goes only through `quote` (`2026 siparişleri`, `15x20` are ordinary words).
+fn states_money_parts(parts: &[rules::RefusedPart]) -> bool {
+    parts
+        .iter()
+        .any(|p| !matches!(p.kind, rules::PartKind::Number | rules::PartKind::Link))
+}
 
 /// What the model is told when it asks for a discount with no quote of its own to discount.
 const NO_QUOTE_TO_DISCOUNT: &str = "There is no quote of yours to discount in this conversation. \
@@ -808,23 +962,41 @@ const BEST_PRICE_LINE: &str = "Size sunabileceğimiz en iyi fiyat bu.";
 const NO_QUOTE_LINE: &str = "Size en uygun teklifi hazırlayalım: isteğinizi biraz daha anlatır \
 mısınız?";
 
-/// What the model is told when `answer` is worth asking for once more ([`work`]): a `reply` the
-/// server's rules refuse for money, a number or a link; a `discount` that cannot be given (no
-/// quote of its own, the customer did not bargain, nothing more to give). None otherwise.
-fn repair_note(answer: &ModelAnswer, s: &Snapshot, year: i32) -> Option<&'static str> {
+/// What the model is told when `answer` is worth asking for again ([`work`]): a `reply` the
+/// server's rules refuse for money, a number or a link (the parts refused named,
+/// [`repair_line`]); a `discount` that cannot be given (no quote of its own, the customer did not
+/// bargain, nothing more to give). None otherwise.
+fn repair_note(answer: &ModelAnswer, s: &Snapshot, year: i32) -> Option<Repair> {
     match (&answer.stop, &answer.tool) {
-        (ModelStop::ToolUse, Some(ModelTool::Reply { text })) => matches!(
-            rules::check_reply(text, &s.cards, year),
-            Err(rules::Refusal::PriceWithoutQuote | rules::Refusal::LinkInReply)
-        )
-        .then_some(REPAIR_LINE),
+        (ModelStop::ToolUse, Some(ModelTool::Reply { text })) => {
+            let refusal = match rules::check_reply_in(text, &s.cards, year, s.reading()) {
+                Err(r @ (rules::Refusal::PriceWithoutQuote | rules::Refusal::LinkInReply)) => r,
+                _ => return None,
+            };
+            let parts = rules::refused_parts_in(text, &s.cards, year, s.reading());
+            let money = states_money_parts(&parts);
+            Some(Repair {
+                note: if money {
+                    MONEY_REPAIR.to_owned()
+                } else {
+                    repair_line(&parts)
+                },
+                refused: Some((refusal.key(), part_kinds(&parts))),
+                money,
+            })
+        }
         (ModelStop::ToolUse, Some(ModelTool::Discount { .. })) if !s.human_priced => {
-            match &s.bargain {
-                None => Some(NO_QUOTE_TO_DISCOUNT),
-                Some(b) if !b.asked => Some(UNPROMPTED_DISCOUNT),
-                Some(b) if b.next.is_none() => Some(NO_FURTHER_DISCOUNT),
-                Some(_) => None,
-            }
+            let note = match &s.bargain {
+                None => NO_QUOTE_TO_DISCOUNT,
+                Some(b) if !b.asked => UNPROMPTED_DISCOUNT,
+                Some(b) if b.next.is_none() => NO_FURTHER_DISCOUNT,
+                Some(_) => return None,
+            };
+            Some(Repair {
+                note: note.to_owned(),
+                refused: None,
+                money: false,
+            })
         }
         _ => None,
     }
@@ -1163,7 +1335,7 @@ async fn judge(
     let discounted_text;
     let (text, facts) = match (&answer.stop, &answer.tool) {
         (ModelStop::ToolUse, Some(ModelTool::Reply { text }))
-            if rules::check_reply(text, &s.cards, year).is_ok() =>
+            if rules::check_reply_in(text, &s.cards, year, s.reading()).is_ok() =>
         {
             (text.as_str(), no_price.to_owned())
         }
@@ -1189,7 +1361,7 @@ async fn judge(
         }
         (ModelStop::ToolUse, Some(ModelTool::CreateOrder { text, .. }))
             if !text.trim().is_empty()
-                && rules::check_reply(text.trim(), &s.cards, year).is_ok() =>
+                && rules::check_reply_in(text.trim(), &s.cards, year, s.reading()).is_ok() =>
         {
             (text.trim(), orders::ORDER_FACTS.to_owned())
         }
@@ -1605,11 +1777,16 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         human_priced,
         bargain,
         policy: auto.clone(),
+        ordering: false,
     };
     // The order tool, only with a shop to order from and a quote on the journey: otherwise the
     // request is exactly what it was before orders existed.
     let order = orders::offer(deps, r.as_mut(), &snapshot.conversation, now).await?;
-    let mut system_fixed = SYSTEM_FIXED.to_owned();
+    let snapshot = Snapshot {
+        ordering: order.is_some(),
+        ..snapshot
+    };
+    let mut system_fixed = SYSTEM_FIXED.as_str().to_owned();
     if let Some(offer) = &order {
         system_fixed.push_str(orders::ORDER_FIXED);
         if let Some(reference) = &offer.done {
@@ -2135,8 +2312,10 @@ async fn decide(
     };
     match tool {
         ModelTool::Reply { text } => {
-            if let Err(refusal) = rules::check_reply(&text, &s.cards, year) {
-                return server_refused(deps, ctx, r, c, run_id, refusal.key()).await;
+            if let Err(refusal) = rules::check_reply_in(&text, &s.cards, year, s.reading()) {
+                let kinds =
+                    part_kinds(&rules::refused_parts_in(&text, &s.cards, year, s.reading()));
+                return server_refused_for(deps, ctx, r, c, run_id, refusal.key(), &kinds).await;
             }
             if let Some(reason) = verdict.refusal() {
                 return server_refused(deps, ctx, r, c, run_id, reason).await;
@@ -2344,13 +2523,32 @@ async fn server_refused(
     run_id: Uuid,
     reason: &'static str,
 ) -> Result<Decided, AppError> {
+    server_refused_for(deps, ctx, r, c, run_id, reason, &[]).await
+}
+
+/// [`server_refused`] for a text whose refused parts are of `kinds` ([`part_kinds`]): the ledger
+/// entry keeps the kinds (`refused`), never the text.
+#[allow(clippy::too_many_arguments)]
+async fn server_refused_for(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    run_id: Uuid,
+    reason: &'static str,
+    kinds: &[&'static str],
+) -> Result<Decided, AppError> {
+    let mut payload = json!({ "run_id": run_id, "reason": reason });
+    if !kinds.is_empty() {
+        payload["refused"] = json!(kinds);
+    }
     record(
         r,
         ctx,
         "inbox.autoreply.refused",
         "conversation",
         c.id,
-        json!({ "run_id": run_id, "reason": reason }),
+        payload,
     )
     .await?;
     hand_over(
@@ -2896,6 +3094,73 @@ mod tests {
             "Saying that the message comes from the business's automatic assistant, or that a \
              person from the team can take over, is never a reason for `allowed` to be false."
         ));
+    }
+
+    #[test]
+    fn the_rule_on_numbers_is_the_guards_own() {
+        assert!(SYSTEM_FIXED.contains(&rules::allowed_forms_prompt()));
+        assert!(!SYSTEM_FIXED.contains(NUMBERS_SLOT));
+        assert!(!SYSTEM_FIXED.contains("Never write digits in a reply"));
+        // Each form the guard lets through is one the model is told of, and the other way round.
+        for form in rules::ALLOWED_FORMS {
+            for example in form.examples {
+                assert!(SYSTEM_FIXED.contains(&format!("`{example}`")), "{example}");
+                assert_eq!(rules::check_reply(example, "", 2026), Ok(()), "{example}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_repair_names_the_refused_parts_and_their_kinds() {
+        let parts = rules::refused_parts("12 fotoğraf, ornek.test", "", 2026);
+        assert!(!states_money_parts(&parts));
+        let line = repair_line(&parts);
+        assert!(line.starts_with(REPAIR_LEAD), "{line}");
+        for named in [
+            "\"12\" (a number in a form that is not allowed)",
+            "\"ornek.test\" (a link the cards do not hold)",
+        ] {
+            assert!(line.contains(named), "{named}: {line}");
+        }
+        assert!(line.contains("`quote`") && line.contains("`hand_over`"));
+        assert_eq!(part_kinds(&parts), ["number", "link"]);
+        // Anything of money takes the other path: no part is named.
+        for text in [
+            "950 liraya",
+            "iki bin",
+            "indirimli",
+            "ucretsiz",
+            "12 ay vadeli",
+            "Tanesi elli olur",
+            "Fiyatı 12.50 olur",
+            "15.30 eder",
+        ] {
+            let parts = rules::refused_parts(text, "", 2026);
+            assert!(states_money_parts(&parts), "{text}");
+        }
+        // A bare number of any length gets the naming repair.
+        for text in [
+            "2026 siparişleri",
+            "2027'de",
+            "15x20",
+            "12345",
+            "1250 olur",
+            "15.30 olur mu?",
+            "Boyu 20 olur",
+        ] {
+            let parts = rules::refused_parts(text, "", 2026);
+            assert!(!parts.is_empty(), "{text}");
+            assert!(!states_money_parts(&parts), "{text}");
+        }
+        assert!(!MONEY_REPAIR.contains('"'));
+        // Long lists are cut.
+        let many = rules::refused_parts("11 12 13 14 15 16 17 18 19 20", "", 2026);
+        let line = repair_line(&many);
+        assert!(
+            line.contains("\"18\"") && !line.contains("\"19\""),
+            "{line}"
+        );
+        assert!(line.contains("and more of the same"));
     }
 
     #[test]
