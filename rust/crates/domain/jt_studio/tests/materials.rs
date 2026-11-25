@@ -69,7 +69,40 @@ fn material(n: u128, binding: Binding) -> Material {
         erased_at: None,
         upload_for: None,
         composition: None,
+        unknown: Default::default(),
     }
+}
+
+/// Every field a material serializes is a known name, so a kept unknown field cannot take one;
+/// a material with no unknown field serializes exactly as before (no extra key); one with an
+/// unknown field keeps it through a round trip, and a known field of the wrong type is refused.
+#[test]
+fn unknown_material_fields_are_kept_and_cannot_shadow_known_ones() {
+    let m = material(1, Binding::Genel);
+    let v = serde_json::to_value(&m).unwrap();
+    let mut keys: BTreeSet<String> = v.as_object().unwrap().keys().cloned().collect();
+    keys.extend(["upload_for".to_owned(), "composition".to_owned()]);
+    let known: BTreeSet<String> = MATERIAL_FIELDS.iter().map(|k| (*k).to_owned()).collect();
+    assert_eq!(keys, known);
+    let mut later = v.clone();
+    later["added_later"] = serde_json::json!({"kept": true});
+    let read: Material = serde_json::from_value(later.clone()).unwrap();
+    assert_eq!(
+        read.unknown["added_later"],
+        serde_json::json!({"kept": true})
+    );
+    assert_eq!(serde_json::to_value(&read).unwrap(), later);
+    // Gone with erasure: whether it is personal is not known here.
+    let erased = read.redacted(datetime!(2025-02-01 0:00 UTC));
+    assert!(erased.unknown.is_empty());
+    let mut wrong = v.clone();
+    wrong["revision"] = serde_json::json!("one");
+    assert!(serde_json::from_value::<Material>(wrong).is_err());
+    let mut shadow = read.clone();
+    shadow
+        .unknown
+        .insert("title".into(), serde_json::json!("x"));
+    assert!(shadow.validate().is_err());
 }
 
 fn bound(o: &Olay) -> Binding {

@@ -245,6 +245,7 @@ pub fn eligible_material(olay: &jt_studio::Olay, file: FileId) -> jt_studio::Mat
         erased_at: None,
         upload_for: None,
         composition: None,
+        unknown: Default::default(),
     }
 }
 
