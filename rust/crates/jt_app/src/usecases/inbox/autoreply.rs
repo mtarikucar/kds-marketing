@@ -769,17 +769,16 @@ pub async fn work(
     let mut answer = model.answer(&request).await;
     let mut ctx = system_ctx(ws, deps.clock.now().max(now));
     let mut run = called(deps, &ctx, model.model(), &snapshot, &answer).await?;
-    // The repairs. A reply the server's rules refuse only for numbers in no allowed form or for
-    // links is asked for again with a note naming those parts, at most [`MAX_REPAIRS`] times. A
-    // reply that stated money (an amount, a currency, a number word, a money or payment word, a
-    // number of three digits or more) gets one repair whose note names nothing and asks for
-    // `quote` or `hand_over` only; any other answer to it is not sent. A discount that cannot be
-    // given, once. A usable new answer takes the refused one's place, which is never sent: its
-    // row is `skipped` (`repaired`) and the ledger names the kinds refused. An unusable one (an
-    // error, no tool, after money neither a quote nor a hand-over) ends the repairs, and the
-    // refused answer goes on to be refused with its own reason. Every call is a row of its own
-    // (`called`), so the day's limits and spend count each, and each repair is asked only within
-    // them.
+    // The repairs. A reply the server's rules refuse only for numbers in no allowed form (of any
+    // length) or for links is asked for again with a note naming those parts, at most
+    // [`MAX_REPAIRS`] times. A reply that stated money (an amount, a currency, a number word, a
+    // money or payment word) gets one repair whose note names nothing and asks for `quote` or
+    // `hand_over` only; any other answer to it is not sent. A discount that cannot be given,
+    // once. A usable new answer takes the refused one's place, which is never sent: its row is
+    // `skipped` (`repaired`) and the ledger names the kinds refused. An unusable one (an error, no
+    // tool, after money neither a quote nor a hand-over) ends the repairs, and the refused answer
+    // goes on to be refused with its own reason. Every call is a row of its own (`called`), so
+    // the day's limits and spend count each, and each repair is asked only within them.
     let state_note = request.system_note.clone();
     let mut repairs = 0;
     let mut money_asked = false;
@@ -939,13 +938,12 @@ discount or a payment term, which can be given only through `quote`. Answer now 
 or with `hand_over`; any other answer is not sent and the conversation goes to a person.";
 
 /// Whether the refused `parts` hold money: an amount, a currency, a number word, a money or
-/// payment word, or a number of three digits or more (a bare number is read as a price).
+/// payment word. A bare number of any length is not: it gets the naming repair, whose note says
+/// a price goes only through `quote` (`2026 siparişleri`, `15x20` are ordinary words).
 fn states_money_parts(parts: &[rules::RefusedPart]) -> bool {
-    parts.iter().any(|p| match p.kind {
-        rules::PartKind::Number => p.text.chars().filter(char::is_ascii_digit).count() >= 3,
-        rules::PartKind::Link => false,
-        _ => true,
-    })
+    parts
+        .iter()
+        .any(|p| !matches!(p.kind, rules::PartKind::Number | rules::PartKind::Link))
 }
 
 /// What the model is told when it asks for a discount with no quote of its own to discount.
@@ -3130,12 +3128,18 @@ mod tests {
             "950 liraya",
             "iki bin",
             "indirimli",
-            "1250 olur",
             "ucretsiz",
             "12 ay vadeli",
+            "Tanesi elli olur",
         ] {
             let parts = rules::refused_parts(text, "", 2026);
             assert!(states_money_parts(&parts), "{text}");
+        }
+        // A bare number of any length gets the naming repair.
+        for text in ["2026 siparişleri", "2027'de", "15x20", "1250 olur", "12345"] {
+            let parts = rules::refused_parts(text, "", 2026);
+            assert!(!parts.is_empty(), "{text}");
+            assert!(!states_money_parts(&parts), "{text}");
         }
         assert!(!MONEY_REPAIR.contains('"'));
         // Long lists are cut.

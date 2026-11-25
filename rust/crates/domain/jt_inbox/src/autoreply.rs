@@ -75,9 +75,11 @@ impl Refusal {
 /// Whether a person's `text` states money, read generously (a person on the team writes a price
 /// as "3500 olur" as often as "3.500 TL"): an amount, a currency, a word of the money and discount
 /// lexicon, any number in no allowed form (a date, a clock time, a phone number and a count with
-/// its unit are allowed), or "buçuk" next to a number word ("iki buçuk").
+/// its unit are allowed), or "buçuk" next to a number word ("iki buçuk"). The payment words
+/// ([`Reading::Team`]: `ödeme`, `havale` …) are no price from a person: "ödeme linkini
+/// gönderiyorum" leaves the journey to the automatic quote.
 pub fn states_money(text: &str, year: i32) -> bool {
-    let s = scan(text, year);
+    let s = scan_in(text, year, Reading::Team);
     if !(s.amounts.is_empty()
         && s.currency.is_empty()
         && s.terms.is_empty()
@@ -113,6 +115,9 @@ pub fn check_reply(text: &str, cards: &str, year: i32) -> Result<(), Refusal> {
 pub enum Reading {
     Reply,
     Ordering,
+    /// A person on the team's message ([`states_money`]): the payment words (`vade`, `ödeme`,
+    /// `havale`, `nakit`, `iban`, `eft`) are not read as money.
+    Team,
 }
 
 /// [`check_reply`] read as `reading` says.
@@ -199,7 +204,15 @@ pub const ALLOWED_FORMS: &[AllowedForm] = &[
             "15-20 cm",
             "15 ile 20 cm",
             "2 adet",
+            "500 gram",
+            "250 ml",
+            "300 dpi",
+            "1080 piksel",
         ],
+    },
+    AllowedForm {
+        what: "a size of two or three counts joined by `x` or `×`, right before a length unit",
+        examples: &["20x30 cm", "20 x 30 cm", "20×30×40 mm", "20x30cm"],
     },
     AllowedForm {
         what: "a one-digit count, or two of them, right before what is counted ({nouns})",
@@ -526,11 +539,6 @@ const TERM_STEMS: &[&str] = &[
     "taksit",
     "peşin",
     "kapora",
-    "vade",
-    "ödeme",
-    "havale",
-    "nakit",
-    "iban",
     "free",
     "discount",
     "percent",
@@ -538,8 +546,12 @@ const TERM_STEMS: &[&str] = &[
 /// The payment method's words, allowed in a reply while the customer is ordering
 /// ([`Reading::Ordering`]), with `eft`: the order tool asks for card or bank transfer.
 pub const PAYMENT_METHOD_STEMS: &[&str] = &["havale", "ödeme"];
-/// Money and payment words, as a whole stem (`EFT'yle`).
-const TERM_EXACT: &[&str] = &["eft"];
+/// Payment words, with any suffix, and `eft` as a whole stem (`EFT'yle`): refused in a reply,
+/// not read as a price in a person's message ([`Reading::Team`]).
+const PAYMENT_STEMS: &[&str] = &["vade", "ödeme", "havale", "nakit", "iban"];
+/// The forms of `vadetmek` (to promise), which are no `vade` (a payment's term): `vadede`,
+/// `vadeden`, `vadeye` are.
+const PROMISE_STEMS: &[&str] = &["vadet", "vadediyor", "vadedece", "vadeder", "vadedil"];
 /// The months, by a stem the word starts with: a year beside one reads as a date.
 const MONTHS: &[&str] = &[
     "ocak", "şubat", "mart", "nisan", "mayıs", "haziran", "temmuz", "ağustos", "eylül", "ekim",
@@ -547,15 +559,21 @@ const MONTHS: &[&str] = &[
 ];
 /// Words beside which a bare number is a price (`Fiyatı 2026`, `2027 olur`).
 const PRICE_WORDS: &[&str] = &["fiyat", "ücret", "tutar", "olur"];
+/// Words beside which number words are a price (`Tanesi elli olur`, `Fiyatı doksan dokuz`):
+/// these by a stem the word starts with …
+const PRICE_STEMS: &[&str] = &["fiyat", "ücret", "tutar"];
+/// … and these as the whole word.
+const PRICE_EXACT: &[&str] = &["olur", "tanesi", "adedi", "eder", "tutuyor"];
 /// Words after which "hediye" (a gift) is a free item.
 const GIFT_AFTER: &[&str] = &["ikincisi", "ikinci", "üçüncü", "üçüncüsü", "yanında"];
 /// Units a count is allowed with: a stem the next word starts with.
 const UNITS: &[&str] = &[
-    "gün", "saat", "hafta", "dakika", "adet", "kişi", "parça", "santim", "metre",
+    "gün", "saat", "hafta", "dakika", "adet", "kişi", "parça", "santim", "metre", "gram", "litre",
+    "piksel",
 ];
 /// Units a count is allowed with: the next word exactly (with an apostrophe suffix at most).
 const UNITS_EXACT: &[&str] = &[
-    "ay", "aylık", "ayda", "cm", "mm", "m", "dk", "sn", "kg", "gr",
+    "ay", "aylık", "ayda", "cm", "mm", "m", "dk", "sn", "kg", "gr", "g", "ml", "lt", "px", "dpi",
 ];
 /// The nouns a one-digit count, or a one-digit range (`2-3`, `2 ya da 3`), may stand before
 /// (`2-3 fotoğraf`): a stem the next word starts with.
@@ -577,7 +595,53 @@ const COUNT_NOUNS: &[&str] = &[
     "tane",
 ];
 /// Units that may be glued to a count (`15cm`).
-const GLUED_UNITS: &[&str] = &["cm", "mm", "m", "kg", "gr", "dk"];
+const GLUED_UNITS: &[&str] = &[
+    "cm", "mm", "m", "kg", "gr", "dk", "g", "ml", "lt", "px", "dpi",
+];
+/// The length units a size (`20x30 cm`) stands before, or has glued (`20x30cm`).
+const LENGTH_UNITS: &[&str] = &["cm", "mm", "m"];
+/// The length units a size stands before, by a stem the word starts with.
+const LENGTH_STEMS: &[&str] = &["santim", "metre"];
+
+/// The size starting at `words[i]`: two or three counts joined by `x` or `×`, with or without
+/// spaces (`20x30`, `20 x 30`, `20×30×40`), then a length unit, glued or as the next word. The
+/// index after its last number, when it is one.
+fn size_at(words: &[Word], i: usize) -> Option<usize> {
+    let sized = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | 'x' | '×'))
+    };
+    let mut expr = String::new();
+    let mut j = i;
+    let mut glued = false;
+    while let Some(w) = words.get(j) {
+        if j - i >= 5 {
+            break;
+        }
+        if let Some(body) = LENGTH_UNITS
+            .iter()
+            .find_map(|u| w.stem.strip_suffix(u).filter(|b| sized(b)))
+        {
+            expr.push_str(body);
+            j += 1;
+            glued = true;
+            break;
+        }
+        if !sized(&w.stem) || w.suffixed {
+            break;
+        }
+        expr.push_str(&w.stem);
+        j += 1;
+    }
+    let parts: Vec<&str> = expr.split(['x', '×']).collect();
+    let unit = glued
+        || words.get(j).is_some_and(|n| {
+            LENGTH_UNITS.contains(&n.stem.as_str())
+                || LENGTH_STEMS.iter().any(|u| n.stem.starts_with(u))
+        });
+    ((2..=3).contains(&parts.len()) && parts.iter().all(|p| count_part(p)) && unit).then_some(j)
+}
 
 /// What a Turkish letter is typed as on a keyboard without it.
 fn plain(c: char) -> char {
@@ -710,14 +774,43 @@ fn is_currency(w: &Word) -> bool {
         || starts_any(&w.stem, CURRENCY_STEMS)
 }
 
-fn is_term(w: &Word) -> bool {
-    // `vadetmek` (to promise: `vadediyoruz`) is no `vade` (a payment's term).
-    let promise = starts(&w.stem, "vadet") || starts(&w.stem, "vaded");
-    w.text.contains('%')
-        || TERM_STEMS
-            .iter()
-            .any(|s| starts(&w.stem, s) && !(*s == "vade" && promise))
-        || is_any(&w.stem, TERM_EXACT)
+/// A word of the money and discount lexicon, read as `reading` says: the payment words are
+/// terms in a reply, all but the payment method's while ordering, and none in a person's
+/// message.
+fn is_term_in(w: &Word, reading: Reading) -> bool {
+    let discount = w.text.contains('%') || starts_any(&w.stem, TERM_STEMS);
+    let method = starts_any(&w.stem, PAYMENT_METHOD_STEMS) || is(&w.stem, "eft");
+    discount
+        || match reading {
+            Reading::Reply => is_payment(w),
+            Reading::Ordering => is_payment(w) && !method,
+            Reading::Team => false,
+        }
+}
+
+/// A payment word ([`PAYMENT_STEMS`], `eft`); `vadetmek` (to promise) is none.
+fn is_payment(w: &Word) -> bool {
+    let promise = starts_any(&w.stem, PROMISE_STEMS);
+    PAYMENT_STEMS
+        .iter()
+        .any(|s| starts(&w.stem, s) && !(*s == "vade" && promise))
+        || is(&w.stem, "eft")
+}
+
+/// Whether `w` is a word beside which number words are a price ([`PRICE_STEMS`],
+/// [`PRICE_EXACT`]).
+fn is_number_price_word(w: &Word) -> bool {
+    starts_any(&w.stem, PRICE_STEMS) || is_any(&w.stem, PRICE_EXACT)
+}
+
+/// Whether `w` is a number word of any kind: plain (`elli`), `yüz`, `bin`, glued (`yüzelli`) or
+/// a tens word with a suffix.
+fn numberish(w: &Word) -> bool {
+    is_number_word(w)
+        || is_yuz(w)
+        || is_bin(w)
+        || glued_number_words(&w.stem)
+        || TENS.iter().any(|t| with_suffix(&w.stem, t))
 }
 
 /// Whether `w` is a word beside which a bare number is a price ([`PRICE_WORDS`]).
@@ -847,11 +940,11 @@ fn age_after(words: &[Word], j: usize) -> bool {
 /// Whether the count `num` at `words[j]` stands before an allowed unit ([`UNITS`],
 /// [`UNITS_EXACT`], `iş günü`); a count of months only up to 24 (`36 ay` is a price's
 /// instalments), and never beside a payment word.
-fn unit_after(words: &[Word], j: usize, num: &str) -> bool {
+fn unit_after(words: &[Word], j: usize, num: &str, reading: Reading) -> bool {
     let next = words.get(j + 1);
     // A count of months beside a payment word is a price's term (`12 ay vadeli`, `2 ayda bir
     // ödeme`).
-    let payment = (j + 2..=j + 3).any(|k| words.get(k).is_some_and(is_term));
+    let payment = (j + 2..=j + 3).any(|k| words.get(k).is_some_and(|w| is_term_in(w, reading)));
     let months = next.is_some_and(|n| n.stem.starts_with("ay"))
         && (payment || !num.parse::<u32>().is_ok_and(|n| n <= 24));
     (next.is_some_and(is_unit) && !months)
@@ -878,6 +971,8 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
         phone.clear();
         *digits = 0;
     };
+    // Where the size being read ends ([`size_at`]): its numbers are allowed.
+    let mut size_end = 0;
     for (i, w) in words.iter().enumerate() {
         let prev = i.checked_sub(1).map(|p| &words[p]);
         let next = words.get(i + 1);
@@ -886,9 +981,7 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
         if is_currency(w) {
             out.currency.push(i);
         }
-        let method = reading == Reading::Ordering
-            && (starts_any(&w.stem, PAYMENT_METHOD_STEMS) || is(&w.stem, "eft"));
-        if (is_term(w) && !method)
+        if is_term_in(w, reading)
             || mixed_script(w)
             || (is(&w.stem, "yarı")
                 && next.is_some_and(|n| starts(&n.stem, "fiyat") || starts(&n.stem, "yarı")))
@@ -961,6 +1054,14 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
         if glued.is_empty() && date_or_time(num) {
             continue;
         }
+        // A size before a length unit (`20x30 cm`, `20 × 30 × 40 cm`, `20x30cm`).
+        if i < size_end {
+            continue;
+        }
+        if let Some(end) = size_at(&words, i) {
+            size_end = end;
+            continue;
+        }
         let bare = glued.is_empty() && !w.suffixed;
         // A list number opening a line (`1.`, `2)`): [`words_of`] marks it.
         if w.marker && bare {
@@ -996,7 +1097,8 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
         }
         // A count, or a range of counts (`3-5`), before an allowed unit or with one glued.
         if range_of(num, count_part)
-            && ((glued.is_empty() && unit_after(&words, i, num)) || GLUED_UNITS.contains(&glued))
+            && ((glued.is_empty() && unit_after(&words, i, num, reading))
+                || GLUED_UNITS.contains(&glued))
         {
             continue;
         }
@@ -1021,7 +1123,7 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
                 let units = count_part(num)
                     && count_part(m_num)
                     && (GLUED_UNITS.contains(&m_glued)
-                        || (m_glued.is_empty() && unit_after(&words, j, m_num)));
+                        || (m_glued.is_empty() && unit_after(&words, j, m_num, reading)));
                 let ages =
                     age_part(num) && age_part(m_num) && m_glued.is_empty() && age_after(&words, j);
                 rising && (units || ages)
@@ -1060,14 +1162,42 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
             && num.len() == 4
             && num.parse::<i32>().is_ok_and(|y| y == year || y == year + 1)
             && (month(prev) || month(next) || next.is_some_and(|n| starts(&n.stem, "yıl")))
-            && !prev.is_some_and(|p| is_currency(p) || is_term(p) || is_price_word(p))
-            && !next.is_some_and(|n| is_currency(n) || is_term(n) || is_bin(n) || is_price_word(n));
+            && !prev.is_some_and(|p| is_currency(p) || is_term_in(p, reading) || is_price_word(p))
+            && !next.is_some_and(|n| {
+                is_currency(n) || is_term_in(n, reading) || is_bin(n) || is_price_word(n)
+            });
         if bare_year {
             continue;
         }
         out.numbers.push(i);
     }
     end_phone(&mut out, &mut phone, &mut phone_digits);
+    // A price in number words: a run of them beside a price word (`Tanesi elli olur`, `Fiyatı
+    // doksan dokuz`, `kırk beş olur`). A lone `bir` before one is an article (`bir fiyat`).
+    let mut k = 0;
+    while k < words.len() {
+        if !numberish(&words[k]) {
+            k += 1;
+            continue;
+        }
+        let start = k;
+        while k < words.len() && numberish(&words[k]) {
+            k += 1;
+        }
+        let article = k - start == 1 && is(&words[start].stem, "bir");
+        let before = start
+            .checked_sub(1)
+            .is_some_and(|p| is_number_price_word(&words[p]));
+        let after = !article && words.get(k).is_some_and(is_number_price_word);
+        if before || after {
+            for j in start..k {
+                if !out.number_words.contains(&j) {
+                    out.terms.push(j);
+                    out.number_words.push(j);
+                }
+            }
+        }
+    }
     out
 }
 
@@ -1626,6 +1756,129 @@ mod tests {
             "2027 yılında",
             "2026 yılbaşı",
             "21.11.2026",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+        }
+    }
+
+    #[test]
+    fn sizes_and_measures_pass_and_money_beside_them_does_not() {
+        for text in [
+            "20x30 cm",
+            "20x30cm",
+            "20 x 30 cm",
+            "20×30 cm",
+            "20 × 30 × 40 cm",
+            "20x30x40 mm",
+            "1,5x2 m",
+            "20x30 santim",
+            "500 gram",
+            "500 gr",
+            "500g",
+            "250 ml",
+            "250ml",
+            "1 lt",
+            "2 litre",
+            "300 dpi",
+            "300dpi",
+            "1080 piksel",
+            "1080px",
+            "Baskı 20x30 cm, 300 dpi olsun.",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+            assert!(!states_money(text, YEAR), "{text}");
+        }
+        for text in [
+            "20x30",
+            "15x20",
+            "20x30 TL",
+            "20x30 cm 500 TL",
+            "20x30x40x50 cm",
+            "20x30000 cm",
+            "3x500 TL",
+            "x30 cm",
+            "20x30 gram",
+            "500 gram 300 TL",
+            "12345 gram",
+            "250 ml'ye 90 TL",
+            "500 gram 1500",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_team_members_payment_words_are_no_price() {
+        for text in [
+            "Ödeme linkini gönderiyorum.",
+            "Havale ile ödeyebilirsiniz.",
+            "odeme linkini gonderiyorum",
+            "IBAN'ı da gönderiyorum.",
+            "Nakit de olur.",
+            "EFT ile de olur.",
+            "12 ay vadeli olabilir.",
+        ] {
+            assert!(!states_money(text, YEAR), "{text}");
+            // In a reply they stay refused.
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+        for text in [
+            "Fiyatı 3.500 TL",
+            "3500 olur",
+            "%10 indirim yaparız",
+            "Tanesi elli olur",
+            "taksit yapılır",
+            "ucretsiz kargo",
+        ] {
+            assert!(states_money(text, YEAR), "{text}");
+        }
+    }
+
+    #[test]
+    fn vade_is_refused_in_every_form_and_vadetmek_is_not() {
+        for text in ["6 ay vadede", "vadeden", "vadeye", "Vadede ödeme", "vadesi"] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+        for text in [
+            "Kalite vadediyoruz.",
+            "Hızlı teslim vadetti.",
+            "Bunu vadedeceğiz.",
+            "vadedecegiz",
+            "Kalite vadeder.",
+            "vadedilen kalite",
+        ] {
+            assert_eq!(reply(text), Ok(()), "{text}");
+        }
+    }
+
+    #[test]
+    fn number_words_beside_a_price_word_are_a_price() {
+        for text in [
+            "Tanesi elli olur",
+            "Fiyatı doksan dokuz",
+            "kırk beş olur",
+            "Tanesi yüz olur",
+            "tanesi elli",
+            "fiyati doksan dokuz",
+            "kirk bes olur",
+            "Adedi on iki",
+            "otuz eder",
+            "kırk tutuyor",
+            "Ücreti yetmiş",
+            "Tanesi bir",
+            "iki olur",
+        ] {
+            assert_eq!(reply(text), Err(Refusal::PriceWithoutQuote), "{text}");
+            assert!(states_money(text, YEAR), "{text}");
+        }
+        for text in [
+            "iki fotoğraf gönderin",
+            "üç gün sürer",
+            "bir tane olur mu?",
+            "İki fotoğraf yeterli olur.",
+            "Size bir fiyat hazırlayalım.",
+            "Yüz yüze görüşebiliriz.",
+            "Bir de arka tarafı olsun.",
         ] {
             assert_eq!(reply(text), Ok(()), "{text}");
         }

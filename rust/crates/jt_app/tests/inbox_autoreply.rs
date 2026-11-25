@@ -3828,7 +3828,7 @@ async fn after_money_the_one_repair_names_nothing_and_a_reply_is_not_sent() {
 async fn after_money_a_quote_from_the_repair_goes_out() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
-    t.model.answer(reply("Yaklaşık 1250 olur."));
+    t.model.answer(reply("Yaklaşık 1.250 TL olur."));
     t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
     t.meta.push_send_text(accepted());
     job(&t, due(0)).await;
@@ -3841,7 +3841,48 @@ async fn after_money_a_quote_from_the_repair_goes_out() {
     assert_eq!(rows[0], (RunOutcome::Skipped, Some("repaired".into())));
     assert_eq!(rows[1].0, RunOutcome::Quoted);
     let refused = payloads(&t, "inbox.autoreply.refused");
-    assert_eq!(refused[0]["refused"], json!(["number"]));
+    assert_eq!(refused[0]["refused"], json!(["amount", "currency"]));
+    let note = t.model.requests()[1].system_note.clone().unwrap();
+    assert!(
+        !note.contains("1.250"),
+        "after money no part is named: {note}"
+    );
+}
+
+#[tokio::test]
+async fn a_bare_number_of_any_length_gets_the_naming_repair() {
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    t.model
+        .answer(reply("2026 siparişleri için yazabilirsiniz."));
+    t.model
+        .answer(reply("Bu yılın siparişleri için yazabilirsiniz."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    let requests = t.model.requests();
+    assert_eq!(requests.len(), 2);
+    let note = requests[1].system_note.clone().unwrap();
+    assert!(
+        note.contains("\"2026\" (a number in a form that is not allowed)"),
+        "{note}"
+    );
+    assert_eq!(
+        texts_sent(&t),
+        ["Bu yılın siparişleri için yazabilirsiniz."]
+    );
+    assert!(reasons(&t, "inbox.autoreply.handed_over").is_empty());
+}
+
+#[tokio::test]
+async fn a_size_and_a_measure_go_out_without_a_repair() {
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    let text = "Baskı 20x30 cm, 300 dpi ve 500 gram olur.";
+    t.model.answer(reply(text));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    assert_eq!(t.model.requests().len(), 1);
+    assert_eq!(texts_sent(&t), [text]);
 }
 
 #[tokio::test]
