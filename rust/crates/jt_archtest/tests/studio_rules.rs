@@ -974,6 +974,7 @@ fn studio_has_no_ai_media_or_trend_provider() {
             "jt_tenancy",
             "jt_ledger",
             "serde",
+            "serde_json",
             "thiserror",
             "time",
             "uuid",

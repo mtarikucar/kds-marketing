@@ -73,8 +73,8 @@ async fn status(uow: &PgUnitOfWork, m: &Material) -> Option<AnalysisStatus> {
 }
 
 /// A material a later release stored, with a role, a frame and fields this build does not know
-/// (on the material and on its composition), reads through the repository, keeps them all when
-/// it is saved again, and still counts as composed in the queries that pass compositions over.
+/// (on the material and on its composition), reads through the repository and keeps them all
+/// when this build saves it again; a material with nothing unknown reads back exactly as written.
 #[tokio::test]
 async fn fields_and_values_a_later_release_added_survive_a_save() {
     let db = TestDb::new().await;
@@ -82,19 +82,20 @@ async fn fields_and_values_a_later_release_added_survive_a_save() {
     let f = jt_testkit::studio_contract::ready(&uow).await;
     let photo = jt_testkit::studio_contract::seed_material(&uow, f.ws).await;
     let made = composite(&uow, &photo, vec![photo.id], 4).await;
+    // As the later release would write it (through the same repository).
     let mut v = serde_json::to_value(&made).unwrap();
     v["composition"]["role"] = serde_json::json!("some_new_role");
     v["composition"]["frame"] = serde_json::json!("some_new_frame");
     v["composition"]["added_later"] = serde_json::json!({"n": 1});
     v["added_later"] = serde_json::json!(["kept"]);
-    // Written as the later release wrote it, straight into the row.
-    sqlx::query("update studio_materials set data=$3 where workspace_id=$1 and id=$2")
-        .bind(f.ws.0)
-        .bind(made.id.0)
-        .bind(&v)
-        .execute(&db.pool)
+    v["revision"] = serde_json::json!(made.revision + 1);
+    let later: Material = serde_json::from_value(v.clone()).unwrap();
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    r.studio_materials()
+        .update_material(later, made.revision)
         .await
         .unwrap();
+    r.commit().await.unwrap();
     let mut r = uow.tenant(f.ws).await.unwrap();
     let all = r.studio_materials().list_materials().await.unwrap();
     let read = all
@@ -112,24 +113,27 @@ async fn fields_and_values_a_later_release_added_survive_a_save() {
         .await
         .unwrap();
     r.commit().await.unwrap();
-    let stored: serde_json::Value =
-        sqlx::query_scalar("select data from studio_materials where workspace_id=$1 and id=$2")
-            .bind(f.ws.0)
-            .bind(made.id.0)
-            .fetch_one(&db.pool)
+    let mut r = uow.tenant(f.ws).await.unwrap();
+    let stored = serde_json::to_value(
+        r.studio_materials()
+            .get_material(made.id)
             .await
-            .unwrap();
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(stored["added_later"], serde_json::json!(["kept"]));
     assert_eq!(stored["composition"], v["composition"]);
     assert_eq!(stored["title"], "renamed");
-    // A material with nothing unknown is stored byte for byte as before: no extra key.
-    let plain: serde_json::Value =
-        sqlx::query_scalar("select data from studio_materials where workspace_id=$1 and id=$2")
-            .bind(f.ws.0)
-            .bind(photo.id.0)
-            .fetch_one(&db.pool)
+    // A material with nothing unknown reads back exactly as it was written: no extra key.
+    let plain = serde_json::to_value(
+        r.studio_materials()
+            .get_material(photo.id)
             .await
-            .unwrap();
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(plain, serde_json::to_value(&photo).unwrap());
     assert!(plain.get("unknown").is_none());
 }
