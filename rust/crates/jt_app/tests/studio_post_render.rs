@@ -1495,14 +1495,17 @@ async fn a_source_judged_unusable_makes_its_compositions_unusable() {
     );
 }
 
-/// Rewrites `id`'s stored composition as a later release would have written it: a role and a
-/// frame this build does not know. Returns the material as stored.
+/// Rewrites `id`'s stored material as a later release would have written it: a role and a frame
+/// this build does not know, and a field it does not know on the material and on its composition.
+/// Returns the material as stored.
 async fn from_a_later_release(w: &World, id: MaterialId) -> Material {
     use jt_app::ports::UnitOfWork;
     let current = material(w, id);
     let mut v = serde_json::to_value(&current).unwrap();
     v["composition"]["role"] = json!("some_new_role");
     v["composition"]["frame"] = json!("some_new_frame");
+    v["composition"]["added_later"] = json!(["kept"]);
+    v["added_later"] = json!({"kept": true});
     let mut later: Material = serde_json::from_value(v).unwrap();
     later.revision += 1;
     let mut r = w.uow.tenant(w.f.ws).await.unwrap();
@@ -1546,6 +1549,8 @@ async fn a_composition_a_later_release_made_follows_every_rule() {
     permit(&w, c.id, "product_only").await;
     let again = serde_json::to_value(material(&w, c.id)).unwrap();
     assert_eq!(again["composition"], raw["composition"]);
+    assert_eq!(again["composition"]["added_later"], json!(["kept"]));
+    assert_eq!(again["added_later"], json!({"kept": true}));
 
     // Never drawn from, and no render of this build: the cover rotation does not see it.
     let e = render_from(&w, "of-later", "steps", "photo_top", c.id)

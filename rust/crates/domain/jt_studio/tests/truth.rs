@@ -81,6 +81,7 @@ fn material(n: u128, o: &Olay, permission: SharePermission) -> Material {
         erased_at: None,
         upload_for: None,
         composition: None,
+        unknown: Default::default(),
     }
 }
 

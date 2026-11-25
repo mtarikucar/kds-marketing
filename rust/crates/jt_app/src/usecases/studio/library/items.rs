@@ -658,6 +658,7 @@ pub async fn material_add(
         erased_at: None,
         upload_for: None,
         composition: None,
+        unknown: Default::default(),
     };
     material.validate().map_err(invalid)?;
     let mut r = open(d, ctx, jt_tenancy::Permission::MaterialsWork).await?;

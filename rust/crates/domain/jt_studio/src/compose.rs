@@ -804,8 +804,10 @@ impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Known<T> {
 /// still a composition for every rule that follows one (its sources' cascades, the publication
 /// fence, the triggers that pass it over, area membership by its sources), but this build never
 /// draws it or draws from it ([`Composition::is_known`]).
+///
+/// Fields a later release adds are kept too ([`Composition::unknown`]), so a build rolled back
+/// past that release still reads such a composition and writes it back whole.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Composition {
     pub renderer: String,
     pub role: Known<Role>,
@@ -816,7 +818,15 @@ pub struct Composition {
     /// and the cascades); absent without a logo, and on a composition stored before this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logo: Option<MaterialId>,
+    /// Fields a later release added that this build does not know, as they were read and
+    /// written back unchanged; empty (and not serialized) for every composition this build makes.
+    #[serde(flatten)]
+    pub unknown: std::collections::BTreeMap<String, serde_json::Value>,
 }
+
+/// The fields a [`Composition`] serializes (its `unknown` map aside).
+pub const COMPOSITION_FIELDS: [&str; 6] =
+    ["renderer", "role", "variant", "frame", "sources", "logo"];
 
 impl Composition {
     /// Whether this build knows its role and frame.
@@ -922,6 +932,22 @@ mod tests {
         assert_eq!(known.role, Role::Cover);
         assert_eq!(known.frame, Frame::Slide);
         assert!(known.is_known());
+        // A field a later release added is kept, and written back.
+        let wider = serde_json::json!({
+            "renderer": RENDERER, "role": "cover", "variant": "full_top", "frame": "slide",
+            "sources": [], "added_later": {"a": [1, 2]}
+        });
+        let c: Composition = serde_json::from_value(wider.clone()).expect("reads");
+        assert_eq!(c.unknown["added_later"], serde_json::json!({"a": [1, 2]}));
+        assert_eq!(serde_json::to_value(&c).unwrap(), wider);
+        // A known field of the wrong type is refused as before.
+        assert!(
+            serde_json::from_value::<Composition>(serde_json::json!({
+                "renderer": RENDERER, "role": "cover", "variant": "x", "frame": "slide",
+                "sources": "not a list"
+            }))
+            .is_err()
+        );
         // Not a string at all is still refused, as before.
         assert!(
             serde_json::from_value::<Composition>(serde_json::json!({
