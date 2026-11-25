@@ -460,6 +460,8 @@ struct Word {
     stem: String,
     suffixed: bool,
     marker: bool,
+    /// The word ends a clause: written with `,` `.` `;` `!` `?` or `…` after it.
+    ends_clause: bool,
 }
 
 /// What a text's lines are split at (every other space is a plain space).
@@ -497,6 +499,7 @@ fn words_of(text: &str) -> Vec<Word> {
                 stem,
                 suffixed,
                 marker: n == 0 && list_number(raw),
+                ends_clause: raw.ends_with([',', '.', ';', '!', '?', '…']),
             });
         }
         // A list number stands before its line's own words, never alone on a line.
@@ -1054,8 +1057,9 @@ fn scan_in(text: &str, year: i32, reading: Reading) -> Scan {
         // Beside a price word (`Fiyatı 12.50 olur`, `Ücreti 9,90`, `1250 olur`), a number that is
         // no count with its unit, no size and no day with a month's name is a price: refused as
         // money, so the model is never coached into another form of it.
-        let priced =
-            prev.is_some_and(is_number_price_word) || next.is_some_and(is_number_price_word);
+        // A clause's end parts them (`Hazır olur, 12 fotoğraf`); a colon does not (`Fiyatı: 12.50`).
+        let priced = prev.is_some_and(|p| !p.ends_clause && is_number_price_word(p))
+            || (!w.ends_clause && next.is_some_and(is_number_price_word));
         if glued.is_empty() && date_or_time(num) {
             // A clock time after `saat`, and a full date with its year, are no price.
             let clock = prev.is_some_and(|p| is(&p.stem, "saat"));
@@ -1936,9 +1940,20 @@ mod tests {
             "adedi 20x30 cm",
             "21.11.2026 olur",
             "Yarın 14:30'da hazır.",
+            "Hazır olur, 15.30'da teslim.",
         ] {
             assert_eq!(reply(text), Ok(()), "{text}");
         }
+        // A clause's end parts a number from the price word before it; a colon does not.
+        let kinds = |t: &str| -> Vec<PartKind> {
+            refused_parts(t, "", YEAR).iter().map(|p| p.kind).collect()
+        };
+        assert_eq!(
+            kinds("Hazır olur, 12 fotoğraf yeterli."),
+            [PartKind::Number]
+        );
+        assert_eq!(kinds("Fiyatı: 12.50"), [PartKind::Term]);
+        assert_eq!(kinds("15.30. Olur mu?"), Vec::<PartKind>::new());
     }
 
     #[test]
