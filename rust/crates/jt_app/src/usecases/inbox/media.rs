@@ -629,12 +629,27 @@ pub(crate) fn image_refused(reason: &str) -> AppError {
     )
 }
 
+/// What the rules of a library material read besides the material: the workspace's materials
+/// policy (`ai_standalone`), its olays and the time of sending.
+pub struct SendContext<'a> {
+    pub ai_standalone: bool,
+    pub olays: &'a [jt_studio::Olay],
+    pub at: OffsetDateTime,
+}
+
 /// Why material `m` may not be sent to a customer, if it may not: erased, its share permission
 /// unset or refused, a person on it whose sharing only a human may allow and none did, a
-/// `product_only` share of a material that shows a person, or an AI image where the workspace's
-/// materials policy does not let an agent's visual stand alone (`ai_standalone`).
-pub fn material_refusal(m: &jt_studio::Material, ai_standalone: bool) -> Option<&'static str> {
-    use jt_studio::SharePermission;
+/// `product_only` share of a material that shows a person; and, for an AI image, the AI rules
+/// publishing holds it to (`jt_studio::check_use`): never unfiled (`ai_image_unfiled`), standing
+/// alone only where the materials policy lets an agent's visual do so (`ai_image_not_allowed`),
+/// and an olay's AI poster only while its olay is confirmed (`ai_olay_unconfirmed`) and not over
+/// (`ai_olay_past`).
+///
+/// Deliberately not applied: publishing's "quality must be publishable" rule, and the olay and
+/// season rules of a real photo. A person sending a customer a plain working photo of their own
+/// order in a one-to-one chat is not publishing; the share and person rules cover it.
+pub fn material_refusal(m: &jt_studio::Material, cx: &SendContext<'_>) -> Option<&'static str> {
+    use jt_studio::{Binding, SharePermission};
     if m.erased_at.is_some() {
         return Some("material_erased");
     }
@@ -653,19 +668,64 @@ pub fn material_refusal(m: &jt_studio::Material, ai_standalone: bool) -> Option<
     {
         return Some("material_shows_person");
     }
-    if m.is_ai() && !ai_standalone {
-        return Some("ai_image_not_allowed");
+    if m.is_ai() {
+        match m.binding {
+            Binding::Unfiled => return Some("ai_image_unfiled"),
+            Binding::Genel if !cx.ai_standalone => return Some("ai_image_not_allowed"),
+            Binding::Genel => {}
+            Binding::Olay { olay_id } => {
+                let Some(o) = cx.olays.iter().find(|o| o.id == olay_id) else {
+                    return Some("ai_olay_unconfirmed");
+                };
+                if !o.is_confirmed() {
+                    return Some("ai_olay_unconfirmed");
+                }
+                if o.has_ended(jt_studio::istanbul_day(cx.at)) {
+                    return Some("ai_olay_past");
+                }
+            }
+        }
     }
     None
 }
 
-/// Checks `input` for sending: exactly one of a file and a material; a material that may be sent
-/// ([`material_refusal`]); a file the workspace's store keeps (not deleted), a JPEG or PNG of at
-/// most [`MAX_IMAGE_BYTES`]. A file that is a material's is held to the material's rules. Each
-/// refusal is `VALIDATION` `{field: image, reason}`.
+/// Why material `m` may not be sent at `at`, if it may not: [`material_refusal`], then the
+/// publication fence (`studio::library::blocked_derivatives`, `material_source_restricted`): a
+/// derivative whose source is restricted, erased or unfiled, whatever its own share says.
+async fn material_refused(
+    r: &mut dyn TenantRepos,
+    m: &jt_studio::Material,
+    at: OffsetDateTime,
+) -> Result<Option<&'static str>, AppError> {
+    let ai_standalone = r.studio_materials().material_policy().await?.ai_standalone;
+    let olays = r.studio_materials().list_olays().await?;
+    let cx = SendContext {
+        ai_standalone,
+        olays: &olays,
+        at,
+    };
+    if let Some(reason) = material_refusal(m, &cx) {
+        return Ok(Some(reason));
+    }
+    if crate::usecases::studio::library::blocked_derivatives(r)
+        .await?
+        .contains(&m.id)
+    {
+        return Ok(Some("material_source_restricted"));
+    }
+    Ok(None)
+}
+
+/// Checks `input` for sending at `at`: exactly one of a file and a material; a material that
+/// may be sent (`material_refused`); a file the workspace's store keeps (not deleted), a JPEG or
+/// PNG of at most [`MAX_IMAGE_BYTES`]. A file that is a material's is held to the material's
+/// rules, and so is a file whose bytes are a refused material's (studio's upload gives the same
+/// bytes a new id each time, so they are matched by their SHA-256). Each refusal is `VALIDATION`
+/// `{field: image, reason}`.
 pub(crate) async fn sendable_image(
     r: &mut dyn TenantRepos,
     input: &ImageInput,
+    at: OffsetDateTime,
 ) -> Result<SendableImage, AppError> {
     let (material, file_id) = match (input.material_id, input.file_id) {
         (Some(id), None) => {
@@ -688,20 +748,10 @@ pub(crate) async fn sendable_image(
         }
         _ => return Err(image_refused("image_one_of_file_or_material")),
     };
-    if let Some(m) = &material {
-        let ai_standalone = r.studio_materials().material_policy().await?.ai_standalone;
-        if let Some(reason) = material_refusal(m, ai_standalone) {
-            return Err(image_refused(reason));
-        }
-        // The publication fence: a derivative (a production's output, a composed slide or
-        // story) whose source is restricted, erased or unfiled is never sent, whatever its own
-        // share says.
-        if crate::usecases::studio::library::blocked_derivatives(r)
-            .await?
-            .contains(&m.id)
-        {
-            return Err(image_refused("material_source_restricted"));
-        }
+    if let Some(m) = &material
+        && let Some(reason) = material_refused(r, m, at).await?
+    {
+        return Err(image_refused(reason));
     }
     let file = r
         .studio()
@@ -709,6 +759,32 @@ pub(crate) async fn sendable_image(
         .await?
         .filter(|f| f.deleted_at.is_none())
         .ok_or_else(|| image_refused("image_not_found"))?;
+    if material.is_none() {
+        // The same bytes uploaded again: held to the rules of every material they are.
+        let same: Vec<FileId> = r
+            .studio()
+            .file_usage()
+            .await?
+            .files
+            .into_iter()
+            .filter(|f| f.sha256 == file.sha256 && f.id != file.id)
+            .map(|f| f.id)
+            .collect();
+        if !same.is_empty() {
+            let twins: Vec<jt_studio::Material> = r
+                .studio_materials()
+                .list_materials()
+                .await?
+                .into_iter()
+                .filter(|m| same.contains(&m.file_id))
+                .collect();
+            for m in &twins {
+                if let Some(reason) = material_refused(r, m, at).await? {
+                    return Err(image_refused(reason));
+                }
+            }
+        }
+    }
     if !SENT_IMAGE_TYPES.contains(&file.mime.as_str()) {
         return Err(image_refused("image_type_not_supported"));
     }

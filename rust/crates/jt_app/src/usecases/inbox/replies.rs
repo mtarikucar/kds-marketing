@@ -524,7 +524,7 @@ pub(crate) async fn enqueue_in(
                     "images_not_supported_on_channel",
                 ));
             }
-            Some(super::media::sendable_image(r, image).await?)
+            Some(super::media::sendable_image(r, image, ctx.now).await?)
         }
         None => None,
     };
@@ -1518,7 +1518,7 @@ async fn claim(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<Claim, AppError> {
     // on it, its source blocked by the publication fence, or its file gone while the send
     // waited (queued, or held for approval) refuses it here, with the image's reason.
     let prepared = match (prepared, row.intent.get("media").cloned()) {
-        (Ok(p), Some(media)) => recheck_image(r.as_mut(), &media).await.map(|()| p),
+        (Ok(p), Some(media)) => recheck_image(r.as_mut(), &media, ctx.now).await.map(|()| p),
         (other, _) => other,
     };
     let (credential, recipient, provider) = match prepared {
@@ -1788,7 +1788,11 @@ pub async fn send_step(deps: &Deps, ctx: &Ctx, id: Uuid) -> Result<ReplyOut, App
 /// [`super::media::sendable_image`] again for the image a queued send carries (`intent.media`):
 /// its material when it names one, else its file. A refusal is `VALIDATION` with the image's
 /// reason, which the claim records as the send's refusal.
-async fn recheck_image(r: &mut dyn TenantRepos, media: &Value) -> Result<(), AppError> {
+async fn recheck_image(
+    r: &mut dyn TenantRepos,
+    media: &Value,
+    at: time::OffsetDateTime,
+) -> Result<(), AppError> {
     let parse = |key: &str| media[key].as_str().and_then(|v| v.parse::<Uuid>().ok());
     let input = match (parse("material_id"), parse("file_id")) {
         (Some(material), _) => super::media::ImageInput {
@@ -1801,7 +1805,7 @@ async fn recheck_image(r: &mut dyn TenantRepos, media: &Value) -> Result<(), App
         },
         (None, None) => return Err(super::media::image_refused("image_not_found")),
     };
-    super::media::sendable_image(r, &input).await.map(drop)
+    super::media::sendable_image(r, &input, at).await.map(drop)
 }
 
 /// The image a claimed send carries (`intent.media`), as the provider fetches it: an address of

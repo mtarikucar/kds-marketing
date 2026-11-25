@@ -1762,7 +1762,10 @@
         "caption_too_long": "The caption is at most 1024 characters",
         "image_one_of_file_or_material": "Choose one photo",
         "other": "The photo could not be sent",
-        "material_source_restricted": "This photo's source may not be shared"
+        "material_source_restricted": "This photo's source may not be shared",
+        "ai_image_unfiled": "This AI image is not filed yet",
+        "ai_olay_unconfirmed": "This image's event is not confirmed",
+        "ai_olay_past": "This image's event is over"
       }
     },
     "reply": "Your reply",

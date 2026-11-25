@@ -1762,7 +1762,10 @@
         "caption_too_long": "Açıklama en fazla 1024 karakter olabilir",
         "image_one_of_file_or_material": "Tek bir fotoğraf seçin",
         "other": "Fotoğraf gönderilemedi",
-        "material_source_restricted": "Bu fotoğrafın kaynağı paylaşılamaz"
+        "material_source_restricted": "Bu fotoğrafın kaynağı paylaşılamaz",
+        "ai_image_unfiled": "Bu yapay zekâ görseli henüz dosyalanmadı",
+        "ai_olay_unconfirmed": "Bu görselin etkinliği onaylanmadı",
+        "ai_olay_past": "Bu görselin etkinliği sona erdi"
       }
     },
     "reply": "Yanıtınız",

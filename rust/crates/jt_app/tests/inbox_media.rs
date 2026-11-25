@@ -1309,3 +1309,216 @@ async fn a_file_past_the_daily_cap_waits_and_is_fetched_later() {
     job(&t, later(1) + Duration::hours(25)).await;
     assert_eq!(second(&t).state, MediaState::Stored);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The verification's findings: a file studio still uses, re-uploaded bytes, the AI rules
+// ---------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn an_erased_persons_upload_that_studio_still_uses_keeps_its_bytes() {
+    let t = setup().await;
+    let c = customer_wrote(&t).await;
+    let photo = jpeg();
+    let used = studio_file(&t, "image/jpeg", &photo).await;
+    // The same file is a planned post's medium.
+    let ws = t.w.ws;
+    t.w.uow.edit(|s| {
+        s.studio.pieces.push((
+            jt_studio::SlotId::new_v7(),
+            jt_studio::Piece {
+                id: jt_studio::PieceId::new_v7(),
+                chain: jt_studio::Chain {
+                    workspace_id: ws,
+                    born_version_id: jt_strategy::StrategyVersionId::new_v7(),
+                    hypothesis_id: jt_strategy::HypothesisId::new_v7(),
+                    arm_id: jt_studio::ArmId::new_v7(),
+                },
+                revision: 1,
+                text: "Planned".into(),
+                media: vec![jt_studio::MediaAsset::File { id: used }],
+                adaptations: Default::default(),
+            },
+        ));
+    });
+    t.meta.push_send_text(Ok(receipt("wamid.used")));
+    let out = replies::reply(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        c,
+        with_image("", file_image(used), None),
+    )
+    .await
+    .unwrap();
+    let (_, person) = conversation(&t);
+    erasure::erase(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        person,
+        erasure::EraseInput { confirm: true },
+    )
+    .await
+    .unwrap();
+    // The chat row is cleared; the bytes and the studio record stay for the post.
+    let row = rows(&t)
+        .into_iter()
+        .find(|r| r.message_id == out.message_id)
+        .unwrap();
+    assert_eq!(
+        (row.state, row.reason, row.file_id),
+        (MediaState::Deleted, Some(MediaReason::Erased), None)
+    );
+    assert!(stored_files(&t).iter().any(|(id, _)| *id == used));
+    let s = t.w.uow.snapshot();
+    let record = s.studio.files.iter().find(|f| f.id == used).unwrap();
+    assert!(record.deleted_at.is_none());
+}
+
+#[tokio::test]
+async fn the_same_bytes_uploaded_again_are_held_to_their_materials_rules() {
+    use jt_studio::{Origin, SharePermission};
+    let t = setup().await;
+    let c = customer_wrote(&t).await;
+    let mut bytes = jpeg();
+    bytes.extend_from_slice(b"ONE-PHOTO");
+    let original = studio_file(&t, "image/jpeg", &bytes).await;
+    material(
+        &t,
+        original,
+        Some(SharePermission::NotShareable),
+        Origin::Real,
+        false,
+    )
+    .await;
+    // Uploaded again: a new studio file id, the same bytes.
+    let again = studio_file(&t, "image/jpeg", &bytes).await;
+    assert_ne!(again, original);
+    let e = replies::reply(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        c,
+        with_image("x", file_image(again), None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.details["reason"], "material_not_shareable");
+    // Other bytes of no material go out.
+    let mut other = jpeg();
+    other.extend_from_slice(b"ANOTHER-PHOTO");
+    let fresh = studio_file(&t, "image/jpeg", &other).await;
+    t.meta.push_send_text(Ok(receipt("wamid.fresh")));
+    replies::reply(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        c,
+        with_image("x", file_image(fresh), None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sent_images(&t).len(), 1);
+}
+
+/// An olay of the workspace from `from` to `to` (days of October 2026), confirmed or not.
+fn olay(t: &T, from: u8, to: u8, confirmed: bool) -> jt_studio::OlayId {
+    let id = jt_studio::OlayId::new_v7();
+    let day = |d| time::Date::from_calendar_date(2026, time::Month::October, d).unwrap();
+    let o = jt_studio::Olay {
+        id,
+        workspace_id: t.w.ws,
+        kind: jt_studio::OlayKind::Workshop,
+        title: "Atolye".into(),
+        starts_on: day(from),
+        ends_on: day(to),
+        place: None,
+        client: None,
+        notes: String::new(),
+        occasion: None,
+        status: if confirmed {
+            jt_studio::OlayStatus::Confirmed
+        } else {
+            jt_studio::OlayStatus::Proposed
+        },
+        confirmed: None,
+        revision: 1,
+        created_at: FIXED_NOW,
+    };
+    t.w.uow.edit(|s| s.materials.olays.push(o.clone()));
+    id
+}
+
+#[tokio::test]
+async fn a_library_ai_image_is_held_to_publishings_ai_rules() {
+    use jt_studio::{Binding, Origin, SharePermission};
+    let t = setup().await;
+    let c = customer_wrote(&t).await;
+    let ai = || Origin::AiGenerated {
+        generator: "test".into(),
+    };
+    // FIXED_NOW is 2026-10-22.
+    let current = olay(&t, 20, 30, true);
+    let proposed = olay(&t, 20, 30, false);
+    let over = olay(&t, 1, 5, true);
+    let mut cases = Vec::new();
+    for (binding, reason) in [
+        (Binding::Unfiled, Some("ai_image_unfiled")),
+        (
+            Binding::Olay { olay_id: proposed },
+            Some("ai_olay_unconfirmed"),
+        ),
+        (Binding::Olay { olay_id: over }, Some("ai_olay_past")),
+        (Binding::Olay { olay_id: current }, None),
+    ] {
+        let file = studio_file(&t, "image/jpeg", &jpeg()).await;
+        let id = material(&t, file, Some(SharePermission::Shareable), ai(), false).await;
+        change_material(&t, id, move |m| m.binding = binding);
+        cases.push((id, reason));
+    }
+    for (id, reason) in cases {
+        let image = ImageInput {
+            file_id: None,
+            material_id: Some(id),
+        };
+        match reason {
+            Some(reason) => {
+                let e = replies::reply(&t.w.deps, &t.w.owner_ctx, c, with_image("x", image, None))
+                    .await
+                    .unwrap_err();
+                assert_eq!(e.details["reason"], reason);
+            }
+            None => {
+                t.meta.push_send_text(Ok(receipt("wamid.ai")));
+                replies::reply(&t.w.deps, &t.w.owner_ctx, c, with_image("x", image, None))
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+    assert_eq!(sent_images(&t).len(), 1);
+    // A real photo is not held to publishing's quality rule: a plain working photo goes out.
+    let file = studio_file(&t, "image/jpeg", &jpeg()).await;
+    let plain = material(
+        &t,
+        file,
+        Some(SharePermission::Shareable),
+        Origin::Real,
+        false,
+    )
+    .await;
+    change_material(&t, plain, |m| m.tags.quality = None);
+    t.meta.push_send_text(Ok(receipt("wamid.plain")));
+    replies::reply(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        c,
+        with_image(
+            "x",
+            ImageInput {
+                file_id: None,
+                material_id: Some(plain),
+            },
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(sent_images(&t).len(), 2);
+}

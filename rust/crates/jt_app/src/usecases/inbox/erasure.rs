@@ -101,7 +101,11 @@ pub async fn erase(
     files.extend(chat.customer);
     // A photo the team uploaded and sent only to this person goes with them: its studio record is
     // marked deleted and its bytes go. One that is a library material's stays under the
-    // library's own rules (its share, its retention, its own erasure of who it shows).
+    // library's own rules (its share, its retention, its own erasure of who it shows), and so does
+    // one studio still uses (a piece's medium, planned or published, or a publish attempt's): its
+    // chat row is cleared and its bytes are left to the store's own rules (`cleanup_files`), so
+    // a post never loses its medium and bytes stay while a publication is queued, sending or
+    // uncertain. The Studio control lock (taken above) keeps new references out meanwhile.
     if !chat.uploads.is_empty() {
         let library: std::collections::BTreeSet<_> = r
             .studio_materials()
@@ -110,7 +114,22 @@ pub async fn erase(
             .into_iter()
             .map(|m| m.file_id)
             .collect();
-        for id in chat.uploads.into_iter().filter(|id| !library.contains(id)) {
+        let usage = r.studio().file_usage().await?;
+        let in_use = |id: jt_studio::FileId| {
+            usage
+                .pieces
+                .iter()
+                .any(|(_, p)| crate::usecases::studio::files::uses(p, id))
+                || usage
+                    .attempts
+                    .iter()
+                    .any(|a| crate::usecases::studio::files::uses(a.piece(), id))
+        };
+        for id in chat
+            .uploads
+            .into_iter()
+            .filter(|id| !library.contains(id) && !in_use(*id))
+        {
             if let Some(mut file) = r.studio().get_file(id).await?
                 && file.deleted_at.is_none()
             {
