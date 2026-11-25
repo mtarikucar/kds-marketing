@@ -291,7 +291,8 @@ async fn a_reel_is_a_stored_mp4_and_a_composed_material() {
     assert!(out.material.tags.labels.contains("atölye"));
     let c = out.material.composition.as_ref().expect("composition");
     assert_eq!(c.renderer, REEL_RENDERER);
-    assert_eq!((c.role, c.frame), (Role::Reel, Frame::Reel));
+    assert_eq!(c.role, Role::Reel);
+    assert_eq!(c.frame, Frame::Reel);
     assert_eq!(c.sources, ids(&ps));
     // The stored bytes: ftyp, then moov, then mdat; the length the answer names.
     let stored =

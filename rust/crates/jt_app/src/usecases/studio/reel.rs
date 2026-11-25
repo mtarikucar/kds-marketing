@@ -644,9 +644,9 @@ async fn store(
         upload_for: None,
         composition: Some(Composition {
             renderer: REEL_RENDERER.into(),
-            role: Role::Reel,
+            role: Role::Reel.into(),
             variant: reel::VARIANT.to_owned(),
-            frame: Frame::Reel,
+            frame: Frame::Reel.into(),
             sources: sources_ids.clone(),
             logo: logo.as_ref().map(|m| m.id),
         }),
