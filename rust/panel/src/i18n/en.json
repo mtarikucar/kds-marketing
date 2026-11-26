@@ -4773,10 +4773,8 @@
     "table": {
       "label": "Posts table",
       "post": "Post",
-      "channel": "Channel",
       "progress": "Progress",
-      "status": "Status",
-      "publish": "Goes out",
+      "versions": "Channels",
       "agentPicks": "The agent will choose",
       "dots": "Progress: {{n}} of 8 steps done",
       "more": "Show more"
@@ -4919,15 +4917,10 @@
     "panel": {
       "label": "Selected post",
       "request": "Your request",
-      "channel": "Channel",
-      "date": "Date",
-      "format": "Format",
-      "category": "Category",
       "genel": "General",
       "publishedAt": "Published · {{at}}",
       "openPost": "Open the post",
       "ai": "The image was made with AI; it is not a real order.",
-      "same": "From the same content:",
       "gone": "This post is no longer in the list.",
       "close": "Close",
       "back": "Posts",
@@ -4939,7 +4932,14 @@
       "sentToAgent": "Passed to the agent.",
       "redoNote": "The change you asked for: {{note}}",
       "loadError": "This post could not be loaded.",
-      "managerReconnect": "A manager has to reconnect this account."
+      "managerReconnect": "A manager has to reconnect this account.",
+      "versions": "Posts of this content"
+    },
+    "media": {
+      "label": "The post's media",
+      "slide": "Image {{n}} of {{count}}",
+      "full": "View full size",
+      "failed": "The image could not be opened."
     },
     "redo": {
       "title": "What should change?",

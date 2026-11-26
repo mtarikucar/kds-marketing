@@ -4773,10 +4773,8 @@
     "table": {
       "label": "Paylaşımlar tablosu",
       "post": "Paylaşım",
-      "channel": "Kanal",
       "progress": "Süreç",
-      "status": "Durum",
-      "publish": "Yayın",
+      "versions": "Kanallar",
       "agentPicks": "Ajan seçecek",
       "dots": "Süreç: 8 adımın {{n}} tanesi bitti",
       "more": "Daha fazla göster"
@@ -4919,15 +4917,10 @@
     "panel": {
       "label": "Seçili paylaşım",
       "request": "İsteğin",
-      "channel": "Kanal",
-      "date": "Tarih",
-      "format": "Biçim",
-      "category": "Kategori",
       "genel": "Genel",
       "publishedAt": "Yayınlandı · {{at}}",
       "openPost": "Paylaşımı aç",
       "ai": "Görsel yapay zekâ ile üretildi; gerçek bir sipariş değil.",
-      "same": "Aynı içerikten:",
       "gone": "Bu paylaşım artık listede değil.",
       "close": "Kapat",
       "back": "Paylaşımlar",
@@ -4939,7 +4932,14 @@
       "sentToAgent": "Ajana iletildi.",
       "redoNote": "İstediğin değişiklik: {{note}}",
       "loadError": "Paylaşım yüklenemedi.",
-      "managerReconnect": "Bu hesabı bir yönetici yeniden bağlamalı."
+      "managerReconnect": "Bu hesabı bir yönetici yeniden bağlamalı.",
+      "versions": "Bu içeriğin paylaşımları"
+    },
+    "media": {
+      "label": "Paylaşımın görseli",
+      "slide": "{{n}}. görsel / {{count}}",
+      "full": "Büyük göster",
+      "failed": "Görsel açılamadı."
     },
     "redo": {
       "title": "Ne değişsin?",

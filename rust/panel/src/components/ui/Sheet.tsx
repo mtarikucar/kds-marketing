@@ -37,6 +37,8 @@ SheetOverlay.displayName = 'SheetOverlay';
 const sheet = cva(
   cn(
     'fixed z-50 flex max-h-dvh flex-col gap-4 overflow-y-auto overscroll-contain border-border bg-surface-raised p-4 shadow-xl sm:p-6',
+    // The last line clears a phone's home indicator (0 unless the page is laid under it).
+    'pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-[calc(1.5rem+env(safe-area-inset-bottom))]',
     'data-[state=open]:animate-in data-[state=closed]:animate-out',
     'data-[state=open]:duration-slow data-[state=closed]:duration-base data-[state=closed]:ease-standard data-[state=open]:ease-standard',
   ),
@@ -46,9 +48,9 @@ const sheet = cva(
         top: 'inset-x-0 top-0 border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
         bottom:
           'inset-x-0 bottom-0 border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
-        left: 'inset-y-0 start-0 h-full w-full max-w-sm border-e data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
+        left: 'inset-y-0 start-0 h-dvh w-full max-w-sm border-e data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left',
         right:
-          'inset-y-0 end-0 h-full w-full max-w-sm border-s data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
+          'inset-y-0 end-0 h-dvh w-full max-w-sm border-s data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right',
       },
     },
     defaultVariants: { side: 'right' },
