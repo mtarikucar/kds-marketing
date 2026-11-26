@@ -2905,7 +2905,8 @@ pub async fn person_last_message_and_page_outbox(uow: Arc<dyn UnitOfWork>) {
 }
 
 /// A savepoint (`TenantRepos::savepoint`): rolling back to it undoes only what followed it, a
-/// failed call included, and the transaction still commits what came before.
+/// failed call included, and the transaction still commits what came before; one taken inside
+/// another is rolled back and released on its own.
 pub async fn savepoint_undoes_only_what_follows(uow: Arc<dyn UnitOfWork>) {
     use jt_app::ports::reply_model::QueueRow;
     let f = Fixture::new(uow.clone()).await;
@@ -2949,6 +2950,28 @@ pub async fn savepoint_undoes_only_what_follows(uow: Arc<dyn UnitOfWork>) {
     let mut t = uow.tenant(f.ws).await.unwrap();
     assert!(t.auto_reply().queue_get(kept).await.unwrap().is_some());
     assert!(t.auto_reply().queue_get(undone).await.unwrap().is_none());
+    drop(t);
+    // One inside another: rolling back the inner undoes only what followed it, and releasing it
+    // leaves the outer one to release.
+    let (outer, inner) = (ConversationId::new_v7(), ConversationId::new_v7());
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.savepoint().await.unwrap();
+    t.auto_reply()
+        .queue_save(&QueueRow::idle(outer, FIXED_NOW))
+        .await
+        .unwrap();
+    t.savepoint().await.unwrap();
+    t.auto_reply()
+        .queue_save(&QueueRow::idle(inner, FIXED_NOW))
+        .await
+        .unwrap();
+    t.rollback_to_savepoint().await.unwrap();
+    t.release_savepoint().await.unwrap();
+    t.release_savepoint().await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert!(t.auto_reply().queue_get(outer).await.unwrap().is_some());
+    assert!(t.auto_reply().queue_get(inner).await.unwrap().is_none());
 }
 
 /// An automatic hand-over's mark (`AutoReplyRepo::handover_mark`): made with its row when there
@@ -3008,4 +3031,343 @@ pub async fn auto_reply_handover_mark(uow: Arc<dyn UnitOfWork>) {
     assert_eq!(row.auto_handed_generation, None);
     assert_eq!((row.told_at, row.told_reason), (None, None));
     assert_eq!(row.line_told_at, None);
+}
+
+/// The owner items of the automatic replies (`0056_auto_reply_owner_items`): one per conversation
+/// and reason, claimed (a second claim writes nothing), replaced only while it names the task the
+/// caller saw, its line recorded; the open ones are those whose task is open or that have none;
+/// they put a conversation the agent holds into the default queue (`ConversationQueue::Ours`)
+/// while open, whatever the conversation's state but snoozed or closed; a page counts them in one
+/// read; a person's act closes those without a task; erasure's delete removes them; another
+/// workspace sees none of it.
+pub async fn auto_reply_owner_items(uow: Arc<dyn UnitOfWork>) {
+    use jt_app::ports::reply_model::OwnerItem;
+    let f = Fixture::new(uow.clone()).await;
+    let cap = f.capability().await;
+    let p = f.insert_person("Customer").await;
+    let q = f.insert_person("Other customer").await;
+    let j = f.journey(p.id);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    f.insert_journey(t.as_mut(), &j).await.unwrap();
+    let c = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(p.id, cap))
+        .await
+        .unwrap();
+    let d = t
+        .conversations()
+        .upsert_on_inbound(f.conversation(q.id, cap))
+        .await
+        .unwrap();
+    // Answered: the customers owe the next word.
+    for id in [c.id, d.id] {
+        t.conversations()
+            .update_state(id, ConvState::Theirs, Some(FIXED_NOW))
+            .await
+            .unwrap();
+    }
+    let task = |title: &str| Task {
+        id: TaskId::new_v7(),
+        workspace_id: f.ws,
+        journey_id: j.id,
+        title: title.into(),
+        due_at: FIXED_NOW,
+        assignee: None,
+        status: TaskStatus::Open,
+    };
+    let (first, second, third) = (task("Ask"), task("Ask again"), task("Ask anew"));
+    for x in [&first, &second, &third] {
+        t.tasks().insert(x.clone()).await.unwrap();
+    }
+    t.commit().await.unwrap();
+    let ws = f.ws;
+    let ours = move |uow: Arc<dyn UnitOfWork>| async move {
+        let mut t = uow.tenant(ws).await.unwrap();
+        let mut ids = t
+            .conversations()
+            .page(ConversationQueue::Ours, None, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    };
+    assert!(ours(uow.clone()).await.is_empty(), "theirs, nothing asked");
+    let item = OwnerItem {
+        conversation_id: c.id,
+        reason: "not_covered".into(),
+        task_id: Some(first.id),
+        created_at: FIXED_NOW,
+        line_outbox_id: None,
+    };
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.auto_reply()
+            .owner_item(c.id, "not_covered")
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(t.auto_reply().owner_item_insert(&item).await.unwrap());
+    // A second claim of the same conversation and reason writes nothing.
+    let rival = OwnerItem {
+        task_id: Some(second.id),
+        ..item.clone()
+    };
+    assert!(!t.auto_reply().owner_item_insert(&rival).await.unwrap());
+    let line = Uuid::now_v7();
+    t.auto_reply()
+        .owner_item_line(c.id, "not_covered", line)
+        .await
+        .unwrap();
+    let item = OwnerItem {
+        line_outbox_id: Some(line),
+        ..item
+    };
+    let other_reason = OwnerItem {
+        reason: "limit_spend".into(),
+        task_id: Some(second.id),
+        created_at: FIXED_NOW + Duration::seconds(1),
+        line_outbox_id: None,
+        ..item.clone()
+    };
+    assert!(
+        t.auto_reply()
+            .owner_item_insert(&other_reason)
+            .await
+            .unwrap()
+    );
+    // Without a journey: an item with no task, open until a person acts.
+    let untasked = OwnerItem {
+        conversation_id: d.id,
+        reason: "failed".into(),
+        task_id: None,
+        created_at: FIXED_NOW,
+        line_outbox_id: None,
+    };
+    assert!(t.auto_reply().owner_item_insert(&untasked).await.unwrap());
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.auto_reply()
+            .owner_item(c.id, "not_covered")
+            .await
+            .unwrap(),
+        Some(item.clone())
+    );
+    assert_eq!(
+        t.auto_reply().owner_items_open(c.id).await.unwrap(),
+        vec![item.clone(), other_reason.clone()]
+    );
+    assert_eq!(
+        t.auto_reply().owner_items_open(d.id).await.unwrap(),
+        vec![untasked.clone()]
+    );
+    let mut counts = t
+        .auto_reply()
+        .owner_items_open_counts(&[c.id, d.id, ConversationId::new_v7()])
+        .await
+        .unwrap();
+    counts.sort();
+    let mut expected = vec![(c.id, 2), (d.id, 1)];
+    expected.sort();
+    assert_eq!(counts, expected);
+    assert!(
+        t.auto_reply()
+            .owner_items_open_counts(&[])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut open = t.auto_reply().owner_tasks_open().await.unwrap();
+    open.sort();
+    let mut both = vec![first.id, second.id];
+    both.sort();
+    assert_eq!(open, both, "only items with a task");
+    t.commit().await.unwrap();
+    let mut both = vec![c.id, d.id];
+    both.sort();
+    assert_eq!(
+        ours(uow.clone()).await,
+        both,
+        "the agent's, with the owner asked"
+    );
+    // A person holds one: the executor's queues as before.
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.conversations()
+        .update_executor(c.id, Executor::Human { user_id: None })
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    assert_eq!(ours(uow.clone()).await, vec![d.id]);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.conversations()
+        .update_executor(c.id, Executor::Agent)
+        .await
+        .unwrap();
+    // A person's act closes the item without a task only.
+    t.auto_reply()
+        .owner_items_close_untasked(d.id)
+        .await
+        .unwrap();
+    t.auto_reply()
+        .owner_items_close_untasked(c.id)
+        .await
+        .unwrap();
+    // Done or cancelled: no longer open.
+    t.tasks()
+        .set_status(first.id, TaskStatus::Done)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.auto_reply().owner_item(d.id, "failed").await.unwrap(),
+        None
+    );
+    assert_eq!(
+        t.auto_reply().owner_items_open(c.id).await.unwrap(),
+        vec![other_reason.clone()]
+    );
+    assert_eq!(
+        t.auto_reply().owner_tasks_open().await.unwrap(),
+        vec![second.id]
+    );
+    // Replaced only while it names the task the caller saw: a new point for the done one.
+    let renewed = OwnerItem {
+        task_id: Some(third.id),
+        created_at: FIXED_NOW + Duration::minutes(5),
+        line_outbox_id: None,
+        ..item.clone()
+    };
+    assert!(
+        !t.auto_reply()
+            .owner_item_replace(&renewed, Some(second.id))
+            .await
+            .unwrap()
+    );
+    assert!(
+        t.auto_reply()
+            .owner_item_replace(&renewed, Some(first.id))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !t.auto_reply()
+            .owner_item_replace(&renewed, Some(first.id))
+            .await
+            .unwrap(),
+        "once"
+    );
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.auto_reply()
+            .owner_item(c.id, "not_covered")
+            .await
+            .unwrap(),
+        Some(renewed.clone()),
+        "its line cleared"
+    );
+    t.tasks()
+        .set_status(second.id, TaskStatus::Cancelled)
+        .await
+        .unwrap();
+    t.tasks()
+        .set_status(third.id, TaskStatus::Done)
+        .await
+        .unwrap();
+    t.commit().await.unwrap();
+    assert!(ours(uow.clone()).await.is_empty());
+    // Another workspace sees none of it; the delete removes the conversation's items.
+    let mut other = uow.tenant(f.other).await.unwrap();
+    assert_eq!(
+        other
+            .auto_reply()
+            .owner_item(c.id, "not_covered")
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(
+        other
+            .auto_reply()
+            .owner_items_open_counts(&[c.id, d.id])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        other
+            .auto_reply()
+            .owner_tasks_open()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(other);
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    t.auto_reply().owner_items_delete(c.id).await.unwrap();
+    t.commit().await.unwrap();
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.auto_reply()
+            .owner_item(c.id, "not_covered")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        t.auto_reply()
+            .owner_item(c.id, "limit_spend")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+/// Two bundles claim the same conversation's owner item for one reason at once
+/// (`AutoReplyRepo::owner_item_insert`): the second waits for the first and, once it committed,
+/// writes nothing; the stored item is the first's.
+pub async fn auto_reply_owner_item_claimed_once(uow: Arc<dyn UnitOfWork>) {
+    use jt_app::ports::reply_model::OwnerItem;
+    let f = Fixture::new(uow.clone()).await;
+    let id = ConversationId::new_v7();
+    let item = |task: TaskId| OwnerItem {
+        conversation_id: id,
+        reason: "not_covered".into(),
+        task_id: Some(task),
+        created_at: FIXED_NOW,
+        line_outbox_id: None,
+    };
+    let (mine, theirs) = (TaskId::new_v7(), TaskId::new_v7());
+    let mut first = uow.tenant(f.ws).await.unwrap();
+    assert!(
+        first
+            .auto_reply()
+            .owner_item_insert(&item(mine))
+            .await
+            .unwrap()
+    );
+    let (second_uow, ws, rival) = (uow.clone(), f.ws, item(theirs));
+    let second = tokio::spawn(async move {
+        let mut t = second_uow.tenant(ws).await.unwrap();
+        let won = t.auto_reply().owner_item_insert(&rival).await.unwrap();
+        t.commit().await.unwrap();
+        won
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    first.commit().await.unwrap();
+    assert!(!second.await.unwrap(), "the second claim writes nothing");
+    let mut t = uow.tenant(f.ws).await.unwrap();
+    assert_eq!(
+        t.auto_reply()
+            .owner_item(id, "not_covered")
+            .await
+            .unwrap()
+            .and_then(|i| i.task_id),
+        Some(mine)
+    );
 }

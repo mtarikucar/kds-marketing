@@ -166,6 +166,66 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   team managers are told by email (below).
 - While it answers a number's conversations, agents are not offered them in `work.pending`.
 
+## The agent keeps every conversation
+
+A switch beside the automatic replies in Kurallar ("Konuşmalar ajanda kalsın"; stored in
+`knowledge_settings.auto_reply.keeps_conversations`, off by default, stored only while on). While
+it is on, a hand-over never changes who holds a conversation: a conversation becomes a person's
+only when a person presses "Devral" (a reply from the panel does not take it over; it never did).
+Every hand-over cause above (the model's `hand_over`, a text the server refuses after its
+repairs, the check, a model failure or a run that kept failing, the day's limits, the working
+hours, a price from the team, a send the capability's policy refuses, an order the shop did not
+create or whose link could not go, and the response-time job) does instead:
+
+- **An open item for the owner.** A task on the person's journey, due now, for the journey's
+  owner (the unassigned queue without one): "Otomatik yanıt danışıyor: {the reason in plain
+  words} · {the model's summary, cut short}"; the summary whole becomes a journey note, as a
+  hand-over's does. Migration `0056_auto_reply_owner_items` ties the task to its conversation and
+  reason (codes and ids only). One per conversation and reason, claimed before the task is made
+  (`insert … on conflict do nothing`, a done task's item replaced only while it still names that
+  task), so two runs at once ask once: the same reason again while its item is open makes nothing
+  new (no task, no note, no email). Once the owner marks the task done, the next time the reason
+  comes up is a new point. A person with no journey gets an item without a task: it still marks
+  the conversation and keeps repeats quiet, and it closes when a person takes the conversation
+  over, hands it back or closes it.
+- **The owner's email**, as for a hand-over, worded "Otomatik yanıtın bir konuda size ihtiyacı
+  var; konuşma otomatik yanıtta kalıyor…": once per open item.
+- **One line to the customer**, at most once per open item and at most once in 12 hours
+  whatever the reason, as a hand-over's line (`line_told_at`; a person writing to the customer, or
+  a hand-back, ends that quiet): the model's own hand-over line when it passes the rules and the
+  check, else a fixed line, "Bu konuyu ekibimize ilettim, size buradan dönüş yapacaklar.", or its
+  English twin "I've passed this on to our team; they'll get back to you here." for a customer
+  the server knows to read another language. The only thing it knows of a customer's language is
+  the pool prospect the person was promoted from (its language, else its country); a WhatsApp
+  customer who simply wrote in is unknown, and gets Turkish. It is the agent's automatic
+  message, held to the capability's approval, hours and daily cap as any other; outside the
+  working hours none is tried, and the response-time job sends none. A line that never went out
+  does not count as telling the customer.
+- **The conversation stays the agent's** and the customer's next message is answered as any
+  other. The model is told, in the cached workspace part, that a hand-over asks the team about one
+  point and keeps the conversation, and, in the conversation's note, which points are still open
+  with the team, so it answers everything else and does not hand the same point over again.
+
+What the agent may say does not change: a price only through `quote` and within the range, the
+one automatic quote per journey, nothing the cards do not say, the discount steps, the second
+check, and no quote after a person on the team priced. Whatever the server refuses is still never
+sent; only the holder of the conversation differs. The day's limits and spend are counted as
+before (the run that would have handed over is still a `handed_over` run; the line is not a
+model call). Ledger `inbox.autoreply.needs_owner` (`run_id`, `reason`, `by`, `task_id`;
+`repeat`, `owner_notified: false`, `customer_told: false` when so) takes the place of
+`inbox.autoreply.handed_over`. The response-time job hands no served conversation over: it asks
+the owner once for the customer's latest message (`response_overdue`), and not at all while
+another item is open on the conversation. A take-over, a lost journey and a departing member
+change the executor as before, and an agent (an MCP key) may write in a conversation the agent
+keeps.
+
+**In the inbox.** The default queue "Bizde" lists, besides the conversations owed a reply, those
+the agent holds (open or answered) that have an open item for the owner, each with a small "Seni
+bekliyor" mark (`owner_items` on the conversation's view, left out at zero); the owner's home list
+shows the task among the due tasks. No new tab: a conversation leaves "Bizde" when its task is
+done and the customer owes the next word, as any other does. With the switch off nothing of this
+exists and every hand-over is as described above.
+
 ## The order and its payment link
 
 With a shop connected, a customer who accepts the automatic quote and gives the order's details

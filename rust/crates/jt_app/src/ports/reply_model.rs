@@ -526,6 +526,27 @@ impl OrderState {
     }
 }
 
+/// While the agent keeps every conversation (`AutoReply::keeps`): what the automatic replies
+/// asked the owner about in one conversation, for one reason (`0056_auto_reply_owner_items`). The
+/// open item itself is a task on the person's journey ([`OwnerItem::task_id`]); this row ties it to
+/// the conversation, so one reason asks once until the task is done. Codes and ids only.
+///
+/// It is **open** while its task is open; one without a task (the person had no journey) is open
+/// until a person takes the conversation over, hands it back or closes it
+/// ([`AutoReplyRepo::owner_items_close_untasked`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OwnerItem {
+    pub conversation_id: ConversationId,
+    /// The hand-over reason it stands for (`not_covered`, `limit_spend`, …).
+    pub reason: String,
+    /// The owner's task; none when the person had no journey to hold one.
+    pub task_id: Option<jt_inbox::TaskId>,
+    pub created_at: OffsetDateTime,
+    /// The automatic message that told the customer the team will get back to them on it, once
+    /// one was queued.
+    pub line_outbox_id: Option<Uuid>,
+}
+
 /// An order left `Calling` this long is taken as interrupted.
 pub const ORDER_CALL_STALE: Duration = Duration::minutes(2);
 
@@ -679,6 +700,54 @@ pub trait AutoReplyRepo: Send + Sync {
         &mut self,
         conversations: &[ConversationId],
     ) -> Result<(), AppError>;
+    /// Conversation `conversation`'s owner item for reason `reason`, if one was ever made (open
+    /// or not).
+    async fn owner_item(
+        &mut self,
+        conversation: ConversationId,
+        reason: &str,
+    ) -> Result<Option<OwnerItem>, AppError>;
+    /// Stores `item` and answers `true`, unless its conversation holds an item for its reason
+    /// already: then nothing is written and the answer is `false`. Two bundles at once: the
+    /// second waits for the first and answers `false` once it committed.
+    async fn owner_item_insert(&mut self, item: &OwnerItem) -> Result<bool, AppError>;
+    /// Replaces the item of `item`'s conversation and reason with `item` (its line cleared) and
+    /// answers `true`, only while the stored one still names task `previous`; else nothing is
+    /// written and the answer is `false`.
+    async fn owner_item_replace(
+        &mut self,
+        item: &OwnerItem,
+        previous: Option<jt_inbox::TaskId>,
+    ) -> Result<bool, AppError>;
+    /// Records that line `outbox` told the customer of the item of `conversation` and `reason`.
+    async fn owner_item_line(
+        &mut self,
+        conversation: ConversationId,
+        reason: &str,
+        outbox: Uuid,
+    ) -> Result<(), AppError>;
+    /// Conversation `conversation`'s open owner items ([`OwnerItem`]), oldest first.
+    async fn owner_items_open(
+        &mut self,
+        conversation: ConversationId,
+    ) -> Result<Vec<OwnerItem>, AppError>;
+    /// How many open owner items each of `conversations` has, in one read (a page of the inbox):
+    /// one pair per conversation that has any, in no particular order.
+    async fn owner_items_open_counts(
+        &mut self,
+        conversations: &[ConversationId],
+    ) -> Result<Vec<(ConversationId, u32)>, AppError>;
+    /// The tasks of the workspace's owner items that are still open, in no particular order.
+    async fn owner_tasks_open(&mut self) -> Result<Vec<jt_inbox::TaskId>, AppError>;
+    /// Removes conversation `conversation`'s owner items that have no task (a person took the
+    /// conversation over, handed it back or closed it).
+    async fn owner_items_close_untasked(
+        &mut self,
+        conversation: ConversationId,
+    ) -> Result<(), AppError>;
+    /// Removes conversation `conversation`'s owner items (erasure); their tasks stay, as the
+    /// journey's other tasks do.
+    async fn owner_items_delete(&mut self, conversation: ConversationId) -> Result<(), AppError>;
 }
 
 #[cfg(test)]

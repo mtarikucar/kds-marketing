@@ -1903,6 +1903,11 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                     if super::inbox::autoreply::not_waiting(deps, r.as_mut(), &c, now).await? {
                         continue;
                     }
+                    // While the agent keeps every conversation, a served one is never handed
+                    // over: the owner is asked instead, once.
+                    if super::inbox::autoreply::kept_overdue(deps, &ctx, r.as_mut(), &c).await? {
+                        continue;
+                    }
                     let owner = r
                         .journeys()
                         .open_for(c.person_id)

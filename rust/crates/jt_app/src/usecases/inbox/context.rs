@@ -365,11 +365,19 @@ pub(crate) async fn pending_in(
             out.merges.push(merge);
         }
     }
+    // The tasks the automatic replies left the owner while the agent keeps the conversation
+    // (`autoreply::keep`) are a person's to see, whoever holds the conversation.
+    let owner_tasks = if matches!(ctx.actor, Actor::Human { .. }) {
+        r.auto_reply().owner_tasks_open().await?
+    } else {
+        Vec::new()
+    };
     for task in r.tasks().query(TaskQueue::All, None, ctx.now).await? {
         let Some(journey) = r.journeys().get(task.journey_id).await? else {
             continue;
         };
-        let person_visible = visible_people.contains(&journey.person_id)
+        let person_visible = owner_tasks.contains(&task.id)
+            || visible_people.contains(&journey.person_id)
             || (!people_with_conversations.contains(&journey.person_id)
                 && r.people()
                     .get(journey.person_id)

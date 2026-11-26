@@ -1136,6 +1136,8 @@ export interface InboxConversationRow {
   owed_items?: number;
   next_deadline?: Rfc3339 | null;
   held_replies?: number;
+  /** Open tasks the automatic replies left the owner while the agent keeps the conversation. */
+  owner_items?: number;
 }
 export interface InboxMessage {
   id: Uuid;

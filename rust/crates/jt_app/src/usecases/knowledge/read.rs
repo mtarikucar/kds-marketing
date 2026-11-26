@@ -155,6 +155,9 @@ pub struct AutoReplyView {
     /// The bargaining discount, in percent: the preferred step and the largest (0: none).
     pub discount_preferred_pct: u8,
     pub discount_max_pct: u8,
+    /// The agent keeps every conversation: the owner is asked (an open task) where the replies
+    /// would hand a conversation over (`inbox::autoreply`, "keep"). Off by default.
+    pub keeps_conversations: bool,
 }
 
 /// The automatic replies' orders as the rules show them (`inbox::autoreply`, its orders).
@@ -444,6 +447,7 @@ fn rules_view(
             .collect(),
         discount_preferred_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount().0),
         discount_max_pct: s.auto_reply.as_ref().map_or(0, |a| a.discount().1),
+        keeps_conversations: s.auto_reply.as_ref().is_some_and(|a| a.keeps()),
         notify: {
             let mailbox = crate::usecases::inbox::notices::mailbox(capabilities);
             NotifyView {

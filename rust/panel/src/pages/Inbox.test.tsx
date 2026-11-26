@@ -592,6 +592,18 @@ describe('The inbox list, with comments', () => {
     expect(screen.getByText('1 onay bekliyor')).toBeInTheDocument();
   });
 
+  it('marks a conversation the agent keeps that needs the owner, in the default queue', async () => {
+    const kept = { ...rows[0], id: 'conv-kept', executor: 'agent', state: 'theirs', owner_items: 1 };
+    const calls = mockFetch({ ...inboxAnswers, 'GET /api/inbox/conversations': { items: [kept, rows[0]], next_cursor: null } });
+    renderAt('/inbox');
+    await screen.findAllByText('Deniz Örnek');
+    const marks = screen.getAllByTestId('needs-you');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveTextContent('Seni bekliyor');
+    expect(marks[0].closest('a')).toHaveAttribute('href', '/inbox/conv-kept');
+    expect(calls.some((c) => c.method === 'GET' && c.path === '/api/inbox/conversations' && c.search.includes('queue=ours'))).toBe(true);
+  });
+
   it('deadline_countdown_turns_red_under_two_hours', async () => {
     mockFetch({ ...inboxAnswers, 'GET /api/inbox/conversations': { items: rows, next_cursor: null } });
     renderAt('/inbox');

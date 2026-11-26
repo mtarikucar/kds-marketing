@@ -39,6 +39,17 @@
 //! model's line to the customer, when it passes the same rules, goes out as the system's. The
 //! conversation then shows as owed in the owner's home list and the inbox queue.
 //!
+//! **The agent keeps every conversation** (`AutoReply::keeps`, off unless the owner turns it on):
+//! then no hand-over ever writes the executor. Where one would, the conversation stays the
+//! agent's and the owner is asked instead (`keep`): an open task on the person's journey with
+//! the reason and the model's summary (once per conversation and reason until the task is done,
+//! migration `0056_auto_reply_owner_items`), the owner's notice worded as "needs you", and one
+//! line to the customer that the team will get back to them on that point; the customer's next
+//! message is answered as any other. The response-time job hands no served conversation over
+//! either (`kept_overdue`). What the agent may say does not change: the rules, the check, the
+//! range, the one quote and the discount steps hold as they do; only a person's own take-over (or
+//! a lost journey, or a departing member) changes who holds a conversation.
+//!
 //! **The order.** With a shop to order from and a quote on the journey, the model may also create
 //! the order for the quoted price; the server checks it, asks the workspace's shop and sends the
 //! payment link (`orders`, migration `0050_auto_reply_orders`). Without a shop nothing of it is
@@ -48,9 +59,9 @@
 //! millionths of a dollar): a refused answer the model was asked to repair is `skipped`
 //! (`repaired`), a repair with no tool call `skipped` (`repair_unusable`), and the answer that
 //! went on carries what became of the conversation. Ledger entries `inbox.autoreply.{replied,
-//! quoted, ordered, refused, handed_over, skipped, failed}` hold codes and numbers only; a refused
-//! reply's entry names the kinds of what was refused (`refused`: `number`, `amount`, `currency`,
-//! `number_word`, `term`, `link`), never the words. No log line or ledger
+//! quoted, ordered, refused, handed_over, needs_owner, skipped, failed}` hold codes and numbers
+//! only; a refused reply's entry names the kinds of what was refused (`refused`: `number`,
+//! `amount`, `currency`, `number_word`, `term`, `link`), never the words. No log line or ledger
 //! payload holds a customer's text, the model's answer, a quote's basis, a hand-over's summary or
 //! an order's details.
 
@@ -521,7 +532,8 @@ pub(crate) async fn mark_due(
 pub enum Worked {
     /// A reply or a quote was queued.
     Answered,
-    /// The conversation went to a person.
+    /// The conversation went to a person; while the agent keeps every conversation, the owner
+    /// was asked instead (an open task, `keep`).
     HandedOver,
     /// Nothing to do (no longer due, changed meanwhile, not served any more).
     Skipped,
@@ -1545,12 +1557,20 @@ async fn take(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Taken, AppEr
         // conversation goes to a person with the plainest write there is (the executor and one
         // ledger line, no note, no line to the customer), so a person's work list has it.
         idle(r.as_mut(), row).await?;
+        let keeping = keeps(r.as_mut()).await?;
         if let Some(c) = r
             .conversations()
             .get(id)
             .await?
             .filter(|c| c.executor == Executor::Agent && c.state == ConvState::Ours)
         {
+            // While the agent keeps every conversation, the plainest write is the owner's item.
+            if keeping {
+                kept_plainly(deps, ctx, r.as_mut(), &c).await?;
+                r.commit().await?;
+                warn(Some(ctx.workspace_id), "give_up_failed");
+                return Ok(Taken::No);
+            }
             let owner = r
                 .journeys()
                 .open_for(c.person_id)
@@ -1626,7 +1646,7 @@ async fn give_up(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Worked, A
     if let Some(row) = row {
         idle(r.as_mut(), row).await?;
     }
-    hand_over(
+    let line = hand_over(
         deps,
         ctx,
         r.as_mut(),
@@ -1643,7 +1663,18 @@ async fn give_up(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Worked, A
     )
     .await?;
     r.commit().await?;
+    send_line(deps, ctx, line).await;
     Ok(Worked::HandedOver)
+}
+
+/// Sends the line a hand-over or a keep queued (`line`), after its transaction committed: the
+/// row's own fences and receipt settle it; a failure here is the outbox's to recover.
+async fn send_line(deps: &Deps, ctx: &Ctx, line: Option<Uuid>) {
+    if let Some(outbox) = line
+        && let Err(e) = replies::send_step(deps, ctx, outbox).await
+    {
+        warn(Some(ctx.workspace_id), e.code.as_str());
+    }
 }
 
 /// Step 1 (see the module docs), on a row [`take`] leased.
@@ -1700,7 +1731,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         rules::limit_reached(LIMITS, today).map(hand)
     };
     if let Some((reason, by)) = held_back {
-        hand_over(
+        let line = hand_over(
             deps,
             ctx,
             r.as_mut(),
@@ -1718,6 +1749,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         .await?;
         idle(r.as_mut(), row).await?;
         r.commit().await?;
+        send_line(deps, ctx, line).await;
         return Ok(Prepared::Done(Worked::HandedOver));
     }
     let messages = r.messages().recent(id, MAX_HISTORY).await?;
@@ -1755,13 +1787,28 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     if let Some(policy) = bargaining_part(&auto) {
         system_workspace.push_str(&policy);
     }
-    let system_note = match (
+    // While the agent keeps every conversation, the model is told what a hand-over does now, and
+    // which points of this conversation the team was asked about already (still open).
+    let asked: Vec<String> = if auto.keeps() {
+        system_workspace.push_str(KEEP_PART);
+        r.auto_reply()
+            .owner_items_open(id)
+            .await?
+            .into_iter()
+            .map(|i| i.reason)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let notes: Vec<String> = [
         bargaining_note(&auto, bargain.as_ref(), human_priced),
         told_recently.then(|| TOLD_NOTE.to_owned()),
-    ) {
-        (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
-        (a, b) => a.or(b),
-    };
+        (!asked.is_empty()).then(|| keep_note(&asked)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let system_note = (!notes.is_empty()).then(|| notes.join("\n"));
     let snapshot = Snapshot {
         generation: c.executor_generation,
         activity_revision: r.conversations().send_state(id).await?.activity_revision,
@@ -2551,7 +2598,8 @@ async fn server_refused_for(
         payload,
     )
     .await?;
-    hand_over(
+    // A keep's line to the customer, when one was queued (a hand-over queues none here).
+    let line = hand_over(
         deps,
         ctx,
         r,
@@ -2567,7 +2615,7 @@ async fn server_refused_for(
         },
     )
     .await?;
-    Ok(Decided::handed_over(reason, None))
+    Ok(Decided::handed_over(reason, line))
 }
 
 /// Queues `text` (a reply, or `quote`'s message) as an automatic message. A send fence's refusal
@@ -2823,7 +2871,9 @@ pub(crate) async fn handed_by_job(
 }
 
 /// Hands conversation `c` to a person (see the module docs), in the caller's transaction:
-/// answers the outbox row of the line to the customer, when one was queued.
+/// answers the outbox row of the line to the customer, when one was queued. While the agent keeps
+/// every conversation ([`AutoReply::keeps`]) nobody is handed anything: the owner is asked instead
+/// ([`keep`]).
 async fn hand_over(
     deps: &Deps,
     ctx: &Ctx,
@@ -2831,6 +2881,9 @@ async fn hand_over(
     c: &Conversation,
     h: HandOver<'_>,
 ) -> Result<Option<Uuid>, AppError> {
+    if keeps(r).await? {
+        return keep(deps, ctx, r, c, h, true).await;
+    }
     let owner = r
         .journeys()
         .open_for(c.person_id)
@@ -2914,6 +2967,387 @@ async fn hand_over(
     Ok(queued)
 }
 
+// ---------------------------------------------------------------------------------------------
+// The agent keeps every conversation
+// ---------------------------------------------------------------------------------------------
+
+/// Whether the workspace's agent keeps every conversation ([`AutoReply::keeps`]).
+async fn keeps(r: &mut dyn TenantRepos) -> Result<bool, AppError> {
+    Ok(r.knowledge()
+        .settings()
+        .await?
+        .and_then(|s| s.auto_reply)
+        .is_some_and(|a| a.keeps()))
+}
+
+/// The line that tells the customer, once per point, that the team will get back to them on it,
+/// while the agent keeps every conversation (`keep`), when the model gave none that passes the
+/// rules and the check: in Turkish, the default, and in English ([`KEEP_LINE_EN`]) for a customer
+/// known to read another language (`keep_line`).
+pub const KEEP_LINE: &str = "Bu konuyu ekibimize ilettim, size buradan dönüş yapacaklar.";
+/// [`KEEP_LINE`]'s English twin.
+pub const KEEP_LINE_EN: &str = "I've passed this on to our team; they'll get back to you here.";
+/// What a keep's task and note start with: the automatic replies ask the owner.
+const KEEP_TITLE: &str = "Otomatik yanıt danışıyor";
+/// The longest part of the model's summary a keep's task title shows, in characters (the note
+/// keeps it whole, up to [`MAX_SUMMARY_CHARS`]).
+const MAX_TITLE_SUMMARY_CHARS: usize = 160;
+/// The reason the response-time job asks the owner with, while the agent keeps every
+/// conversation ([`kept_overdue`]).
+const RESPONSE_OVERDUE: &str = "response_overdue";
+
+/// What the model is told of a hand-over while the agent keeps every conversation (the
+/// workspace's part, so it is cached with it).
+const KEEP_PART: &str = "\n# When you hand over\nIn this business you keep every conversation: \
+`hand_over` asks the team about that one point, and the conversation stays with you. Its line \
+tells the customer, in one short sentence, that the team will get back to them on that point. Then \
+keep answering everything else yourself, as usual.\n";
+
+/// What the model is told while the team was asked about points of this conversation that are
+/// still open (`reasons`, their codes).
+fn keep_note(reasons: &[String]) -> String {
+    format!(
+        "The team was asked about points of this conversation that are still open ({}). The \
+         customer was told the team will get back to them on those. Answer everything else \
+         yourself as usual; if the customer asks about one of those points again, say briefly \
+         that the team will get back to them, and do not use `hand_over` for it again.",
+        reasons.join(", ")
+    )
+}
+
+/// The fixed line for conversation `c`'s customer in the language the server knows they read:
+/// only the prospect the person was promoted from knows one (its language, else its country).
+/// Turkish, [`KEEP_LINE`], when that is Turkish or nothing is known (a WhatsApp customer who
+/// simply wrote in); [`KEEP_LINE_EN`] otherwise.
+async fn keep_line(r: &mut dyn TenantRepos, c: &Conversation) -> Result<&'static str, AppError> {
+    let Some(p) = r.prospects().by_person(c.person_id).await? else {
+        return Ok(KEEP_LINE);
+    };
+    let turkish = match p.language.as_deref().map(str::trim) {
+        Some(lang) if !lang.is_empty() => lang.to_ascii_lowercase().starts_with("tr"),
+        _ => p.country.trim().is_empty() || p.country.trim().eq_ignore_ascii_case("TR"),
+    };
+    Ok(if turkish { KEEP_LINE } else { KEEP_LINE_EN })
+}
+
+/// Whether owner item `item` is open: its task is, or it has none (the person had no journey).
+async fn item_open(r: &mut dyn TenantRepos, item: &OwnerItem) -> Result<bool, AppError> {
+    Ok(match item.task_id {
+        Some(task) => r
+            .tasks()
+            .get(task)
+            .await?
+            .is_some_and(|t| t.status == TaskStatus::Open),
+        None => true,
+    })
+}
+
+/// While the agent keeps every conversation: where [`hand_over`] would give conversation `c` to a
+/// person, it stays the agent's (its executor is never written), in the caller's transaction.
+///
+/// - **The owner is asked**, once per reason until they finish it: the owner item is claimed
+///   first (`0056_auto_reply_owner_items`, one per conversation and reason), so of two runs at
+///   once only one asks; then an open task on the person's journey ([`owner_task`]: the reason in
+///   plain words, the model's summary, and the summary whole as a journey note) and the owner's
+///   email notice, worded as "needs you" (`notices`). A person with no journey gets an item with
+///   no task, which still marks the conversation and keeps repeats quiet. Again for the same
+///   reason while the item is open: nothing new (no task, no note, no notice).
+/// - **The customer is told**, when `tell`, at most once per open item and at most once within
+///   [`TOLD_QUIET`] whatever the reason (as a hand-over's line, [`told`]; a person writing to the
+///   customer ends that quiet): the model's line when it passes the reply rules and the check,
+///   else the fixed line ([`keep_line`]), queued as the agent's automatic message (the
+///   capability's approval, hours and daily cap hold it as any other; outside the working hours
+///   none is tried). A line that never went out (refused, failed) does not count for its item.
+/// - **What the agent may say is unchanged**: the text the server refused is never sent, the reply
+///   rules, the check, the range, the one quote and the discount steps stay as they are; only the
+///   holder of the conversation differs. The customer's next message is answered as any other.
+///
+/// Ledger `inbox.autoreply.needs_owner` (codes and ids: the run, the reason, who decided, the
+/// task; `repeat`, `owner_notified: false` and `customer_told: false` when so). Answers the outbox
+/// row of the line, when one was queued.
+async fn keep(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    h: HandOver<'_>,
+    tell: bool,
+) -> Result<Option<Uuid>, AppError> {
+    let mut payload = json!({ "run_id": h.run_id, "reason": h.reason, "by": h.by.key() });
+    let journey = super::active_or_latest_journey(r, c.person_id).await?;
+    // The item's own key: its task's id when there is a journey to hold the task.
+    let key = deps.ids.uuid();
+    let fresh = OwnerItem {
+        conversation_id: c.id,
+        reason: h.reason.to_owned(),
+        task_id: journey.as_ref().map(|_| TaskId::from(key)),
+        created_at: ctx.now,
+        line_outbox_id: None,
+    };
+    // Claimed before anything is made: a run that loses finds the winner's item.
+    let mut won = r.auto_reply().owner_item_insert(&fresh).await?;
+    let item = if won {
+        fresh
+    } else {
+        let stored = stored_item(r, c.id, h.reason).await?;
+        if item_open(r, &stored).await? {
+            stored
+        } else {
+            // Its task is done: a new point, unless another run replaced it first.
+            won = r
+                .auto_reply()
+                .owner_item_replace(&fresh, stored.task_id)
+                .await?;
+            if won {
+                fresh
+            } else {
+                stored_item(r, c.id, h.reason).await?
+            }
+        }
+    };
+    if won {
+        if let Some(journey) = &journey {
+            owner_task(deps, ctx, r, journey, &h, TaskId::from(key)).await?;
+        }
+        super::notices::queue_best_effort(
+            deps,
+            ctx,
+            r,
+            NoticeKind::HandedOver,
+            c.id,
+            format!("{}{}:{key}", super::notices::NEEDS_YOU, c.id),
+            Some(h.reason),
+        )
+        .await?;
+    } else {
+        // The same point, still open: the owner knows.
+        payload["repeat"] = json!(true);
+        payload["owner_notified"] = json!(false);
+    }
+    // Told already: this item's line went out (or may still), or any line within the quiet time.
+    let item_told = match item.line_outbox_id {
+        Some(outbox) => r.outbox().get(outbox).await?.is_some_and(|row| {
+            matches!(
+                row.state.as_str(),
+                "held" | "queued" | "sending" | "sent" | "unknown"
+            )
+        }),
+        None => false,
+    };
+    let quiet = item_told || told(r, c.id, ctx.now).await?.line;
+    let mut queued = None;
+    // Outside the working hours no automatic message may go: none is tried.
+    if tell && !quiet && h.reason != "outside_active_hours" {
+        let year = ctx.now.year();
+        let line = match h.line.map(str::trim).filter(|l| {
+            !l.is_empty() && h.line_allowed && rules::check_reply(l, h.cards, year).is_ok()
+        }) {
+            Some(line) => line,
+            None => keep_line(r, c).await?,
+        };
+        // One held automatic reply at a time, as for any automatic message.
+        replies::supersede_held_auto(r, ctx, c.id).await?;
+        let send = replies::AutoSend {
+            run_id: h.run_id.unwrap_or_else(|| deps.ids.uuid()),
+            expected_generation: c.executor_generation,
+            activity_revision: r.conversations().send_state(c.id).await?.activity_revision,
+            quote: None,
+            handing_over: false,
+        };
+        queued = enqueue(deps, ctx, r, c.id, line, &send).await?.ok();
+    }
+    match queued {
+        Some(outbox) => {
+            // The quiet time starts, as for a hand-over's line.
+            r.auto_reply().line_told(c.id, ctx.now).await?;
+            r.auto_reply()
+                .owner_item_line(c.id, h.reason, outbox)
+                .await?;
+        }
+        None => payload["customer_told"] = json!(false),
+    }
+    if let Some(task) = item.task_id {
+        payload["task_id"] = json!(task);
+    }
+    record(
+        r,
+        ctx,
+        "inbox.autoreply.needs_owner",
+        "conversation",
+        c.id,
+        payload,
+    )
+    .await?;
+    Ok(queued)
+}
+
+/// The owner item of conversation `conversation` and `reason`, which a claim found taken.
+async fn stored_item(
+    r: &mut dyn TenantRepos,
+    conversation: ConversationId,
+    reason: &str,
+) -> Result<OwnerItem, AppError> {
+    r.auto_reply()
+        .owner_item(conversation, reason)
+        .await?
+        .ok_or_else(|| AppError::internal("an owner item its claim found"))
+}
+
+/// The owner's open task `id` of a keep ([`keep`]) on `journey`, in the caller's transaction: for
+/// the journey's owner (the unassigned queue without one), due now, titled with the reason in
+/// plain words and, when the model gave one, its summary cut short. The summary whole becomes a
+/// journey note, as a hand-over's does (erasure clears both).
+async fn owner_task(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    journey: &Journey,
+    h: &HandOver<'_>,
+    id: TaskId,
+) -> Result<(), AppError> {
+    let summary = h.summary.map(str::trim).filter(|s| !s.is_empty());
+    let words = super::notices::reason_words(Some(h.reason));
+    let title = match summary {
+        Some(s) => format!(
+            "{KEEP_TITLE}: {words} · {}",
+            jt_knowledge::cut(s, MAX_TITLE_SUMMARY_CHARS)
+        ),
+        None => format!("{KEEP_TITLE}: {words}"),
+    };
+    let task = Task {
+        id,
+        workspace_id: ctx.workspace_id,
+        journey_id: journey.id,
+        title,
+        due_at: ctx.now,
+        assignee: journey.owner,
+        status: TaskStatus::Open,
+    };
+    r.tasks().insert(task.clone()).await?;
+    record(
+        r,
+        ctx,
+        "inbox.task.created",
+        "task",
+        task.id,
+        json!({ "journey_id": journey.id, "assignee": task.assignee }),
+    )
+    .await?;
+    if let Some(summary) = summary {
+        r.notes()
+            .insert(Note {
+                id: NoteId::from(deps.ids.uuid()),
+                workspace_id: ctx.workspace_id,
+                journey_id: journey.id,
+                author: EventSource::System,
+                text: format!(
+                    "{KEEP_TITLE}: {}",
+                    jt_knowledge::cut(summary, MAX_SUMMARY_CHARS)
+                ),
+                at: ctx.now,
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+/// The give-up's keep ([`take`]): the owner's item for `failed`, inside a savepoint, with no line
+/// to the customer; should even that fail, only its ledger line, so the row still rests.
+async fn kept_plainly(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+) -> Result<(), AppError> {
+    let failed = || HandOver {
+        run_id: None,
+        reason: "failed",
+        by: By::Server,
+        summary: None,
+        line: None,
+        cards: "",
+        line_allowed: false,
+    };
+    let plain = json!({ "run_id": null, "reason": "failed", "by": By::Server.key() });
+    if r.savepoint().await.is_err() {
+        return record(
+            r,
+            ctx,
+            "inbox.autoreply.needs_owner",
+            "conversation",
+            c.id,
+            plain,
+        )
+        .await;
+    }
+    match keep(deps, ctx, r, c, failed(), false).await {
+        Ok(_) => r.release_savepoint().await,
+        Err(e) => {
+            warn(Some(ctx.workspace_id), e.code.as_str());
+            r.rollback_to_savepoint().await?;
+            r.release_savepoint().await?;
+            record(
+                r,
+                ctx,
+                "inbox.autoreply.needs_owner",
+                "conversation",
+                c.id,
+                plain,
+            )
+            .await
+        }
+    }
+}
+
+/// For the response-time job: while the agent keeps every conversation, an overdue conversation
+/// `c` the automatic replies serve is never handed over. The owner is asked instead
+/// ([`RESPONSE_OVERDUE`], no line to the customer), once for the customer's latest message, and
+/// not at all while an item of the automatic replies is open on it already. `true` when the job is
+/// to leave the conversation be; `false` for one the replies do not serve or a workspace whose
+/// replies hand over, which keeps the job's rule.
+pub(crate) async fn kept_overdue(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+) -> Result<bool, AppError> {
+    let Some((auto, _)) = served(deps, r, c.id).await? else {
+        return Ok(false);
+    };
+    if !auto.keeps() {
+        return Ok(false);
+    }
+    if !r.auto_reply().owner_items_open(c.id).await?.is_empty() {
+        return Ok(true);
+    }
+    let since = c.last_inbound_at.unwrap_or(c.created_at);
+    if r.auto_reply()
+        .owner_item(c.id, RESPONSE_OVERDUE)
+        .await?
+        .is_some_and(|i| i.created_at >= since)
+    {
+        return Ok(true);
+    }
+    keep(
+        deps,
+        ctx,
+        r,
+        c,
+        HandOver {
+            run_id: None,
+            reason: RESPONSE_OVERDUE,
+            by: By::Server,
+            summary: None,
+            line: None,
+            cards: "",
+            line_allowed: false,
+        },
+        false,
+    )
+    .await?;
+    Ok(true)
+}
+
 /// The model gave no answer (its call is recorded already, [`called`]): after a rate limit or an
 /// outage the conversation is asked again (after the provider's wait, at most
 /// [`AUTOREPLY_RETRY_MAX`]) until the row took [`AUTOREPLY_MAX_ATTEMPTS`] calls; after that
@@ -2969,6 +3403,7 @@ async fn failed(
             && c.state == ConvState::Ours
             && activity == s.activity_revision
     });
+    let mut line = None;
     let worked = match still {
         Some(c) => {
             let reason = if reason == "model_rejected" {
@@ -2976,7 +3411,7 @@ async fn failed(
             } else {
                 "failed"
             };
-            hand_over(
+            line = hand_over(
                 deps,
                 ctx,
                 r.as_mut(),
@@ -3004,6 +3439,7 @@ async fn failed(
         idle(r.as_mut(), row).await?;
     }
     r.commit().await?;
+    send_line(deps, ctx, line).await;
     Ok(worked)
 }
 

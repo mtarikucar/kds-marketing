@@ -79,6 +79,7 @@ function ConversationLink({ row }: { row: InboxConversationRow }) {
         {row.surface && <Badge size="sm" tone={row.surface === 'private' ? 'neutral' : 'primary'}>{t(`inbox.public.surface.${surfaceKey(row)}`)}</Badge>}
         {!!row.owed_items && <Badge size="sm" tone="warning">{t('inbox.public.owed', { count: row.owed_items })}</Badge>}
         {!!row.held_replies && <Badge size="sm" tone="info">{t('inbox.public.heldCount', { count: row.held_replies })}</Badge>}
+        {!!row.owner_items && <Badge size="sm" tone="warning" data-testid="needs-you">{t('inbox.needsYou')}</Badge>}
         {row.next_deadline && <Deadline at={row.next_deadline} />}
       </span>
     </Link>

@@ -28,7 +28,7 @@ jt_panel_http = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 tower = { workspace = true, features = ["util"], optional = true }
 sqlx.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["time"] }
 uuid.workspace = true
 time.workspace = true
 async-trait.workspace = true
