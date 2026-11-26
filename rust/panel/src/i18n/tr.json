@@ -4938,7 +4938,8 @@
     "media": {
       "label": "Paylaşımın görseli",
       "slide": "{{n}}. görsel / {{count}}",
-      "full": "Büyük göster"
+      "full": "Büyük göster",
+      "failed": "Görsel açılamadı."
     },
     "redo": {
       "title": "Ne değişsin?",

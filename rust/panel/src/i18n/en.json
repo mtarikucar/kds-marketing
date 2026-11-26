@@ -4938,7 +4938,8 @@
     "media": {
       "label": "The post's media",
       "slide": "Image {{n}} of {{count}}",
-      "full": "View full size"
+      "full": "View full size",
+      "failed": "The image could not be opened."
     },
     "redo": {
       "title": "What should change?",

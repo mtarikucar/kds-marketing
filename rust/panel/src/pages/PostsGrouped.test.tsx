@@ -86,6 +86,10 @@ describe('one line per content', () => {
     expect(c.querySelectorAll('[data-version]')).toHaveLength(1);
     // A thumbnail on the left of the line.
     expect(a.querySelector('img')).toHaveAttribute('src', '/files/ma.jpg');
+    // The dots are the line's first row's (A's failed TikTok post: six of eight), once per line.
+    expect(within(a).getByRole('img', { name: 'Süreç: 8 adımın 6 tanesi bitti' })).toBeInTheDocument();
+    expect(within(a).getAllByTestId('dots')).toHaveLength(1);
+    expect(within(b).getByRole('img', { name: 'Süreç: 8 adımın 5 tanesi bitti' })).toBeInTheDocument();
   });
 
   it('keeps a version that needs the owner on the line, even when its sibling is fine', async () => {
