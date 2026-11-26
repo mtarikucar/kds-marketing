@@ -5700,7 +5700,7 @@ async fn without_a_journey_the_item_still_marks_the_conversation_and_keeps_repea
     job(&t, due(0)).await;
     let items = owner_items(&t);
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].task_id, None);
+    assert!(items[0].task_id.is_none());
     assert!(open_tasks(&t).is_empty());
     assert_eq!(notices(&t).len(), 1);
     assert_eq!(texts_sent(&t), ["Ekibimiz size dönecek."]);

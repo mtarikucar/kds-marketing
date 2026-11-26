@@ -2980,10 +2980,10 @@ async fn keeps(r: &mut dyn TenantRepos) -> Result<bool, AppError> {
         .is_some_and(|a| a.keeps()))
 }
 
-//// The line that tells the customer, once per point, that the team will get back to them on it,
+/// The line that tells the customer, once per point, that the team will get back to them on it,
 /// while the agent keeps every conversation (`keep`), when the model gave none that passes the
 /// rules and the check: in Turkish, the default, and in English ([`KEEP_LINE_EN`]) for a customer
-/// known to read another language ([`keep_line`]).
+/// known to read another language (`keep_line`).
 pub const KEEP_LINE: &str = "Bu konuyu ekibimize ilettim, size buradan dönüş yapacaklar.";
 /// [`KEEP_LINE`]'s English twin.
 pub const KEEP_LINE_EN: &str = "I've passed this on to our team; they'll get back to you here.";
