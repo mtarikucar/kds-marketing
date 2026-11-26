@@ -5,7 +5,7 @@ import type { StageKey } from '@/api/content';
 import { STAGE_KEYS, type ChannelRef, type Cover, type PostCounts, type PostRow, type PostsFilter, type Progress } from '@/api/postsPage';
 import { cn, Skeleton } from '@/components/ui';
 import { groupCover, groupRows, type PostGroup } from './groups';
-import { channelLabel, STATUS_TONE, stageLabel, statusWord, subLine, whenWords, type Tone } from './words';
+import { channelLabel, formatName, STATUS_TONE, stageLabel, statusWord, subLine, whenWords, type Tone } from './words';
 
 const PILL: Record<Tone, string> = {
   red: 'bg-danger-subtle text-danger',
@@ -129,28 +129,38 @@ export function Chips({ counts, filter, onFilter, loading }: { counts?: PostCoun
   );
 }
 
-const GRID = 'grid grid-cols-[minmax(0,1fr)_7rem_minmax(0,16rem)] items-center gap-3';
+const GRID = 'grid grid-cols-[minmax(0,1fr)_7rem_minmax(0,19rem)] items-center gap-3';
 
 /**
  * One version of a content on its table line: its platform, its own state and its own time.
  * Every version the read returned gets one, so a state that needs the owner is never hidden
  * behind a sibling that is fine.
  */
-export function VersionChip({ row }: { row: PostRow }) {
+export function VersionChip({ row, withFormat = false }: { row: PostRow; withFormat?: boolean }) {
   const { t, i18n } = useTranslation();
+  const format = withFormat ? formatName(t, row.format) : '';
   return (
     <span data-version={row.id} className="inline-flex max-w-full flex-wrap items-center gap-1.5">
       <ChannelBadge channel={row.channel} />
+      {format && <span data-testid="version-format" className="text-xs font-semibold">{format}</span>}
       <StatusPill row={row} />
       <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{whenWords(t, row.published_at ?? row.publish_at, i18n.language)}</span>
     </span>
   );
 }
 
+/**
+ * A line's chips. A chip names its format (`Gönderi`, `Hikâye`…) only when another version of the
+ * line goes out on the same platform, so a post and a story can be told apart while a
+ * line of one version per platform stays as short as it was at 390 px.
+ */
 function Versions({ group }: { group: PostGroup }) {
+  const kinds = new Map<string, number>();
+  for (const m of group.members) if (m.channel) kinds.set(m.channel.kind, (kinds.get(m.channel.kind) ?? 0) + 1);
+  const shared = (m: PostRow) => !!m.channel && (kinds.get(m.channel.kind) ?? 0) > 1;
   return (
     <span className="flex min-w-0 flex-col items-start gap-1">
-      {group.members.map((m) => <VersionChip key={m.id} row={m} />)}
+      {group.members.map((m) => <VersionChip key={m.id} row={m} withFormat={shared(m)} />)}
     </span>
   );
 }
@@ -257,7 +267,7 @@ export function PostsTable({ rows, selectedKey, onSelect, phone, empty, more }: 
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-surface">
           <div className="overflow-x-auto">
-            <div className="min-w-[40rem]">
+            <div className="min-w-[42rem]">
               <div aria-hidden="true" className={cn(GRID, 'border-b border-border bg-surface-muted/50 px-4 py-2.5 text-xs font-semibold text-muted-foreground')}>
                 <span>{t('postsPage.table.post')}</span>
                 <span>{t('postsPage.table.progress')}</span>
