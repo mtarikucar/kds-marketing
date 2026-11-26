@@ -16,13 +16,13 @@ export const INSTAGRAM: ChannelRef = { capability_id: 'cap-ig', kind: 'instagram
 export const TIKTOK: ChannelRef = { capability_id: 'cap-tt', kind: 'tiktok', name: 'alfaatolye', label: 'TikTok' };
 export const INSTAGRAM_SHOP: ChannelRef = { capability_id: 'cap-ig2', kind: 'instagram', name: 'alfa.magaza', label: 'Instagram · alfa.magaza' };
 
-/** A row with sensible defaults: a scheduled Instagram post of a content, nothing to do. */
+/** A row with sensible defaults: a scheduled Instagram post of a content of its own, nothing to do. */
 export function postRow(id: string, patch: Partial<PostRow> = {}): PostRow {
   const [kind, raw] = id.split(':') as [string, string];
   return {
     id,
     kind: kind === 'slot' ? 'post' : (kind as PostRow['kind']),
-    area_id: 'area-1',
+    area_id: `area-${raw}`,
     version_id: kind === 'version' ? raw : null,
     slot_id: kind === 'slot' ? raw : null,
     shoot_request_id: kind === 'need' ? raw : null,
@@ -51,7 +51,9 @@ export const wait = (code: WaitCode, facts: Wait['facts'] = {}): Wait => ({ code
 
 /** One row of each kind and status, and the waits the owner meets most. */
 export const rows: PostRow[] = [
+  // s-approve, s-tiktok and s-live are three posts of one content (area-1): one line of the table.
   postRow('slot:s-approve', {
+    area_id: 'area-1',
     title: 'Yeni sırlı kupalar fırından çıktı',
     status: 'waiting_you',
     progress: { index: 5, state: 'waiting_person' },
@@ -68,8 +70,10 @@ export const rows: PostRow[] = [
     ],
   }),
   postRow('slot:s-tiktok', {
+    area_id: 'area-1',
     title: 'Çarkta bir kupanın doğuşu',
     channel: TIKTOK,
+    publish_at: ahead(48 * HOUR),
     format: 'tiktok_video',
     media: { images: 0, video_seconds: 8 },
     status: 'waiting_you',
@@ -77,6 +81,10 @@ export const rows: PostRow[] = [
     waits: [wait('posting_screen')],
     actions: { tiktok: { slot_id: 's-tiktok', expected_revision: 2 }, redo: { project_id: 'area-1', package_revision: 2 }, cancel: { kind: 'post', slot_id: 's-tiktok', expected_revision: 2 } },
     ai_illustration: true,
+    siblings: [
+      { row_id: 'slot:s-approve', channel: INSTAGRAM, publish_at: ahead(26 * HOUR), status: 'waiting_you' },
+      { row_id: 'slot:s-live', channel: INSTAGRAM, publish_at: ago(48 * HOUR), status: 'published' },
+    ],
   }),
   postRow('slot:s-failed', {
     title: 'Hafta sonu atölye dersi',
@@ -114,12 +122,17 @@ export const rows: PostRow[] = [
   }),
   postRow('slot:s-planned', { title: 'Atölyeden bir gün', channel: INSTAGRAM_SHOP, area_id: 'area-5' }),
   postRow('slot:s-live', {
+    area_id: 'area-1',
     title: 'Mavi sır serisi',
     status: 'published',
     publish_at: ago(48 * HOUR),
     published_at: ago(48 * HOUR),
     url: 'https://instagram.example/p/1',
     progress: { index: 7, state: 'done' },
+    siblings: [
+      { row_id: 'slot:s-approve', channel: INSTAGRAM, publish_at: ahead(26 * HOUR), status: 'waiting_you' },
+      { row_id: 'slot:s-tiktok', channel: TIKTOK, publish_at: ahead(48 * HOUR), status: 'waiting_you' },
+    ],
   }),
   postRow('need:n-1', {
     title: 'Fırının içinden bir video çek',

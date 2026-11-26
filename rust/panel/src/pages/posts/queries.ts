@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '@/api/client';
-import { postGet, postsRead, type PostsFilter, type PostsOut } from '@/api/postsPage';
+import { postGet, postsRead, type PostDetail, type PostsFilter, type PostsOut } from '@/api/postsPage';
 import { useSession } from '@/auth/useSession';
 import { toast } from '@/components/ui';
 import { errorMessage } from '@/lib/errors';
@@ -45,6 +45,26 @@ export function usePostDetail(rowId: string | undefined) {
     retry: false,
     refetchInterval: 30_000,
   });
+}
+
+/**
+ * `content.post_get` of the versions the panel shows that the list does not hold (another filter's,
+ * a later page's), so each has its own state and actions; the same reads as selecting them.
+ */
+export function useRowDetails(rowIds: readonly string[]): Map<string, PostDetail> {
+  const workspace = useWorkspace();
+  const results = useQueries({
+    queries: rowIds.map((id) => ({
+      queryKey: [...POSTS_KEY, workspace, 'row', id],
+      queryFn: () => postGet(id),
+      enabled: !!workspace,
+      retry: false,
+      refetchInterval: 30_000,
+    })),
+  });
+  const out = new Map<string, PostDetail>();
+  results.forEach((r, i) => { if (r.data) out.set(rowIds[i], r.data); });
+  return out;
 }
 
 /**

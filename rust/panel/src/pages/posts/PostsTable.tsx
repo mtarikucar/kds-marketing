@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Clapperboard, GalleryHorizontal, Image as ImageIcon, Layers, Play, SquareStack } from 'lucide-react';
 import type { StageKey } from '@/api/content';
 import { STAGE_KEYS, type ChannelRef, type Cover, type PostCounts, type PostRow, type PostsFilter, type Progress } from '@/api/postsPage';
 import { cn, Skeleton } from '@/components/ui';
+import { groupCover, groupRows, type PostGroup } from './groups';
 import { channelLabel, STATUS_TONE, stageLabel, statusWord, subLine, whenWords, type Tone } from './words';
 
 const PILL: Record<Tone, string> = {
@@ -128,17 +129,44 @@ export function Chips({ counts, filter, onFilter, loading }: { counts?: PostCoun
   );
 }
 
-const GRID = 'grid grid-cols-[minmax(0,1fr)_6.5rem_7rem_8rem_7.5rem] items-center gap-3';
+const GRID = 'grid grid-cols-[minmax(0,1fr)_7rem_minmax(0,16rem)] items-center gap-3';
 
-/** One row of the desk table, a button that selects it. */
-function TableRow({ row, selected, onSelect }: { row: PostRow; selected: boolean; onSelect: () => void }) {
+/**
+ * One version of a content on its table line: its platform, its own state and its own time.
+ * Every version the read returned gets one, so a state that needs the owner is never hidden
+ * behind a sibling that is fine.
+ */
+export function VersionChip({ row }: { row: PostRow }) {
   const { t, i18n } = useTranslation();
+  return (
+    <span data-version={row.id} className="inline-flex max-w-full flex-wrap items-center gap-1.5">
+      <ChannelBadge channel={row.channel} />
+      <StatusPill row={row} />
+      <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{whenWords(t, row.published_at ?? row.publish_at, i18n.language)}</span>
+    </span>
+  );
+}
+
+function Versions({ group }: { group: PostGroup }) {
+  return (
+    <span className="flex min-w-0 flex-col items-start gap-1">
+      {group.members.map((m) => <VersionChip key={m.id} row={m} />)}
+    </span>
+  );
+}
+
+/** One line of the desk table, a button that opens its content. */
+function TableRow({ group, selected, onSelect }: { group: PostGroup; selected: boolean; onSelect: () => void }) {
+  const { t } = useTranslation();
+  const { lead } = group;
+  const pic = groupCover(group);
   return (
     <li>
       <button
         type="button"
         aria-pressed={selected}
-        data-row={row.id}
+        data-row={lead.id}
+        data-group={group.key}
         onClick={onSelect}
         className={cn(
           GRID,
@@ -147,40 +175,38 @@ function TableRow({ row, selected, onSelect }: { row: PostRow; selected: boolean
         )}
       >
         <span className="flex min-w-0 items-center gap-3">
-          <Thumb cover={row.cover} format={row.format} seconds={row.media?.video_seconds} />
+          <Thumb cover={pic.cover} format={pic.format} seconds={pic.media?.video_seconds} />
           <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="truncate text-sm font-semibold">{row.title}</span>
-            <span className="truncate text-xs text-muted-foreground">{subLine(t, row)}</span>
+            <span className="truncate text-sm font-semibold">{lead.title}</span>
+            <span className="truncate text-xs text-muted-foreground">{subLine(t, lead)}</span>
           </span>
         </span>
-        <span className="min-w-0"><ChannelBadge channel={row.channel} /></span>
-        <Dots progress={row.progress} />
-        <span><StatusPill row={row} /></span>
-        <span className="text-sm tabular-nums">{whenWords(t, row.published_at ?? row.publish_at, i18n.language)}</span>
+        <Dots progress={lead.progress} />
+        <Versions group={group} />
       </button>
     </li>
   );
 }
 
-/** One row as a phone card (§2.10 "< 640 px"). */
-function CardRow({ row, selected, onSelect }: { row: PostRow; selected: boolean; onSelect: () => void }) {
-  const { t, i18n } = useTranslation();
+/** One line as a phone card (§2.10 "< 640 px"). */
+function CardRow({ group, selected, onSelect }: { group: PostGroup; selected: boolean; onSelect: () => void }) {
+  const { lead } = group;
+  const pic = groupCover(group);
   return (
     <li>
       <button
         type="button"
         aria-pressed={selected}
-        data-row={row.id}
+        data-row={lead.id}
+        data-group={group.key}
         onClick={onSelect}
         className={cn('flex w-full gap-3 rounded-xl border bg-surface p-3 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring', selected ? 'border-primary' : 'border-border')}
       >
-        <Thumb cover={row.cover} format={row.format} seconds={row.media?.video_seconds} size="h-14 w-14" />
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="line-clamp-2 text-sm font-semibold">{row.title}</span>
-          <span className="truncate text-xs text-muted-foreground">
-            {[channelLabel(t, row.channel) || '—', whenWords(t, row.published_at ?? row.publish_at, i18n.language)].join(' · ')}
-          </span>
-          <span className="flex flex-wrap items-center gap-2"><StatusPill row={row} /><Dots progress={row.progress} /></span>
+        <Thumb cover={pic.cover} format={pic.format} seconds={pic.media?.video_seconds} size="h-14 w-14" />
+        <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <span className="line-clamp-2 text-sm font-semibold">{lead.title}</span>
+          <Versions group={group} />
+          <Dots progress={lead.progress} />
         </span>
       </button>
     </li>
@@ -204,12 +230,14 @@ export function TableSkeleton() {
 }
 
 /**
- * The one table (§2.2 item 6): a row is one post. On a phone the rows are cards; the columns are
- * Paylaşım, Kanal, Süreç, Durum and Yayın.
+ * The one table (§2.2 item 6): a line is one content, its versions (one per platform or account)
+ * as chips inside it. On a phone the lines are cards; the columns are Paylaşım, Süreç and Kanallar.
  */
-export function PostsTable({ rows, selectedId, onSelect, phone, empty, more }: {
+export function PostsTable({ rows, selectedKey, onSelect, phone, empty, more }: {
   rows: PostRow[];
-  selectedId: string | undefined;
+  /** The group of the row the panel shows. */
+  selectedKey: string | undefined;
+  /** The row a line opens: the one of it already shown, else its lead. */
   onSelect: (row: PostRow) => void;
   phone: boolean;
   /** Said in place of the rows when there are none. */
@@ -218,22 +246,24 @@ export function PostsTable({ rows, selectedId, onSelect, phone, empty, more }: {
   more?: React.ReactNode;
 }) {
   const { t } = useTranslation();
+  const groups = useMemo(() => groupRows(rows), [rows]);
+  const line = (g: PostGroup, Row: typeof TableRow) => (
+    <Row key={g.key} group={g} selected={g.key === selectedKey} onSelect={() => onSelect(g.lead)} />
+  );
   return (
     <section aria-label={t('postsPage.table.label')} className="min-w-0 space-y-2.5">
       {phone ? (
-        rows.length ? <ul className="space-y-2">{rows.map((r) => <CardRow key={r.id} row={r} selected={r.id === selectedId} onSelect={() => onSelect(r)} />)}</ul> : empty
+        groups.length ? <ul className="space-y-2">{groups.map((g) => line(g, CardRow))}</ul> : empty
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-surface">
           <div className="overflow-x-auto">
             <div className="min-w-[40rem]">
               <div aria-hidden="true" className={cn(GRID, 'border-b border-border bg-surface-muted/50 px-4 py-2.5 text-xs font-semibold text-muted-foreground')}>
                 <span>{t('postsPage.table.post')}</span>
-                <span>{t('postsPage.table.channel')}</span>
                 <span>{t('postsPage.table.progress')}</span>
-                <span>{t('postsPage.table.status')}</span>
-                <span>{t('postsPage.table.publish')}</span>
+                <span>{t('postsPage.table.versions')}</span>
               </div>
-              {rows.length ? <ul>{rows.map((r) => <TableRow key={r.id} row={r} selected={r.id === selectedId} onSelect={() => onSelect(r)} />)}</ul> : empty}
+              {groups.length ? <ul>{groups.map((g) => line(g, TableRow))}</ul> : empty}
             </div>
           </div>
         </div>

@@ -14,11 +14,12 @@ import { TiktokDialog } from './social/TiktokDialog';
 import { AccountsSheet } from './posts/AccountsSheet';
 import { AgentLine } from './posts/AgentLine';
 import { Composer } from './posts/Composer';
-import { DetailLoadError, DetailPanel, GonePanel, isNotFound, PanelSkeleton } from './posts/DetailPanel';
+import { DetailLoadError, DetailPanel, GonePanel, isNotFound, PanelSkeleton, type VersionView } from './posts/DetailPanel';
 import { FilesDrawer } from './posts/FilesDrawer';
+import { groupKey, versionIds } from './posts/groups';
 import { closedPlace, selectedRowId, usePostsPlace, withRow, type PostsPlace } from './posts/location';
 import { Chips, PostsTable, TableSkeleton } from './posts/PostsTable';
-import { useInvalidatePosts, useMedia, usePostDetail, usePosts } from './posts/queries';
+import { useInvalidatePosts, useMedia, usePostDetail, usePosts, useRowDetails } from './posts/queries';
 import { SettingsSheet } from './posts/SettingsSheet';
 import { SpecialDays } from './posts/SpecialDays';
 
@@ -83,6 +84,24 @@ export function PostsPage() {
   const detail = usePostDetail(detailId);
   const selected: PostRow | undefined = resolved ?? (named ? detail.data?.row : undefined) ?? fallback;
 
+  // The versions of the selected row's content (its siblings, the same relation the table groups
+  // by): the list's rows where it holds them, each other one read on its own.
+  const byId = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  const ids = useMemo(() => (selected ? versionIds(selected, rows) : []), [selected, rows]);
+  const unlisted = useMemo(() => ids.filter((id) => id !== selected?.id && !byId.has(id)), [ids, selected, byId]);
+  const read = useRowDetails(unlisted);
+  const versions: VersionView[] = ids
+    .filter((id) => id === selected?.id || !gone.has(id))
+    .map((id) => {
+      const other = read.get(id);
+      return {
+        id,
+        row: id === selected?.id ? selected : byId.get(id) ?? (other && other.listed && !other.cancelled ? other.row : null),
+        sibling: selected?.siblings.find((s) => s.row_id === id) ?? null,
+      };
+    })
+    .filter((v) => v.id === selected?.id || v.row || !read.has(v.id));
+
   // A stage chip whose count dropped to 0 while chosen goes; the filter falls back to Tümü.
   useEffect(() => {
     if (!first || !filter || filter === 'you') return;
@@ -116,6 +135,10 @@ export function PostsPage() {
   const select = (row: { id: string }) => {
     go(withRow(closedPlace(place), row.id));
   };
+  // A table line opens the version of it the panel shows already, else its first one.
+  const selectLine = (lead: PostRow) => select(selected && groupKey(selected) === groupKey(lead) ? selected : lead);
+  // Another version of the same content, from the panel: in place, so Back still closes the panel.
+  const showVersion = (id: string) => go(withRow(closedPlace(place), id), { replace: true });
   const setFilter = (f: PostsFilter | undefined) => go({ f }, { replace: true });
   const openAccounts = () => go({ ...closedPlace(place), accounts: true });
   const header = (
@@ -171,12 +194,13 @@ export function PostsPage() {
       row={selected}
       detail={detail.data}
       detailError={detail.error}
+      versions={versions}
       markedGone={gone.has(selected.id) || (!!named && gone.has(named))}
       brake={brake}
       onResumeAll={() => resume.mutate()}
       onAccounts={openAccounts}
       onTiktok={(slot) => go({ ...withRow(closedPlace(place), `slot:${slot}`), tiktok: slot })}
-      onSelect={(id) => select({ id })}
+      onSelect={showVersion}
       onClose={closePanel}
       onRetry={() => void detail.refetch()}
       onGone={markGone}
@@ -230,7 +254,7 @@ export function PostsPage() {
           <div className="flex min-w-0 flex-wrap items-start gap-5">
             <div className="min-w-0 flex-[999_1_32rem]">
               {loading ? <TableSkeleton /> : (
-                <PostsTable rows={rows} selectedId={selected?.id} onSelect={select} phone={phone} empty={empty} more={more} />
+                <PostsTable rows={rows} selectedKey={selected ? groupKey(selected) : undefined} onSelect={selectLine} phone={phone} empty={empty} more={more} />
               )}
             </div>
             {desk && (

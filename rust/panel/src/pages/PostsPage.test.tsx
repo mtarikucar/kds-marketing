@@ -31,6 +31,12 @@ const P = tr.postsPage;
 const table = () => screen.findByRole('region', { name: P.table.label });
 const panel = () => screen.findByRole('complementary', { name: P.panel.label });
 const rowButton = async (title: string) => (await within(await table()).findByText(title)).closest('button')!;
+/** The panel's block of the version `id`, once the panel shows it. */
+const block = async (id: string) => waitFor(async () => {
+  const el = (await panel()).querySelector<HTMLElement>(`[data-version="${id}"]`);
+  if (!el) throw new Error(`no block ${id}`);
+  return el;
+});
 const sent = (calls: FetchCall[], method: string, path: string) => calls.find((c) => c.method === method && c.path === path);
 const withPermissions = (permissions: Permission[], role = 'owner'): MeOut => ({
   ...me,
@@ -46,22 +52,22 @@ function open(path = '/posts', data: PostsOut = postsOut(), extra: FetchRoutes =
 }
 
 describe('the table', () => {
-  it('shows one row per post with its picture, first line, channel, dots, status and time', async () => {
+  it('shows one line per content with its picture, first line, dots, and each post’s channel, status and time', async () => {
     open();
     const t = await table();
-    for (const r of rows) expect(within(t).getByText(r.title)).toBeInTheDocument();
+    // s-approve, s-tiktok and s-live are one content: one line, under its first post's title.
+    const sameContent = ['slot:s-tiktok', 'slot:s-live'];
+    for (const r of rows.filter((x) => !sameContent.includes(x.id))) expect(within(t).getByText(r.title)).toBeInTheDocument();
+    expect(within(t).queryByText('Çarkta bir kupanın doğuşu')).not.toBeInTheDocument();
     const approve = await rowButton('Yeni sırlı kupalar fırından çıktı');
-    expect(within(approve).getByText(P.status.waiting_you)).toBeInTheDocument();
+    expect(within(approve).getAllByText(P.status.waiting_you)).toHaveLength(2);
     expect(within(approve).getByText('Genel · Gönderi tek görsel')).toBeInTheDocument();
     expect(within(approve).getByRole('img', { name: 'Süreç: 8 adımın 5 tanesi bitti' })).toBeInTheDocument();
-    const tiktok = await rowButton('Çarkta bir kupanın doğuşu');
-    expect(within(tiktok).getByText('TikTok')).toBeInTheDocument();
-    expect(within(tiktok).getByText('Genel · Video 8 sn')).toBeInTheDocument();
+    expect(within(approve).getByText('TikTok')).toBeInTheDocument();
+    expect(within(approve).getByText(P.status.published)).toBeInTheDocument();
     expect(within(await rowButton('Hafta sonu atölye dersi')).getByText(P.status.failed)).toBeInTheDocument();
     expect(within(await rowButton('Yılbaşı için kurumsal hediye kupası')).getByText(P.status.preparing)).toBeInTheDocument();
     expect(within(await rowButton('Kahve köşesine yeni fincan seti')).getByText(P.status.scheduling)).toBeInTheDocument();
-    expect(within(await rowButton('Mavi sır serisi')).getByText(P.status.published)).toBeInTheDocument();
-    expect(within(await rowButton('Mavi sır serisi')).getByRole('img', { name: 'Süreç: 8 adımın 8 tanesi bitti' })).toBeInTheDocument();
     // Two accounts on one platform: the badge names the account.
     expect(within(await rowButton('Atölyeden bir gün')).getByText('Instagram · alfa.magaza')).toBeInTheDocument();
     // No account chosen yet: a dash that says the agent will choose.
@@ -85,11 +91,11 @@ describe('the table', () => {
     const p = await panel();
     expect(await within(p).findByRole('heading', { name: 'Yeni sırlı kupalar fırından çıktı' })).toBeInTheDocument();
     expect((await rowButton('Yeni sırlı kupalar fırından çıktı'))).toHaveAttribute('aria-pressed', 'true');
-    await user.click(await rowButton('Mavi sır serisi'));
-    await waitFor(() => expect(router.state.location.search).toBe('?slot=s-live'));
+    await user.click(await rowButton('Atölyeden bir gün'));
+    await waitFor(() => expect(router.state.location.search).toBe('?slot=s-planned'));
     expect(router.state.historyAction).toBe('PUSH');
-    expect(await within(p).findByRole('heading', { name: 'Mavi sır serisi' })).toBeInTheDocument();
-    expect(await rowButton('Mavi sır serisi')).toHaveAttribute('aria-pressed', 'true');
+    expect(await within(p).findByRole('heading', { name: 'Atölyeden bir gün' })).toBeInTheDocument();
+    expect(await rowButton('Atölyeden bir gün')).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('pages on with the cursor, the counts staying the server’s', async () => {
@@ -137,13 +143,16 @@ describe('the panel', () => {
     open('/posts?slot=s-tiktok');
     const p = await panel();
     expect(await within(p).findByRole('heading', { name: 'Çarkta bir kupanın doğuşu' })).toBeInTheDocument();
-    expect(within(p).getByText(P.waits.posting_screen.status)).toBeInTheDocument();
+    // Its own block among the content's posts: platform, account, status, the wait's sentence.
+    const own = p.querySelector<HTMLElement>('[data-version="slot:s-tiktok"]')!;
+    expect(own).toHaveAttribute('aria-current', 'true');
+    expect(within(own).getByText(P.waits.posting_screen.status)).toBeInTheDocument();
     // It says what is asked (his approval on TikTok's screen) and when it then goes out by itself.
-    expect(within(p).getByTestId('wait-sentence')).toHaveTextContent(/^Bu paylaşımı TikTok ekranında onaylaman gerekiyor\. Onaylarsan kendiliğinden paylaşılır: .+ \d\d:\d\d\.$/);
+    expect(within(own).getByTestId('wait-sentence')).toHaveTextContent(/^Bu paylaşımı TikTok ekranında onaylaman gerekiyor\. Onaylarsan kendiliğinden paylaşılır: .+ \d\d:\d\d\.$/);
     expect(await within(p).findByText(/Atölyemizde elde şekillendirildi/)).toBeInTheDocument();
-    expect(within(p).getByText('TikTok · alfaatolye')).toBeInTheDocument();
-    expect(within(p).getByText('Video · 8 sn')).toBeInTheDocument();
-    expect(within(p).getByText('Genel')).toBeInTheDocument();
+    expect(within(own).getByText('TikTok')).toBeInTheDocument();
+    expect(within(own).getByText('alfaatolye')).toBeInTheDocument();
+    expect(within(p).getByText('Video · 8 sn · Genel')).toBeInTheDocument();
     expect(within(p).getByText(P.panel.ai)).toBeInTheDocument();
     expect(screen.queryByRole('tab')).not.toBeInTheDocument();
     expect(within(p).queryByText(P.stages.hazirlik)).not.toBeInTheDocument();
@@ -160,10 +169,12 @@ describe('the panel', () => {
     const user = userEvent.setup();
     const { router } = open('/posts?slot=s-approve');
     const p = await panel();
-    const same = await within(p).findByText(P.panel.same);
-    const links = within(same.parentElement!).getAllByRole('button');
-    expect(links.map((b) => b.textContent)).toEqual([expect.stringMatching(/^TikTok · /), expect.stringMatching(/^Instagram · /)]);
-    await user.click(links[0]);
+    const versions = await within(p).findByRole('list', { name: P.panel.versions });
+    const blocks = within(versions).getAllByRole('listitem');
+    expect(blocks.map((b) => b.getAttribute('data-version'))).toEqual(['slot:s-approve', 'slot:s-tiktok', 'slot:s-live']);
+    const heads = blocks.slice(1).map((b) => within(b).getAllByRole('button')[0]);
+    expect(heads.map((b) => b.getAttribute('aria-label'))).toEqual([expect.stringMatching(/^TikTok · /), expect.stringMatching(/^Instagram · /)]);
+    await user.click(heads[0]);
     await waitFor(() => expect(router.state.location.search).toBe('?slot=s-tiktok'));
   });
 
@@ -180,8 +191,8 @@ describe('the panel', () => {
     const { router } = open('/posts?slot=old', postsOut(), { 'GET /api/content/posts/slot%3Aold': detailOf(elsewhere) });
     expect(await within(await panel()).findByRole('heading', { name: 'Geçen ayın paylaşımı' })).toBeInTheDocument();
     expect(within(await table()).queryByText('Geçen ayın paylaşımı')).not.toBeInTheDocument();
-    await user.click(await rowButton('Mavi sır serisi'));
-    await waitFor(() => expect(router.state.location.search).toBe('?slot=s-live'));
+    await user.click(await rowButton('Atölyeden bir gün'));
+    await waitFor(() => expect(router.state.location.search).toBe('?slot=s-planned'));
   });
 
   it('says when the row is gone, and closes it', async () => {
@@ -480,7 +491,9 @@ describe('İptal', () => {
   it('cancels a post with the default reason', async () => {
     const user = userEvent.setup();
     const { calls } = open('/posts?slot=s-approve', postsOut(), { 'POST /api/studio/slots/s-approve/cancel': {} });
-    await user.click(await within(await panel()).findByRole('button', { name: P.actions.cancel }));
+    // The content's other posts have their own İptal in their own blocks.
+    const own = await block('slot:s-approve');
+    await user.click(await within(own).findByRole('button', { name: P.actions.cancel }));
     const dialog = await screen.findByRole('dialog', { name: P.cancel.title });
     expect(within(dialog).getByText(/paylaşımı çıkmayacak\. Aynı içerikten diğer paylaşımlar yerinde kalır\.$/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: P.cancel.confirm }));
@@ -660,7 +673,7 @@ describe('the composer', () => {
 
   it('hides the file button without the library', async () => {
     open('/posts', postsOut({ composer: { ...postsOut().composer, files_allowed: false } }));
-    await rowButton('Mavi sır serisi');
+    await rowButton('Atölyeden bir gün');
     const region = await screen.findByRole('region', { name: P.composer.region });
     expect(within(region).queryByRole('button', { name: P.composer.file })).not.toBeInTheDocument();
   });
@@ -804,13 +817,13 @@ describe('states', () => {
     mockFetch(postsAnswers());
     const { router } = renderAt('/posts');
     const t = await table();
-    const card = (await within(t).findByText('Mavi sır serisi')).closest('button')!;
+    const card = (await within(t).findByText('Atölyeden bir gün')).closest('button')!;
     expect(within(card).getByText(/^Instagram · /)).toBeInTheDocument();
     // No panel until a row is chosen.
     expect(screen.queryByRole('complementary', { name: P.panel.label })).not.toBeInTheDocument();
     await user.click(card);
     const sheet = await screen.findByRole('dialog', { name: P.panel.label });
-    expect(await within(sheet).findByRole('heading', { name: 'Mavi sır serisi' })).toBeInTheDocument();
+    expect(await within(sheet).findByRole('heading', { name: 'Atölyeden bir gün' })).toBeInTheDocument();
     await user.click(within(sheet).getByRole('button', { name: P.panel.back }));
     await waitFor(() => expect(router.state.location.search).toBe(''));
   });
@@ -897,7 +910,10 @@ describe('the channel words', () => {
   it('names the account beside the platform when two share it, in the panel’s details too', async () => {
     open('/posts?slot=s-planned');
     const p = await panel();
-    expect(await within(p).findByText('Instagram · alfa.magaza')).toBeInTheDocument();
+    const own = await block('slot:s-planned');
+    expect(within(own).getByText('Instagram')).toBeInTheDocument();
+    expect(within(own).getByText('alfa.magaza')).toBeInTheDocument();
+    expect(within(await rowButton('Atölyeden bir gün')).getByText('Instagram · alfa.magaza')).toBeInTheDocument();
     expect(INSTAGRAM_SHOP.label).toBe('Instagram · alfa.magaza');
   });
 });

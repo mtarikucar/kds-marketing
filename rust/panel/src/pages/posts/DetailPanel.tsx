@@ -1,13 +1,14 @@
 import { useTranslation } from 'react-i18next';
 import { ExternalLink, Info } from 'lucide-react';
 import { isApiError } from '@/api/client';
-import type { BrakeState, PostDetail, PostRow } from '@/api/postsPage';
+import type { BrakeState, PostDetail, PostRow, Sibling } from '@/api/postsPage';
 import { RunNowButton } from '@/components/AgentWakeLine';
 import { Button, Callout, cn, Skeleton } from '@/components/ui';
 import { useNeedWake, useNow } from '@/lib/wake';
 import { RowActionBar } from './actions';
-import { Thumb } from './PostsTable';
-import { categoryTitle, channelAndTime, formatWords, platformName, STATUS_TONE, statusLine, subStateLine, waitSentence, whenWords } from './words';
+import { PostMedia } from './PostMedia';
+import { ChannelBadge } from './PostsTable';
+import { categoryTitle, channelAndTime, formatWords, platformName, STATUS_TONE, statusLine, statusWord, subStateLine, waitSentence, whenWords } from './words';
 
 const PILL = {
   red: 'bg-danger-subtle text-danger',
@@ -29,8 +30,8 @@ function RunNow() {
 export function PanelSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-hidden="true">
-      <div className="flex gap-3.5"><Skeleton className="h-[92px] w-[92px] rounded-xl" /><div className="flex-1 space-y-2"><Skeleton className="h-4 w-4/5" /><Skeleton className="h-3 w-1/2" /><Skeleton className="h-5 w-24 rounded-full" /></div></div>
-      <Skeleton className="h-9 w-full" />
+      <Skeleton className="aspect-[4/3] w-full rounded-xl" />
+      <div className="space-y-2"><Skeleton className="h-4 w-4/5" /><Skeleton className="h-3 w-1/2" /></div>
       <Skeleton className="h-16 w-full" />
     </div>
   );
@@ -66,15 +67,94 @@ export function DetailLoadError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+/** One version of the content the panel shows: its row when read, else what its siblings say of it. */
+export interface VersionView {
+  id: string;
+  row: PostRow | null;
+  sibling: Sibling | null;
+}
+
+interface BlockContext {
+  brake: BrakeState | null;
+  onResumeAll: () => void;
+  onAccounts: () => void;
+  onTiktok: (slotId: string) => void;
+  onSelect: (rowId: string) => void;
+  onGone?: (rowId: string, gone: boolean) => void;
+}
+
 /**
- * The selected row (design 2026-11-19 §2.7), no tabs and no step list: the picture beside the
- * title, `{Kanal} · {zaman}` and the status; the wait's sentence; the actions; the text; the
- * details; the AI note; the content's other posts.
+ * One version's block: platform and account, time, state, and what belongs to that state (the
+ * wait's sentence, the row's own actions, the live post's link). Another version's head shows
+ * that version in the panel instead.
+ */
+function VersionBlock({ view, current, brake, onResumeAll, onAccounts, onTiktok, onSelect, onGone }: BlockContext & { view: VersionView; current: boolean }) {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.language;
+  const row = view.row;
+  const channel = row ? row.channel : view.sibling?.channel ?? null;
+  const status = row?.status ?? view.sibling?.status ?? 'scheduled';
+  const publishedAt = row?.published_at ?? null;
+  const at = publishedAt ?? (row ? row.publish_at : view.sibling?.publish_at ?? null);
+  const wait = row?.waits[0];
+  const sub = row && !wait ? subStateLine(t, row.sub_state, lang) : null;
+  const pill = row ? statusLine(t, row, lang) : statusWord(t, { status, tiktok_draft: false });
+  const tone = row?.status === 'published' && row.tiktok_draft ? 'green' : STATUS_TONE[status];
+  const head = (
+    <>
+      <ChannelBadge channel={channel && { ...channel, label: platformName(channel.kind) }} />
+      {channel?.name && <span className="min-w-0 truncate text-[13px]">{channel.name}</span>}
+      <span data-testid="version-status" className={cn('inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold', PILL[tone])}>{pill}</span>
+      <span className="text-[13px] tabular-nums text-muted-foreground">
+        {publishedAt ? t('postsPage.panel.publishedAt', { at: whenWords(t, publishedAt, lang) }) : whenWords(t, at, lang)}
+      </span>
+    </>
+  );
+  return (
+    <li data-version={view.id} aria-current={current || undefined} className={cn('min-w-0 space-y-2.5 rounded-xl border p-3', current ? 'border-primary bg-primary/5' : 'border-border')}>
+      {current ? (
+        <div className="flex flex-wrap items-center gap-2">{head}</div>
+      ) : (
+        <button
+          type="button"
+          className="flex w-full flex-wrap items-center gap-2 rounded-md text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={channelAndTime(t, channel, at, lang)}
+          onClick={() => onSelect(view.id)}
+        >
+          {head}
+        </button>
+      )}
+      {wait && row && (
+        <p data-testid="wait-sentence" className="rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2.5 text-sm">{waitSentence(t, wait, row.channel, row.publish_at, lang)}</p>
+      )}
+      {row?.status === 'paused' && (
+        <div className="space-y-2 rounded-lg border border-border bg-surface-muted px-3 py-2.5 text-sm">
+          <p>{t('postsPage.brake.paused')}</p>
+          {brake?.can_resume && <Button size="sm" variant="outline" onClick={onResumeAll}>{t('postsPage.actions.resume')}</Button>}
+        </div>
+      )}
+      {sub?.late && <p className="text-sm"><RunNow /></p>}
+      {row && <RowActionBar row={row} onAccounts={onAccounts} onTiktok={onTiktok} onGone={onGone} />}
+      {publishedAt && row?.url && (
+        <a className="inline-flex items-center gap-1 text-[13px] text-primary underline underline-offset-4" href={row.url} target="_blank" rel="noreferrer noopener">
+          {t('postsPage.panel.openPost')}<ExternalLink aria-hidden="true" className="h-3 w-3" />
+        </a>
+      )}
+    </li>
+  );
+}
+
+/**
+ * The selected row (design 2026-11-19 §2.7), no tabs and no step list: the post itself first and
+ * large, its title with the format and category in a line, the AI note, the whole caption with its
+ * tags, then one block per version of the same content (this one marked), each with its own
+ * state and actions.
  */
 export function DetailPanel({
   row,
   detail,
   detailError,
+  versions,
   markedGone = false,
   brake,
   onResumeAll,
@@ -88,6 +168,8 @@ export function DetailPanel({
   row: PostRow;
   detail: PostDetail | undefined;
   detailError: unknown;
+  /** Every version of the row's content, the row among them; absent: the row alone. */
+  versions?: VersionView[];
   /** Cancelled from this panel a moment ago, before any read says so. */
   markedGone?: boolean;
   onRetry: () => void;
@@ -96,40 +178,30 @@ export function DetailPanel({
   onResumeAll: () => void;
   onAccounts: () => void;
   onTiktok: (slotId: string) => void;
+  /** Shows another version of the content in the panel. */
   onSelect: (rowId: string) => void;
   onClose: () => void;
 }) {
-  const { t, i18n } = useTranslation();
-  const lang = i18n.language;
+  const { t } = useTranslation();
   if (markedGone || isGone(detail, detailError)) return <GonePanel onClose={onClose} />;
-  const wait = row.waits[0];
-  const at = row.published_at ?? row.publish_at;
-  const sub = !wait ? subStateLine(t, row.sub_state, lang) : null;
   const ai = row.ai_illustration || !!detail?.materials.some((c) => c.ai_generated);
   const before = row.kind === 'content';
+  const given = versions?.some((v) => v.id === row.id) ? versions : [{ id: row.id, row, sibling: null }, ...(versions ?? [])];
+  const list = given.map((v) => (v.id === row.id ? { ...v, row } : v));
+  const facts = [formatWords(t, row), categoryTitle(t, row)].filter(Boolean).join(' · ');
   return (
-    <div className="flex flex-col gap-[18px]">
-      <div className="flex items-center gap-3.5">
-        <Thumb cover={row.cover} format={row.format} seconds={row.media?.video_seconds} size="h-[92px] w-[92px]" />
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <h2 className="line-clamp-2 text-[17px] font-bold leading-snug">{row.title}</h2>
-          <p className="text-[13px] text-muted-foreground">{channelAndTime(t, row.channel, at, lang)}</p>
-          <p><span className={cn('inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold', PILL[STATUS_TONE[row.status]])}>{statusLine(t, row, lang)}</span></p>
-        </div>
+    <div className="flex min-w-0 flex-col gap-4">
+      <PostMedia row={row} materials={detail?.materials} loading={!detail && detailError == null} />
+      <div className="space-y-1">
+        <h2 className="line-clamp-2 text-[17px] font-bold leading-snug">{row.title}</h2>
+        <p className="text-[13px] text-muted-foreground">{facts}</p>
       </div>
-
-      {wait && (
-        <p data-testid="wait-sentence" className="rounded-lg border border-warning/40 bg-warning-subtle px-3 py-2.5 text-sm">{waitSentence(t, wait, row.channel, row.publish_at, lang)}</p>
+      {ai && (
+        <p className="flex items-center gap-2 text-xs text-primary">
+          <Info aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+          {t('postsPage.panel.ai')}
+        </p>
       )}
-      {row.status === 'paused' && (
-        <div className="space-y-2 rounded-lg border border-border bg-surface-muted px-3 py-2.5 text-sm">
-          <p>{t('postsPage.brake.paused')}</p>
-          {brake?.can_resume && <Button size="sm" variant="outline" onClick={onResumeAll}>{t('postsPage.actions.resume')}</Button>}
-        </div>
-      )}
-      {sub?.late && <p className="text-sm"><RunNow /></p>}
-
-      <RowActionBar row={row} onAccounts={onAccounts} onTiktok={onTiktok} onGone={onGone} />
 
       {detail ? (
         detail.text && (
@@ -145,46 +217,21 @@ export function DetailPanel({
       )}
       {detail?.redo_note && <p className="text-sm text-muted-foreground">{t('postsPage.panel.redoNote', { note: detail.redo_note })}</p>}
 
-      <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-y-2.5 border-t border-border pt-3.5 text-[13px]">
-        <dt className="text-muted-foreground">{t('postsPage.panel.channel')}</dt>
-        <dd>{row.channel ? `${platformName(row.channel.kind)} · ${row.channel.name}` : '—'}</dd>
-        <dt className="text-muted-foreground">{t('postsPage.panel.date')}</dt>
-        <dd className="flex flex-wrap gap-x-2">
-          {row.published_at
-            ? <span>{t('postsPage.panel.publishedAt', { at: whenWords(t, row.published_at, lang) })}</span>
-            : <span>{whenWords(t, row.publish_at, lang)}</span>}
-          {row.published_at && row.url && (
-            <a className="inline-flex items-center gap-1 text-primary underline underline-offset-4" href={row.url} target="_blank" rel="noreferrer noopener">
-              {t('postsPage.panel.openPost')}<ExternalLink aria-hidden="true" className="h-3 w-3" />
-            </a>
-          )}
-        </dd>
-        <dt className="text-muted-foreground">{t('postsPage.panel.format')}</dt>
-        <dd>{formatWords(t, row) || '—'}</dd>
-        <dt className="text-muted-foreground">{t('postsPage.panel.category')}</dt>
-        <dd>{categoryTitle(t, row)}</dd>
-      </dl>
-
-      {ai && (
-        <p className="flex items-center gap-2.5 rounded-xl bg-primary/10 p-3 text-xs text-primary">
-          <Info aria-hidden="true" className="h-4 w-4 shrink-0" />
-          {t('postsPage.panel.ai')}
-        </p>
-      )}
-
-      {row.siblings.length > 0 && (
-        <p className="text-[13px]">
-          <span className="text-muted-foreground">{t('postsPage.panel.same')} </span>
-          {row.siblings.map((s, i) => (
-            <span key={s.row_id}>
-              {i > 0 && ', '}
-              <button type="button" className="text-primary underline underline-offset-4" onClick={() => onSelect(s.row_id)}>
-                {channelAndTime(t, s.channel, s.publish_at, lang)}
-              </button>
-            </span>
-          ))}
-        </p>
-      )}
+      <ul aria-label={t('postsPage.panel.versions')} className="space-y-2.5 border-t border-border pt-3.5">
+        {list.map((v) => (
+          <VersionBlock
+            key={v.id}
+            view={v}
+            current={v.id === row.id}
+            brake={brake}
+            onResumeAll={onResumeAll}
+            onAccounts={onAccounts}
+            onTiktok={onTiktok}
+            onSelect={onSelect}
+            onGone={onGone}
+          />
+        ))}
+      </ul>
     </div>
   );
 }

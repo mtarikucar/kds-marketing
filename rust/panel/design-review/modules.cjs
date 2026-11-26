@@ -64,6 +64,30 @@ const stopped = { ...ads.breakdown, stop: { revision: 9, all: false, modules: ['
 const scenarios = [];
 function add(name, url, data = {}, options = {}) { scenarios.push({ name, url, data, ...options }); }
 add('posts-table', '/posts', {}, { ready: async p => p.getByRole('region', { name: tr.postsPage.table.label }).waitFor() });
+// One line per content with its versions as chips, and the panel that shows the post itself:
+// a picture, a carousel's slides. The pictures are drawn by the harness (`/review-media/`).
+const media = (id, mime = 'image/svg+xml') => ({ material_id: id, mime, preview_url: `/review-media/${id}.svg`, preview_expires_at: posts.ahead(3600_000), ai_generated: false });
+const sibling = r => ({ row_id: r.id, channel: r.channel, publish_at: r.publish_at, status: r.status });
+const content = (area, members) => members.map(m => ({ ...m, area_id: area })).map((m, _, all) => ({ ...m, siblings: all.filter(o => o.id !== m.id).map(sibling) }));
+const [groupFailed, groupLive] = content('area-g', [
+  posts.postRow('slot:g-tt', { title: 'Örnek içerik: iki platformda', channel: posts.TIKTOK, format: 'tiktok_video', status: 'failed', publish_at: posts.ago(3 * 3600_000), progress: { index: 6, state: 'problem' }, waits: [posts.wait('failed', { reason: 'rate_limited', kind: 'tiktok' })], actions: { redo: { project_id: 'area-g', package_revision: 1 }, acknowledge: { slot_id: 'g-tt', expected_revision: 2 } }, cover: media('g1') }),
+  posts.postRow('slot:g-ig', { title: 'Örnek içerik: iki platformda', status: 'published', publish_at: posts.ago(5 * 3600_000), published_at: posts.ago(5 * 3600_000), url: 'https://instagram.example/p/g', progress: { index: 7, state: 'done' }, cover: media('g1') }),
+]);
+const [groupWaiting, groupPlanned] = content('area-h', [
+  posts.postRow('slot:h-ig', { title: 'Kaydırmalı örnek içerik', format: 'carousel', media: { images: 3, video_seconds: null }, status: 'waiting_you', progress: { index: 5, state: 'waiting_person' }, waits: [posts.wait('approval')], actions: { approve: { slot_id: 'h-ig', expected_revision: 3 }, cancel: { kind: 'post', slot_id: 'h-ig', expected_revision: 3 } }, cover: media('h1') }),
+  posts.postRow('slot:h-tt', { title: 'Kaydırmalı örnek içerik', channel: posts.TIKTOK, format: 'carousel', media: { images: 3, video_seconds: null }, publish_at: posts.ahead(30 * 3600_000), actions: { cancel: { kind: 'post', slot_id: 'h-tt', expected_revision: 1 } }, cover: media('h1') }),
+]);
+const groupAlone = posts.postRow('slot:k', { title: 'Tek platformluk örnek', area_id: 'area-k', cover: media('k1') });
+const grouped = posts.postsOut({ rows: [groupFailed, groupWaiting, groupAlone, groupPlanned, groupLive] });
+const groupedAnswers = {
+  ...posts.postsAnswers(grouped),
+  'GET /api/content/posts/slot%3Ah-ig': posts.detailOf(groupWaiting, { materials: [media('h1'), media('h2'), media('h3')] }),
+  'GET /api/content/posts/slot%3Ah-tt': posts.detailOf(groupPlanned, { materials: [media('h1'), media('h2'), media('h3')] }),
+};
+const panelReady = async p => p.getByRole('region', { name: tr.postsPage.media.label }).first().waitFor();
+add('posts-grouped', '/posts', groupedAnswers, { ready: async p => p.getByRole('region', { name: tr.postsPage.table.label }).waitFor() });
+add('posts-detail-image', '/posts?slot=g-tt', groupedAnswers, { ready: panelReady });
+add('posts-detail-carousel', '/posts?slot=h-ig', groupedAnswers, { ready: panelReady });
 add('posts-empty', '/posts', { 'GET /api/content/posts': posts.postsOut({ rows: [], counts: { all: 0, you: 0, stages: {} } }) });
 add('posts-approval', '/posts?slot=s-approve', {}, { ready: async p => p.getByRole('button', { name: tr.postsPage.actions.approve }).first().waitFor() });
 add('posts-brake', '/posts', { 'GET /api/content/posts': posts.postsOut({ brake: { revision: 3, can_resume: true } }) });
@@ -91,6 +115,11 @@ for (const [name, url, endpoint] of [
 ]) {
   add(name + '-error-retry', url, {}, { failed: endpoint, ready: async p => p.getByRole('button', { name: tr.common.retry, exact: true }).first().waitFor(), retry: true });
 }
+/** A 880 x 1168 picture with its name on it, standing for a material's file. */
+function reviewPicture(name){
+ const hue=[...name].reduce((h,c)=>(h*31+c.charCodeAt(0))%360,7);
+ return `<svg xmlns="http://www.w3.org/2000/svg" width="880" height="1168" viewBox="0 0 880 1168"><rect width="880" height="1168" fill="hsl(${hue} 45% 62%)"/><circle cx="440" cy="520" r="230" fill="hsl(${(hue+40)%360} 55% 82%)"/><text x="440" y="1020" font-family="sans-serif" font-size="64" text-anchor="middle" fill="#fff">${path.basename(name,'.svg')}</text></svg>`;
+}
 (async()=>{
  fs.mkdirSync(out,{recursive:true});
  const browser=await chromium.launch({args:['--no-sandbox']}); const results=process.env.JEETA_REVIEW_RESUME && fs.existsSync(path.join(out,'results.json')) ? JSON.parse(fs.readFileSync(path.join(out,'results.json'),'utf8')).results : [];
@@ -107,6 +136,7 @@ for (const [name, url, endpoint] of [
     await p.route('**/*',async route=>{
      const u=new URL(route.request().url());
      if(u.origin!==new URL(baseUrl).origin) return route.abort();
+     if(u.pathname.startsWith('/review-media/')) return route.fulfill({status:200,contentType:'image/svg+xml',body:reviewPicture(u.pathname)});
      if(!u.pathname.startsWith('/api/')) return route.continue();
      const key=route.request().method()+' '+u.pathname;
      if(route.request().method()!=='GET')writes.push(key);
