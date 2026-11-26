@@ -5427,7 +5427,11 @@ async fn an_agent_may_write_in_a_kept_conversation() {
     t.meta.push_send_text(accepted());
     job(&t, due(0)).await;
     let agent = t.w.agent(&["inbox.work"]).await;
-    t.meta.push_send_text(accepted());
+    // The agent's message gets its own provider id (the scripted one is the line's).
+    t.meta.push_send_text(Ok(SendReceipt {
+        provider_id: "wamid.TEST-AGENT-1".into(),
+        cost_minor: None,
+    }));
     replies::reply(
         &t.w.deps,
         &at(&agent, consumed_at(90)),
