@@ -2980,10 +2980,13 @@ async fn keeps(r: &mut dyn TenantRepos) -> Result<bool, AppError> {
         .is_some_and(|a| a.keeps()))
 }
 
-/// The line that tells the customer, once per point, that the team will get back to them on it,
+//// The line that tells the customer, once per point, that the team will get back to them on it,
 /// while the agent keeps every conversation (`keep`), when the model gave none that passes the
-/// rules and the check.
+/// rules and the check: in Turkish, the default, and in English ([`KEEP_LINE_EN`]) for a customer
+/// known to read another language ([`keep_line`]).
 pub const KEEP_LINE: &str = "Bu konuyu ekibimize ilettim, size buradan dönüş yapacaklar.";
+/// [`KEEP_LINE`]'s English twin.
+pub const KEEP_LINE_EN: &str = "I've passed this on to our team; they'll get back to you here.";
 /// What a keep's task and note start with: the automatic replies ask the owner.
 const KEEP_TITLE: &str = "Otomatik yanıt danışıyor";
 /// The longest part of the model's summary a keep's task title shows, in characters (the note
@@ -3012,18 +3015,49 @@ fn keep_note(reasons: &[String]) -> String {
     )
 }
 
+/// The fixed line for conversation `c`'s customer in the language the server knows they read:
+/// only the prospect the person was promoted from knows one (its language, else its country).
+/// Turkish, [`KEEP_LINE`], when that is Turkish or nothing is known (a WhatsApp customer who
+/// simply wrote in); [`KEEP_LINE_EN`] otherwise.
+async fn keep_line(r: &mut dyn TenantRepos, c: &Conversation) -> Result<&'static str, AppError> {
+    let Some(p) = r.prospects().by_person(c.person_id).await? else {
+        return Ok(KEEP_LINE);
+    };
+    let turkish = match p.language.as_deref().map(str::trim) {
+        Some(lang) if !lang.is_empty() => lang.to_ascii_lowercase().starts_with("tr"),
+        _ => p.country.trim().is_empty() || p.country.trim().eq_ignore_ascii_case("TR"),
+    };
+    Ok(if turkish { KEEP_LINE } else { KEEP_LINE_EN })
+}
+
+/// Whether owner item `item` is open: its task is, or it has none (the person had no journey).
+async fn item_open(r: &mut dyn TenantRepos, item: &OwnerItem) -> Result<bool, AppError> {
+    Ok(match item.task_id {
+        Some(task) => r
+            .tasks()
+            .get(task)
+            .await?
+            .is_some_and(|t| t.status == TaskStatus::Open),
+        None => true,
+    })
+}
+
 /// While the agent keeps every conversation: where [`hand_over`] would give conversation `c` to a
 /// person, it stays the agent's (its executor is never written), in the caller's transaction.
 ///
-/// - **The owner is asked**, once per reason until they finish it: an open task on the person's
-///   journey ([`owner_task`]: the reason in plain words, the model's summary, and the summary whole
-///   as a journey note), tied to the conversation by its owner item (`0056_auto_reply_owner_items`),
-///   and the owner's email notice, worded as "needs you" (`notices`). Again for the same reason
-///   while that task is open: nothing new (no task, no note, no notice).
-/// - **The customer is told**, at most once per open item and when `tell`: the model's line when
-///   it passes the reply rules and the check, else [`KEEP_LINE`], queued as the agent's automatic
-///   message (the capability's approval, hours and daily cap hold it as any other; outside the
-///   working hours none is tried). A line that never went out (refused, failed) does not count.
+/// - **The owner is asked**, once per reason until they finish it: the owner item is claimed
+///   first (`0056_auto_reply_owner_items`, one per conversation and reason), so of two runs at
+///   once only one asks; then an open task on the person's journey ([`owner_task`]: the reason in
+///   plain words, the model's summary, and the summary whole as a journey note) and the owner's
+///   email notice, worded as "needs you" (`notices`). A person with no journey gets an item with
+///   no task, which still marks the conversation and keeps repeats quiet. Again for the same
+///   reason while the item is open: nothing new (no task, no note, no notice).
+/// - **The customer is told**, when `tell`, at most once per open item and at most once within
+///   [`TOLD_QUIET`] whatever the reason (as a hand-over's line, [`told`]; a person writing to the
+///   customer ends that quiet): the model's line when it passes the reply rules and the check,
+///   else the fixed line ([`keep_line`]), queued as the agent's automatic message (the
+///   capability's approval, hours and daily cap hold it as any other; outside the working hours
+///   none is tried). A line that never went out (refused, failed) does not count for its item.
 /// - **What the agent may say is unchanged**: the text the server refused is never sent, the reply
 ///   rules, the check, the range, the one quote and the discount steps stay as they are; only the
 ///   holder of the conversation differs. The customer's next message is answered as any other.
@@ -3039,47 +3073,59 @@ async fn keep(
     h: HandOver<'_>,
     tell: bool,
 ) -> Result<Option<Uuid>, AppError> {
-    let stored = r.auto_reply().owner_item(c.id, h.reason).await?;
-    let open = match &stored {
-        Some(item) => r
-            .tasks()
-            .get(item.task_id)
-            .await?
-            .is_some_and(|t| t.status == TaskStatus::Open),
-        None => false,
-    };
     let mut payload = json!({ "run_id": h.run_id, "reason": h.reason, "by": h.by.key() });
-    let mut item = match stored.filter(|_| open) {
-        Some(item) => {
-            // The same point, still open: the owner knows.
-            payload["repeat"] = json!(true);
-            payload["owner_notified"] = json!(false);
-            Some(item)
-        }
-        None => {
-            let task = owner_task(deps, ctx, r, c, &h).await?;
-            let key = task.map_or_else(|| h.reason.to_owned(), |t| t.to_string());
-            super::notices::queue_best_effort(
-                deps,
-                ctx,
-                r,
-                NoticeKind::HandedOver,
-                c.id,
-                format!("{}{}:{key}", super::notices::NEEDS_YOU, c.id),
-                Some(h.reason),
-            )
-            .await?;
-            task.map(|task_id| OwnerItem {
-                conversation_id: c.id,
-                reason: h.reason.to_owned(),
-                task_id,
-                created_at: ctx.now,
-                line_outbox_id: None,
-            })
+    let journey = super::active_or_latest_journey(r, c.person_id).await?;
+    // The item's own key: its task's id when there is a journey to hold the task.
+    let key = deps.ids.uuid();
+    let fresh = OwnerItem {
+        conversation_id: c.id,
+        reason: h.reason.to_owned(),
+        task_id: journey.as_ref().map(|_| TaskId::from(key)),
+        created_at: ctx.now,
+        line_outbox_id: None,
+    };
+    // Claimed before anything is made: a run that loses finds the winner's item.
+    let mut won = r.auto_reply().owner_item_insert(&fresh).await?;
+    let item = if won {
+        fresh
+    } else {
+        let stored = stored_item(r, c.id, h.reason).await?;
+        if item_open(r, &stored).await? {
+            stored
+        } else {
+            // Its task is done: a new point, unless another run replaced it first.
+            won = r
+                .auto_reply()
+                .owner_item_replace(&fresh, stored.task_id)
+                .await?;
+            if won {
+                fresh
+            } else {
+                stored_item(r, c.id, h.reason).await?
+            }
         }
     };
-    // Told already: a line for this item that went out, or may still.
-    let told = match item.as_ref().and_then(|i| i.line_outbox_id) {
+    if won {
+        if let Some(journey) = &journey {
+            owner_task(deps, ctx, r, journey, &h, TaskId::from(key)).await?;
+        }
+        super::notices::queue_best_effort(
+            deps,
+            ctx,
+            r,
+            NoticeKind::HandedOver,
+            c.id,
+            format!("{}{}:{key}", super::notices::NEEDS_YOU, c.id),
+            Some(h.reason),
+        )
+        .await?;
+    } else {
+        // The same point, still open: the owner knows.
+        payload["repeat"] = json!(true);
+        payload["owner_notified"] = json!(false);
+    }
+    // Told already: this item's line went out (or may still), or any line within the quiet time.
+    let item_told = match item.line_outbox_id {
         Some(outbox) => r.outbox().get(outbox).await?.is_some_and(|row| {
             matches!(
                 row.state.as_str(),
@@ -3088,17 +3134,17 @@ async fn keep(
         }),
         None => false,
     };
+    let quiet = item_told || told(r, c.id, ctx.now).await?.line;
     let mut queued = None;
     // Outside the working hours no automatic message may go: none is tried.
-    if tell && !told && h.reason != "outside_active_hours" {
+    if tell && !quiet && h.reason != "outside_active_hours" {
         let year = ctx.now.year();
-        let line = h
-            .line
-            .map(str::trim)
-            .filter(|l| {
-                !l.is_empty() && h.line_allowed && rules::check_reply(l, h.cards, year).is_ok()
-            })
-            .unwrap_or(KEEP_LINE);
+        let line = match h.line.map(str::trim).filter(|l| {
+            !l.is_empty() && h.line_allowed && rules::check_reply(l, h.cards, year).is_ok()
+        }) {
+            Some(line) => line,
+            None => keep_line(r, c).await?,
+        };
         // One held automatic reply at a time, as for any automatic message.
         replies::supersede_held_auto(r, ctx, c.id).await?;
         let send = replies::AutoSend {
@@ -3110,15 +3156,18 @@ async fn keep(
         };
         queued = enqueue(deps, ctx, r, c.id, line, &send).await?.ok();
     }
-    if queued.is_none() {
-        payload["customer_told"] = json!(false);
-    }
-    if let Some(item) = item.as_mut() {
-        if queued.is_some() {
-            item.line_outbox_id = queued;
+    match queued {
+        Some(outbox) => {
+            // The quiet time starts, as for a hand-over's line.
+            r.auto_reply().line_told(c.id, ctx.now).await?;
+            r.auto_reply()
+                .owner_item_line(c.id, h.reason, outbox)
+                .await?;
         }
-        payload["task_id"] = json!(item.task_id);
-        r.auto_reply().owner_item_save(item).await?;
+        None => payload["customer_told"] = json!(false),
+    }
+    if let Some(task) = item.task_id {
+        payload["task_id"] = json!(task);
     }
     record(
         r,
@@ -3132,20 +3181,30 @@ async fn keep(
     Ok(queued)
 }
 
-/// The owner's open task of a keep of conversation `c` ([`keep`]), in the caller's transaction: on
-/// the person's journey (none without one), for its owner (the unassigned queue without one), due
-/// now, titled with the reason in plain words and, when the model gave one, its summary cut short.
-/// The summary whole becomes a journey note, as a hand-over's does (erasure clears both).
+/// The owner item of conversation `conversation` and `reason`, which a claim found taken.
+async fn stored_item(
+    r: &mut dyn TenantRepos,
+    conversation: ConversationId,
+    reason: &str,
+) -> Result<OwnerItem, AppError> {
+    r.auto_reply()
+        .owner_item(conversation, reason)
+        .await?
+        .ok_or_else(|| AppError::internal("an owner item its claim found"))
+}
+
+/// The owner's open task `id` of a keep ([`keep`]) on `journey`, in the caller's transaction: for
+/// the journey's owner (the unassigned queue without one), due now, titled with the reason in
+/// plain words and, when the model gave one, its summary cut short. The summary whole becomes a
+/// journey note, as a hand-over's does (erasure clears both).
 async fn owner_task(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
-    c: &Conversation,
+    journey: &Journey,
     h: &HandOver<'_>,
-) -> Result<Option<TaskId>, AppError> {
-    let Some(journey) = super::active_or_latest_journey(r, c.person_id).await? else {
-        return Ok(None);
-    };
+    id: TaskId,
+) -> Result<(), AppError> {
     let summary = h.summary.map(str::trim).filter(|s| !s.is_empty());
     let words = super::notices::reason_words(Some(h.reason));
     let title = match summary {
@@ -3156,7 +3215,7 @@ async fn owner_task(
         None => format!("{KEEP_TITLE}: {words}"),
     };
     let task = Task {
-        id: TaskId::from(deps.ids.uuid()),
+        id,
         workspace_id: ctx.workspace_id,
         journey_id: journey.id,
         title,
@@ -3189,7 +3248,7 @@ async fn owner_task(
             })
             .await?;
     }
-    Ok(Some(task.id))
+    Ok(())
 }
 
 /// The give-up's keep ([`take`]): the owner's item for `failed`, inside a savepoint, with no line

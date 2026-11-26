@@ -1056,7 +1056,7 @@ async fn a_take_over_keeps_the_replies_out_until_a_hand_back() {
 async fn a_price_from_the_team_turns_a_later_quote_into_a_hand_over() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
-    from_the_phone(&t, "wamid.TEST-PHONE-1", 30, "Bu figür 2.500 TL olur.").await;
+    from_the_phone(&t, "wamid.TEST-PHONE-1", 30, "Bunun fiyatı 2.500 TL olur.").await;
     inbound_as(&t, "wamid.TEST-AFTER-1", 60).await;
     t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
     job(&t, due(60)).await;
@@ -1075,7 +1075,7 @@ async fn a_price_from_the_team_turns_a_later_quote_into_a_hand_over() {
 async fn a_price_from_the_team_still_lets_a_plain_reply_out() {
     let t = setup().await;
     inbound(&t, 0, 0).await;
-    from_the_phone(&t, "wamid.TEST-PHONE-1", 30, "Bu figür 2.500 TL olur.").await;
+    from_the_phone(&t, "wamid.TEST-PHONE-1", 30, "Bunun fiyatı 2.500 TL olur.").await;
     inbound_as(&t, "wamid.TEST-AFTER-1", 60).await;
     t.model.answer(reply("Elbette, kargoya yarın verilir."));
     t.meta.push_send_text(accepted());
@@ -5089,7 +5089,7 @@ fn kept(t: &T, reason: &str, line: Option<&str>) {
     assert_eq!(items[0].reason, reason);
     let tasks = open_tasks(t);
     assert_eq!(tasks.len(), 1, "{reason}: {tasks:?}");
-    assert_eq!(tasks[0].id, items[0].task_id);
+    assert_eq!(Some(tasks[0].id), items[0].task_id);
     assert!(
         tasks[0].title.starts_with("Otomatik yanıt danışıyor: "),
         "{}",
@@ -5153,7 +5153,7 @@ async fn the_models_hand_over_asks_the_owner_and_the_agent_keeps_the_conversatio
     inbound(&t, 0, 0).await;
     t.model.answer(tool(ModelTool::HandOver {
         reason: "not_covered".into(),
-        summary: "Üç metrelik bir heykel soruyor.".into(),
+        summary: "Standart dışı ölçüde bir iş soruyor.".into(),
         text: Some("Bunu ekibimize soruyorum, size buradan dönecekler.".into()),
     }));
     t.meta.push_send_text(accepted());
@@ -5170,16 +5170,20 @@ async fn the_models_hand_over_asks_the_owner_and_the_agent_keeps_the_conversatio
         "{}",
         task.title
     );
-    assert!(task.title.contains("Üç metrelik"), "{}", task.title);
+    assert!(
+        task.title.contains("Standart dışı ölçüde"),
+        "{}",
+        task.title
+    );
     let s = t.w.uow.snapshot();
     assert!(
         s.inbox.notes[0]
             .text
-            .starts_with("Otomatik yanıt danışıyor: Üç metrelik")
+            .starts_with("Otomatik yanıt danışıyor: Standart dışı ölçüde")
     );
     let entry = &t.w.entries("inbox.autoreply.needs_owner")[0];
     assert_eq!(entry.payload["by"], "model");
-    assert!(!entry.payload.to_string().contains("heykel"), "no summary");
+    assert!(!entry.payload.to_string().contains("ölçüde"), "no summary");
     assert_eq!(
         runs(&t)[0].outcome,
         RunOutcome::HandedOver,
@@ -5200,7 +5204,7 @@ async fn the_models_hand_over_asks_the_owner_and_the_agent_keeps_the_conversatio
         &t,
         "wamid.TEST-KEEP-3",
         2 * HALF_HOUR,
-        "Heykel konusunda haber var mı?",
+        "O konuda haber var mı?",
     )
     .await;
     t.model
@@ -5285,7 +5289,7 @@ async fn each_server_cause_asks_the_owner_once_and_the_next_message_is_answered(
             }),
             // A person on the team priced from the phone; the model then quotes.
             _ => {
-                from_the_phone(&t, "wamid.TEST-PHONE-1", 30, "Bu figür 2.500 TL olur.").await;
+                from_the_phone(&t, "wamid.TEST-PHONE-1", 30, "Bunun fiyatı 2.500 TL olur.").await;
                 inbound_as(&t, "wamid.TEST-AFTER-1", 60).await;
                 t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
                 at = due(60);
@@ -5389,10 +5393,17 @@ async fn a_finished_task_lets_the_same_point_ask_the_owner_again() {
     assert_eq!(conversation(&t).executor, Executor::Agent);
     let items = owner_items(&t);
     assert_eq!(items.len(), 1, "one per conversation and reason");
-    assert_ne!(items[0].task_id, task, "a new task");
+    assert_ne!(items[0].task_id, Some(task), "a new task");
     assert_eq!(open_tasks(&t).len(), 1);
     assert_eq!(notices(&t).len(), 2, "the owner is told of the new point");
-    assert_eq!(texts_sent(&t).len(), 2, "and the customer");
+    assert_eq!(
+        texts_sent(&t).len(),
+        1,
+        "the customer was told within the quiet time"
+    );
+    let entry = t.w.entries("inbox.autoreply.needs_owner").pop().unwrap();
+    assert!(entry.payload.get("repeat").is_none());
+    assert_eq!(entry.payload["customer_told"], false);
 }
 
 #[tokio::test]
@@ -5570,4 +5581,210 @@ async fn with_the_setting_off_nothing_of_it_shows_and_a_hand_over_is_as_before()
     job(&t, due(0)).await;
     handed_to_a_person(&t);
     assert!(owner_items(&t).is_empty());
+}
+
+#[tokio::test]
+async fn three_points_within_the_quiet_time_tell_the_customer_once() {
+    use jt_app::usecases::inbox::autoreply::KEEP_LINE;
+    let t = keeping().await;
+    inbound(&t, 0, 0).await;
+    let id = conversation(&t).id;
+    // A price in a reply: refused; the owner is asked and the customer told.
+    t.model.answer(reply("Bunun fiyatı 1.250 TL olur."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    // The day's limit on the next message.
+    says(
+        &t,
+        "wamid.TEST-KEEP-2",
+        HALF_HOUR,
+        "Peki başka ne yapabiliriz?",
+    )
+    .await;
+    earlier_runs(&t, id, PER_CONVERSATION_DAILY, 0);
+    job(&t, due(HALF_HOUR)).await;
+    // A model failure on the one after.
+    t.w.uow.edit(|st| st.auto_reply.runs.clear());
+    says(&t, "wamid.TEST-KEEP-3", 2 * HALF_HOUR, "Orada mısınız?").await;
+    t.model
+        .answer(Err(ModelError::Rejected { status: Some(400) }));
+    job(&t, due(2 * HALF_HOUR)).await;
+    let mut asked: Vec<String> = owner_items(&t).into_iter().map(|i| i.reason).collect();
+    asked.sort();
+    assert_eq!(
+        asked,
+        [
+            "limit_conversation",
+            "model_rejected",
+            "price_without_quote"
+        ]
+    );
+    assert_eq!(notices(&t).len(), 3, "the owner hears of each point");
+    assert_eq!(texts_sent(&t), [KEEP_LINE], "the customer once");
+    assert_eq!(conversation(&t).executor, Executor::Agent);
+    let entries = t.w.entries("inbox.autoreply.needs_owner");
+    assert_eq!(entries.len(), 3);
+    assert!(entries[0].payload.get("customer_told").is_none());
+    for e in &entries[1..] {
+        assert_eq!(e.payload["customer_told"], false);
+        assert!(e.payload.get("repeat").is_none(), "a new point");
+    }
+}
+
+#[tokio::test]
+async fn a_second_message_while_still_at_the_days_limit_is_silent() {
+    use jt_app::usecases::inbox::autoreply::KEEP_LINE;
+    let t = keeping().await;
+    inbound(&t, 0, 0).await;
+    earlier_runs(&t, conversation(&t).id, PER_CONVERSATION_DAILY, 0);
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    kept(&t, "limit_conversation", Some(KEEP_LINE));
+    says(
+        &t,
+        "wamid.TEST-KEEP-2",
+        HALF_HOUR,
+        "Merhaba, orada mısınız?",
+    )
+    .await;
+    job(&t, due(HALF_HOUR)).await;
+    assert!(t.model.requests().is_empty(), "no model call");
+    assert_eq!(notices(&t).len(), 1, "no new email");
+    assert_eq!(texts_sent(&t), [KEEP_LINE], "no new line");
+    assert_eq!(owner_items(&t).len(), 1);
+    assert_eq!(open_tasks(&t).len(), 1);
+    assert_eq!(conversation(&t).executor, Executor::Agent);
+    let repeat = t.w.entries("inbox.autoreply.needs_owner").pop().unwrap();
+    assert_eq!(repeat.payload["repeat"], true);
+    assert_eq!(repeat.payload["customer_told"], false);
+}
+
+#[tokio::test]
+async fn a_page_of_the_inbox_reads_its_owner_items_once() {
+    for keeps in [true, false] {
+        let t = if keeps {
+            keeping().await
+        } else {
+            setup().await
+        };
+        // Two customers.
+        inbound(&t, 0, 0).await;
+        inbound(&t, 1, 5).await;
+        let owner = at(&t.w.owner_ctx, due(5));
+        let before = t.w.uow.owner_item_reads();
+        let page = conversations::list(
+            &t.w.deps,
+            &owner,
+            serde_json::from_value(json!({"queue": "all"})).unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(
+            t.w.uow.owner_item_reads() - before,
+            1,
+            "one read for the page ({keeps})"
+        );
+    }
+}
+
+#[tokio::test]
+async fn without_a_journey_the_item_still_marks_the_conversation_and_keeps_repeats_quiet() {
+    let t = keeping().await;
+    inbound(&t, 0, 0).await;
+    // The person's journey is gone: an item without a task tracks the point.
+    t.w.uow.edit(|st| st.inbox.journeys.clear());
+    t.model
+        .answer(hand_over_tool("not_covered", "Ekibimiz size dönecek."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    let items = owner_items(&t);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].task_id, None);
+    assert!(open_tasks(&t).is_empty());
+    assert_eq!(notices(&t).len(), 1);
+    assert_eq!(texts_sent(&t), ["Ekibimiz size dönecek."]);
+    assert_eq!(conversation(&t).executor, Executor::Agent);
+    let owner = at(&t.w.owner_ctx, due(0) + Duration::minutes(1));
+    let ours = conversations::list(&t.w.deps, &owner, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(ours.items.len(), 1, "still in the default queue");
+    assert_eq!(ours.items[0].owner_items, 1);
+    // The same point again: nothing new, though the customer's message opened a journey.
+    says(&t, "wamid.TEST-KEEP-2", HALF_HOUR, "O konuda haber var mı?").await;
+    t.model
+        .answer(hand_over_tool("not_covered", "Ekibimiz size dönecek."));
+    job(&t, due(HALF_HOUR)).await;
+    assert_eq!(owner_items(&t).len(), 1);
+    assert!(open_tasks(&t).is_empty());
+    assert_eq!(notices(&t).len(), 1);
+    assert_eq!(texts_sent(&t).len(), 1);
+    // A person's take-over answers it.
+    conversations::take_over(
+        &t.w.deps,
+        &at(&t.w.owner_ctx, consumed_at(HALF_HOUR + 60)),
+        conversation(&t).id,
+    )
+    .await
+    .unwrap();
+    assert!(owner_items(&t).is_empty());
+
+    // The response-time job, every tick, over a conversation nobody answered: one item.
+    let t = keeping().await;
+    empty_standard(&t);
+    inbound(&t, 0, 0).await;
+    t.w.uow.edit(|st| st.inbox.journeys.clear());
+    job(&t, due(0)).await;
+    for minutes in [60, 61, 62, 90] {
+        jobs::run_response_sla(&t.w.deps, consumed_at(0) + Duration::minutes(minutes)).await;
+    }
+    let items = owner_items(&t);
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        (items[0].reason.as_str(), items[0].task_id),
+        ("response_overdue", None)
+    );
+    assert_eq!(notices(&t).len(), 1);
+    assert_eq!(t.w.entries("inbox.autoreply.needs_owner").len(), 1);
+    assert_eq!(conversation(&t).executor, Executor::Agent);
+}
+
+#[tokio::test]
+async fn the_fixed_line_is_english_for_a_customer_known_to_read_another_language() {
+    use jt_app::usecases::inbox::autoreply::{KEEP_LINE, KEEP_LINE_EN};
+    for (language, line) in [
+        (Some("en"), KEEP_LINE_EN),
+        (Some("tr"), KEEP_LINE),
+        (None, KEEP_LINE),
+    ] {
+        let t = keeping().await;
+        inbound(&t, 0, 0).await;
+        let c = conversation(&t);
+        let journey =
+            t.w.uow
+                .snapshot()
+                .inbox
+                .journeys
+                .iter()
+                .find(|j| j.person_id == c.person_id)
+                .unwrap()
+                .id;
+        // The person was promoted from a prospect of the pool, which names its language.
+        let mut input = jt_testkit::prospects_contract::input("Örnek Ltd", "0500 001 00 00");
+        input.language = language.map(str::to_owned);
+        let mut p = jt_testkit::prospects_contract::prospect(t.w.ws, t.w.owner, input, FIXED_NOW_T);
+        p.promoted = Some(jt_prospects::Promotion {
+            person_id: c.person_id,
+            journey_id: journey,
+            at: FIXED_NOW_T,
+            score: None,
+            bucket: None,
+        });
+        t.w.uow.edit(|st| st.prospects.prospects.push(p));
+        t.model.answer(reply("Bunun fiyatı 1.250 TL olur."));
+        t.meta.push_send_text(accepted());
+        job(&t, due(0)).await;
+        kept(&t, "price_without_quote", Some(line));
+    }
 }

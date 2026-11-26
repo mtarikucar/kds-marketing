@@ -507,7 +507,7 @@ impl ConversationRepo for MemTenant {
         limit: u32,
     ) -> Result<Vec<Conversation>, AppError> {
         let state = self.state();
-        // The agent holds it (open or answered) and the owner has an open task of the automatic
+        // The agent holds it (open or answered) and the owner has an open item of the automatic
         // replies on it (`auto_reply_owner_items`).
         let asks_owner = |r: &Conversation| {
             r.executor == Executor::Agent
@@ -515,7 +515,7 @@ impl ConversationRepo for MemTenant {
                 && state.auto_reply.owner_items.iter().any(|(w, i)| {
                     *w == self.ws
                         && i.conversation_id == r.id
-                        && super::autoreply::task_open(&state.inbox.tasks, self.ws, i.task_id)
+                        && super::autoreply::item_open(&state.inbox.tasks, self.ws, i)
                 })
         };
         let mut rows: Vec<_> = state

@@ -62,13 +62,15 @@ impl ConversationRepo for PgTenantRepos {
         after: Option<(OffsetDateTime, ConversationId)>,
         limit: u32,
     ) -> Result<Vec<Conversation>, AppError> {
+        // Owed by us; or the agent holds it (open or answered) and the owner has an open item of
+        // the automatic replies on it (`auto_reply_owner_items`).
+        let ours = format!(
+            "state='ours' or (executor_kind='agent' and state in ('open','theirs') and exists (select 1 from auto_reply_owner_items i where i.workspace_id=c.workspace_id and i.conversation_id=c.id and {}))",
+            crate::repos::autoreply::OWNER_ITEM_OPEN
+        );
         let filter = match queue {
             ConversationQueue::All => "true",
-            // Owed by us; or the agent holds it (open or answered) and the owner has an open
-            // task of the automatic replies on it (`auto_reply_owner_items`).
-            ConversationQueue::Ours => {
-                "state='ours' or (executor_kind='agent' and state in ('open','theirs') and exists (select 1 from auto_reply_owner_items i join tasks t on t.workspace_id=i.workspace_id and t.id=i.task_id where i.workspace_id=c.workspace_id and i.conversation_id=c.id and t.status='open'))"
-            }
+            ConversationQueue::Ours => ours.as_str(),
             ConversationQueue::Unassigned => {
                 "executor_kind='human' and executor_user_id is null and state <> 'closed'"
             }

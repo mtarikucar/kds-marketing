@@ -181,16 +181,26 @@ create or whose link could not go, and the response-time job) does instead:
   owner (the unassigned queue without one): "Otomatik yanıt danışıyor: {the reason in plain
   words} · {the model's summary, cut short}"; the summary whole becomes a journey note, as a
   hand-over's does. Migration `0056_auto_reply_owner_items` ties the task to its conversation and
-  reason (codes and ids only). One per conversation and reason: the same reason again while its
-  task is open makes nothing new (no task, no note, no email). Once the owner marks the task done,
-  the next time the reason comes up is a new point.
+  reason (codes and ids only). One per conversation and reason, claimed before the task is made
+  (`insert … on conflict do nothing`, a done task's item replaced only while it still names that
+  task), so two runs at once ask once: the same reason again while its item is open makes nothing
+  new (no task, no note, no email). Once the owner marks the task done, the next time the reason
+  comes up is a new point. A person with no journey gets an item without a task: it still marks
+  the conversation and keeps repeats quiet, and it closes when a person takes the conversation
+  over, hands it back or closes it.
 - **The owner's email**, as for a hand-over, worded "Otomatik yanıtın bir konuda size ihtiyacı
   var; konuşma otomatik yanıtta kalıyor…": once per open item.
-- **One line to the customer**, at most once per open item: the model's own hand-over line when
-  it passes the rules and the check, else "Bu konuyu ekibimize ilettim, size buradan dönüş
-  yapacaklar.". It is the agent's automatic message, held to the capability's approval, hours and
-  daily cap as any other; outside the working hours none is tried, and the response-time job
-  sends none. A line that never went out does not count as telling the customer.
+- **One line to the customer**, at most once per open item and at most once in 12 hours
+  whatever the reason, as a hand-over's line (`line_told_at`; a person writing to the customer, or
+  a hand-back, ends that quiet): the model's own hand-over line when it passes the rules and the
+  check, else a fixed line, "Bu konuyu ekibimize ilettim, size buradan dönüş yapacaklar.", or its
+  English twin "I've passed this on to our team; they'll get back to you here." for a customer
+  the server knows to read another language. The only thing it knows of a customer's language is
+  the pool prospect the person was promoted from (its language, else its country); a WhatsApp
+  customer who simply wrote in is unknown, and gets Turkish. It is the agent's automatic
+  message, held to the capability's approval, hours and daily cap as any other; outside the
+  working hours none is tried, and the response-time job sends none. A line that never went out
+  does not count as telling the customer.
 - **The conversation stays the agent's** and the customer's next message is answered as any
   other. The model is told, in the cached workspace part, that a hand-over asks the team about one
   point and keeps the conversation, and, in the conversation's note, which points are still open

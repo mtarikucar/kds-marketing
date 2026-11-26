@@ -453,6 +453,8 @@ pub struct InMemoryUow {
     after_call_insert: Arc<Mutex<Option<CallInsertHook>>>,
     bundle_seq: Arc<AtomicU64>,
     lock_journal: Arc<Mutex<Vec<(u64, &'static str)>>>,
+    /// How many reads of open owner items were made ([`InMemoryUow::owner_item_reads`]).
+    owner_item_reads: Arc<AtomicUsize>,
 }
 
 /// A change made to the tables inside the bundle that next stores a call session.
@@ -479,6 +481,12 @@ impl InMemoryUow {
     /// numbered from 1 as it opened. Locks are not modelled; this records the order taken.
     pub fn lock_journal(&self) -> Vec<(u64, &'static str)> {
         lock(&self.lock_journal).clone()
+    }
+
+    /// How many reads of open owner items (`AutoReplyRepo::owner_items_open` and
+    /// `owner_items_open_counts`) every bundle made so far: what a page of the inbox costs.
+    pub fn owner_item_reads(&self) -> usize {
+        self.owner_item_reads.load(Ordering::SeqCst)
     }
 
     /// A copy of the committed tables, for assertions.
@@ -573,6 +581,7 @@ pub(super) struct MemTx {
     pub(super) after_call_insert: Arc<Mutex<Option<CallInsertHook>>>,
     bundle: u64,
     lock_journal: Arc<Mutex<Vec<(u64, &'static str)>>>,
+    owner_item_reads: Arc<AtomicUsize>,
     pub(super) work: MemState,
     pub(super) inbox_write_at: Option<OffsetDateTime>,
     ops: Vec<Op>,
@@ -584,6 +593,11 @@ pub(super) struct MemTx {
 }
 
 impl MemTx {
+    /// Counts one read of open owner items ([`InMemoryUow::owner_item_reads`]).
+    pub(super) fn count_owner_item_read(&self) {
+        self.owner_item_reads.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// Records that this bundle took advisory lock `name` ([`InMemoryUow::lock_journal`]).
     pub(super) fn journal_lock(&self, name: &'static str) {
         lock(&self.lock_journal).push((self.bundle, name));
@@ -618,6 +632,7 @@ impl MemTx {
             after_call_insert: Arc::clone(&uow.after_call_insert),
             bundle: uow.bundle_seq.fetch_add(1, Ordering::SeqCst) + 1,
             lock_journal: Arc::clone(&uow.lock_journal),
+            owner_item_reads: Arc::clone(&uow.owner_item_reads),
             work: lock(&uow.state).clone(),
             inbox_write_at: None,
             ops: Vec::new(),

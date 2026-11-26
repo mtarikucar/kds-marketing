@@ -753,24 +753,68 @@ impl AutoReplyRepo for PgTenantRepos {
         Ok(record.map(OwnerItemRecord::into_item))
     }
 
-    async fn owner_item_save(&mut self, item: &OwnerItem) -> Result<(), AppError> {
+    async fn owner_item_insert(&mut self, item: &OwnerItem) -> Result<bool, AppError> {
         let ws = self.workspace_id();
-        sqlx::query(
+        // The primary key makes a second insert of the same conversation and reason wait for the
+        // first bundle, then do nothing once it committed.
+        let done = sqlx::query(
             "insert into auto_reply_owner_items (workspace_id, conversation_id, reason, task_id, \
              created_at, line_outbox_id) values ($1, $2, $3, $4, $5, $6) \
-             on conflict (workspace_id, conversation_id, reason) do update set \
-             task_id = excluded.task_id, created_at = excluded.created_at, \
-             line_outbox_id = excluded.line_outbox_id",
+             on conflict (workspace_id, conversation_id, reason) do nothing",
         )
         .bind(ws.as_uuid())
         .bind(item.conversation_id.as_uuid())
         .bind(&item.reason)
-        .bind(item.task_id.as_uuid())
+        .bind(item.task_id.map(|t| t.as_uuid()))
         .bind(item.created_at)
         .bind(item.line_outbox_id)
         .execute(self.tx.conn())
         .await
-        .map_err(|e| map_sqlx(e, "save an owner item"))?;
+        .map_err(|e| map_sqlx(e, "claim an owner item"))?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn owner_item_replace(
+        &mut self,
+        item: &OwnerItem,
+        previous: Option<TaskId>,
+    ) -> Result<bool, AppError> {
+        let ws = self.workspace_id();
+        let done = sqlx::query(
+            "update auto_reply_owner_items set task_id = $4, created_at = $5, \
+             line_outbox_id = null where workspace_id = $1 and conversation_id = $2 \
+             and reason = $3 and task_id is not distinct from $6",
+        )
+        .bind(ws.as_uuid())
+        .bind(item.conversation_id.as_uuid())
+        .bind(&item.reason)
+        .bind(item.task_id.map(|t| t.as_uuid()))
+        .bind(item.created_at)
+        .bind(previous.map(|t| t.as_uuid()))
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "replace an owner item"))?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn owner_item_line(
+        &mut self,
+        conversation: ConversationId,
+        reason: &str,
+        outbox: Uuid,
+    ) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        sqlx::query(
+            "update auto_reply_owner_items set line_outbox_id = $4 where workspace_id = $1 \
+             and conversation_id = $2 and reason = $3",
+        )
+        .bind(ws.as_uuid())
+        .bind(conversation.as_uuid())
+        .bind(reason)
+        .bind(outbox)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "record an owner item's line"))?;
         Ok(())
     }
 
@@ -779,21 +823,50 @@ impl AutoReplyRepo for PgTenantRepos {
         conversation: ConversationId,
     ) -> Result<Vec<OwnerItem>, AppError> {
         let ws = self.workspace_id();
-        let records: Vec<OwnerItemRecord> = sqlx::query_as(
+        let sql = format!(
             "select i.conversation_id, i.reason, i.task_id, i.created_at, i.line_outbox_id \
-             from auto_reply_owner_items i join tasks t on t.workspace_id = i.workspace_id \
-             and t.id = i.task_id where i.workspace_id = $1 and i.conversation_id = $2 \
-             and t.status = 'open' order by i.created_at, i.reason",
-        )
-        .bind(ws.as_uuid())
-        .bind(conversation.as_uuid())
-        .fetch_all(self.tx.conn())
-        .await
-        .map_err(|e| map_sqlx(e, "list a conversation's open owner items"))?;
+             from auto_reply_owner_items i where i.workspace_id = $1 and i.conversation_id = $2 \
+             and {OWNER_ITEM_OPEN} order by i.created_at, i.reason"
+        );
+        let records: Vec<OwnerItemRecord> = sqlx::query_as(&sql)
+            .bind(ws.as_uuid())
+            .bind(conversation.as_uuid())
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "list a conversation's open owner items"))?;
         Ok(records
             .into_iter()
             .map(OwnerItemRecord::into_item)
             .collect())
+    }
+
+    async fn owner_items_open_counts(
+        &mut self,
+        conversations: &[ConversationId],
+    ) -> Result<Vec<(ConversationId, u32)>, AppError> {
+        if conversations.is_empty() {
+            return Ok(Vec::new());
+        }
+        let ws = self.workspace_id();
+        let ids: Vec<Uuid> = conversations.iter().map(|c| c.as_uuid()).collect();
+        let sql = format!(
+            "select i.conversation_id, count(*) from auto_reply_owner_items i \
+             where i.workspace_id = $1 and i.conversation_id = any($2) and {OWNER_ITEM_OPEN} \
+             group by i.conversation_id"
+        );
+        let rows: Vec<(Uuid, i64)> = sqlx::query_as(&sql)
+            .bind(ws.as_uuid())
+            .bind(&ids)
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "count the open owner items"))?;
+        rows.into_iter()
+            .map(|(id, n)| {
+                u32::try_from(n)
+                    .map(|n| (ConversationId::from(id), n))
+                    .map_err(|_| AppError::internal("a count is out of range"))
+            })
+            .collect()
     }
 
     async fn owner_tasks_open(&mut self) -> Result<Vec<TaskId>, AppError> {
@@ -810,6 +883,23 @@ impl AutoReplyRepo for PgTenantRepos {
         Ok(ids.into_iter().map(TaskId::from).collect())
     }
 
+    async fn owner_items_close_untasked(
+        &mut self,
+        conversation: ConversationId,
+    ) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        sqlx::query(
+            "delete from auto_reply_owner_items where workspace_id = $1 and conversation_id = $2 \
+             and task_id is null",
+        )
+        .bind(ws.as_uuid())
+        .bind(conversation.as_uuid())
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "close a conversation's owner items without a task"))?;
+        Ok(())
+    }
+
     async fn owner_items_delete(&mut self, conversation: ConversationId) -> Result<(), AppError> {
         let ws = self.workspace_id();
         sqlx::query(
@@ -824,11 +914,15 @@ impl AutoReplyRepo for PgTenantRepos {
     }
 }
 
+/// Whether owner item `i` is open, in SQL: its task is open, or it has none (`OwnerItem`).
+pub(crate) const OWNER_ITEM_OPEN: &str = "(i.task_id is null or exists (select 1 from tasks t \
+     where t.workspace_id = i.workspace_id and t.id = i.task_id and t.status = 'open'))";
+
 #[derive(sqlx::FromRow)]
 struct OwnerItemRecord {
     conversation_id: Uuid,
     reason: String,
-    task_id: Uuid,
+    task_id: Option<Uuid>,
     created_at: OffsetDateTime,
     line_outbox_id: Option<Uuid>,
 }
@@ -838,7 +932,7 @@ impl OwnerItemRecord {
         OwnerItem {
             conversation_id: ConversationId::from(self.conversation_id),
             reason: self.reason,
-            task_id: TaskId::from(self.task_id),
+            task_id: self.task_id.map(TaskId::from),
             created_at: self.created_at,
             line_outbox_id: self.line_outbox_id,
         }

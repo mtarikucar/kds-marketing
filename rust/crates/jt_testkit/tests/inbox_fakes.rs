@@ -165,3 +165,9 @@ async fn auto_reply_owner_items() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::auto_reply_owner_items(uow).await;
 }
+
+#[tokio::test]
+async fn auto_reply_owner_item_claimed_once() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::auto_reply_owner_item_claimed_once(uow).await;
+}

@@ -27,11 +27,14 @@ pub struct MemAutoReply {
     pub owner_items: Vec<(WorkspaceId, OwnerItem)>,
 }
 
-/// Whether workspace `ws`'s task `task` is open among `tasks` (the owner items' join).
-pub(crate) fn task_open(tasks: &[jt_inbox::Task], ws: WorkspaceId, task: TaskId) -> bool {
-    tasks
-        .iter()
-        .any(|t| t.workspace_id == ws && t.id == task && t.status == TaskStatus::Open)
+/// Whether workspace `ws`'s owner item `item` is open among `tasks`: its task is open, or it has
+/// none (`OwnerItem`).
+pub(crate) fn item_open(tasks: &[jt_inbox::Task], ws: WorkspaceId, item: &OwnerItem) -> bool {
+    item.task_id.is_none_or(|task| {
+        tasks
+            .iter()
+            .any(|t| t.workspace_id == ws && t.id == task && t.status == TaskStatus::Open)
+    })
 }
 
 /// Whether a run queued an automatic message (a reply, a quote or an order's link).
@@ -523,7 +526,10 @@ impl AutoReplyRepo for MemTenant {
             .map(|(_, i)| i.clone()))
     }
 
-    async fn owner_item_save(&mut self, item: &OwnerItem) -> Result<(), AppError> {
+    async fn owner_item_insert(&mut self, item: &OwnerItem) -> Result<bool, AppError> {
+        // As the primary key makes a second bundle wait for the first: serialised, and the
+        // working copy refreshed after the wait.
+        self.tx.lock_studio().await;
         let item = item.clone();
         let ws = self.ws;
         self.call(|this| {
@@ -531,22 +537,76 @@ impl AutoReplyRepo for MemTenant {
             if !(1..=64).contains(&n) {
                 return Err(AppError::internal("check constraint: owner item reason"));
             }
-            this.tx.write(move |s| {
-                s.auto_reply.owner_items.retain(|(w, i)| {
-                    !(*w == ws
-                        && i.conversation_id == item.conversation_id
-                        && i.reason == item.reason)
-                });
-                s.auto_reply.owner_items.push((ws, item.clone()));
-            });
-            Ok(())
+            if this.state().auto_reply.owner_items.iter().any(|(w, i)| {
+                *w == ws && i.conversation_id == item.conversation_id && i.reason == item.reason
+            }) {
+                return Ok(false);
+            }
+            this.tx
+                .write(move |s| s.auto_reply.owner_items.push((ws, item.clone())));
+            Ok(true)
         })
+    }
+
+    async fn owner_item_replace(
+        &mut self,
+        item: &OwnerItem,
+        previous: Option<TaskId>,
+    ) -> Result<bool, AppError> {
+        self.tx.lock_studio().await;
+        let replacement = OwnerItem {
+            line_outbox_id: None,
+            ..item.clone()
+        };
+        let (ws, conversation, reason) = (self.ws, item.conversation_id, item.reason.clone());
+        let matches = move |w: &WorkspaceId, i: &OwnerItem| {
+            *w == ws
+                && i.conversation_id == conversation
+                && i.reason == reason
+                && i.task_id == previous
+        };
+        if !self
+            .state()
+            .auto_reply
+            .owner_items
+            .iter()
+            .any(|(w, i)| matches(w, i))
+        {
+            return Ok(false);
+        }
+        self.tx.write(move |s| {
+            for (w, i) in &mut s.auto_reply.owner_items {
+                if matches(w, i) {
+                    *i = replacement.clone();
+                }
+            }
+        });
+        Ok(true)
+    }
+
+    async fn owner_item_line(
+        &mut self,
+        conversation: ConversationId,
+        reason: &str,
+        outbox: Uuid,
+    ) -> Result<(), AppError> {
+        let ws = self.ws;
+        let reason = reason.to_owned();
+        self.tx.write(move |s| {
+            for (w, i) in &mut s.auto_reply.owner_items {
+                if *w == ws && i.conversation_id == conversation && i.reason == reason {
+                    i.line_outbox_id = Some(outbox);
+                }
+            }
+        });
+        Ok(())
     }
 
     async fn owner_items_open(
         &mut self,
         conversation: ConversationId,
     ) -> Result<Vec<OwnerItem>, AppError> {
+        self.tx.count_owner_item_read();
         let ws = self.ws;
         let state = self.state();
         let mut items: Vec<OwnerItem> = state
@@ -556,12 +616,38 @@ impl AutoReplyRepo for MemTenant {
             .filter(|(w, i)| {
                 *w == ws
                     && i.conversation_id == conversation
-                    && task_open(&state.inbox.tasks, ws, i.task_id)
+                    && item_open(&state.inbox.tasks, ws, i)
             })
             .map(|(_, i)| i.clone())
             .collect();
         items.sort_by_key(|i| (i.created_at, i.reason.clone()));
         Ok(items)
+    }
+
+    async fn owner_items_open_counts(
+        &mut self,
+        conversations: &[ConversationId],
+    ) -> Result<Vec<(ConversationId, u32)>, AppError> {
+        if conversations.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.tx.count_owner_item_read();
+        let ws = self.ws;
+        let state = self.state();
+        let mut counts: Vec<(ConversationId, u32)> = Vec::new();
+        for (w, i) in &state.auto_reply.owner_items {
+            if *w != ws
+                || !conversations.contains(&i.conversation_id)
+                || !item_open(&state.inbox.tasks, ws, i)
+            {
+                continue;
+            }
+            match counts.iter_mut().find(|(c, _)| *c == i.conversation_id) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((i.conversation_id, 1)),
+            }
+        }
+        Ok(counts)
     }
 
     async fn owner_tasks_open(&mut self) -> Result<Vec<TaskId>, AppError> {
@@ -571,12 +657,27 @@ impl AutoReplyRepo for MemTenant {
             .auto_reply
             .owner_items
             .iter()
-            .filter(|(w, i)| *w == ws && task_open(&state.inbox.tasks, ws, i.task_id))
-            .map(|(_, i)| i.task_id)
+            .filter(|(w, i)| {
+                *w == ws && i.task_id.is_some() && item_open(&state.inbox.tasks, ws, i)
+            })
+            .filter_map(|(_, i)| i.task_id)
             .collect();
         ids.sort();
         ids.dedup();
         Ok(ids)
+    }
+
+    async fn owner_items_close_untasked(
+        &mut self,
+        conversation: ConversationId,
+    ) -> Result<(), AppError> {
+        let ws = self.ws;
+        self.tx.write(move |s| {
+            s.auto_reply.owner_items.retain(|(w, i)| {
+                !(*w == ws && i.conversation_id == conversation && i.task_id.is_none())
+            });
+        });
+        Ok(())
     }
 
     async fn owner_items_delete(&mut self, conversation: ConversationId) -> Result<(), AppError> {

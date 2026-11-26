@@ -802,3 +802,9 @@ async fn auto_reply_owner_items() {
     let db = TestDb::new().await;
     jt_testkit::inbox_contract::auto_reply_owner_items(uow(&db)).await;
 }
+
+#[tokio::test]
+async fn auto_reply_owner_item_claimed_once() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::auto_reply_owner_item_claimed_once(uow(&db)).await;
+}
