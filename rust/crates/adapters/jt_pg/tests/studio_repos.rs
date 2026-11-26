@@ -52,8 +52,9 @@ async fn studio_schema_exact_table_delta() {
     // wake rows (0045_agent_wake), the knowledge base (0046_knowledge_base) and the automatic
     // replies' queue and runs (0047_inbox_auto_reply), the owner's notices (0049_owner_notices)
     // and the automatic replies' orders (0050_auto_reply_orders) and the brand tokens
-    // (0053_studio_brand) and the chat files (0055_message_media), less the three commission
-    // tables of 0008 that 0033_drop_commissions drops.
+    // (0053_studio_brand) and the chat files (0055_message_media) and the owner items
+    // (0056_auto_reply_owner_items), less the three commission tables of 0008 that
+    // 0033_drop_commissions drops.
     assert_eq!(
         count,
         48 + 14
@@ -75,6 +76,7 @@ async fn studio_schema_exact_table_delta() {
             + 1
             + 5
             + 2
+            + 1
             + 1
             + 1
             + 1

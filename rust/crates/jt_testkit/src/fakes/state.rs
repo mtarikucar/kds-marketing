@@ -578,8 +578,9 @@ pub(super) struct MemTx {
     ops: Vec<Op>,
     /// Set once a call on the bundle has failed; `commit` then refuses.
     spoiled: bool,
-    /// The working copy, the number of writes and the spoiled flag at the savepoint.
-    saved: Option<(MemState, usize, bool)>,
+    /// The working copy, the number of writes and the spoiled flag at each savepoint, the latest
+    /// last: one savepoint may be taken inside another, as Postgres's of one name nest.
+    saved: Vec<(MemState, usize, bool)>,
 }
 
 impl MemTx {
@@ -621,7 +622,7 @@ impl MemTx {
             inbox_write_at: None,
             ops: Vec::new(),
             spoiled: false,
-            saved: None,
+            saved: Vec::new(),
         }
     }
 
@@ -667,14 +668,16 @@ impl MemTx {
 
     /// `TenantRepos::savepoint`: keeps the working copy, the writes so far and the spoiled flag.
     pub(super) fn savepoint(&mut self) {
-        self.saved = Some((self.work.clone(), self.ops.len(), self.spoiled));
+        self.saved
+            .push((self.work.clone(), self.ops.len(), self.spoiled));
     }
 
-    /// `TenantRepos::rollback_to_savepoint`: back to the savepoint, which stays.
+    /// `TenantRepos::rollback_to_savepoint`: back to the latest savepoint, which stays.
     pub(super) fn rollback_to_savepoint(&mut self) -> Result<(), AppError> {
         let (work, ops, spoiled) = self
             .saved
-            .clone()
+            .last()
+            .cloned()
             .ok_or_else(|| AppError::internal("no savepoint"))?;
         self.work = work;
         self.ops.truncate(ops);
@@ -682,10 +685,10 @@ impl MemTx {
         Ok(())
     }
 
-    /// `TenantRepos::release_savepoint`.
+    /// `TenantRepos::release_savepoint`: the latest savepoint goes; an earlier one stays.
     pub(super) fn release_savepoint(&mut self) -> Result<(), AppError> {
         self.saved
-            .take()
+            .pop()
             .map(|_| ())
             .ok_or_else(|| AppError::internal("no savepoint"))
     }

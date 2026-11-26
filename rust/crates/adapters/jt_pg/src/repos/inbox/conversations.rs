@@ -64,7 +64,11 @@ impl ConversationRepo for PgTenantRepos {
     ) -> Result<Vec<Conversation>, AppError> {
         let filter = match queue {
             ConversationQueue::All => "true",
-            ConversationQueue::Ours => "state='ours'",
+            // Owed by us; or the agent holds it (open or answered) and the owner has an open
+            // task of the automatic replies on it (`auto_reply_owner_items`).
+            ConversationQueue::Ours => {
+                "state='ours' or (executor_kind='agent' and state in ('open','theirs') and exists (select 1 from auto_reply_owner_items i join tasks t on t.workspace_id=i.workspace_id and t.id=i.task_id where i.workspace_id=c.workspace_id and i.conversation_id=c.id and t.status='open'))"
+            }
             ConversationQueue::Unassigned => {
                 "executor_kind='human' and executor_user_id is null and state <> 'closed'"
             }

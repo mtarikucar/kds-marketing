@@ -1091,7 +1091,9 @@ async fn finish_order(
                     .await?;
                     match &agents {
                         Some(c) => {
-                            hand_over(
+                            // A keep's line to the customer, when one was queued (a hand-over
+                            // queues none here).
+                            if let Some(outbox) = hand_over(
                                 deps,
                                 ctx,
                                 r.as_mut(),
@@ -1106,7 +1108,10 @@ async fn finish_order(
                                     line_allowed: false,
                                 },
                             )
-                            .await?;
+                            .await?
+                            {
+                                outboxes.push(outbox);
+                            }
                         }
                         None => note(deps, ctx, r.as_mut(), &o, text).await?,
                     }

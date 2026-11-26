@@ -42,6 +42,8 @@ pub async fn erase(
     // Nothing waits to answer the person automatically.
     for c in &conversations {
         r.auto_reply().queue_delete(c.id).await?;
+        // What the owner was asked about them goes too; the tasks are cleared with the journey's.
+        r.auto_reply().owner_items_delete(c.id).await?;
     }
     // An order's payment link goes; its reference and amount stay, as a financial record's do.
     // The shop's own copy of the order is the owner's to erase there.

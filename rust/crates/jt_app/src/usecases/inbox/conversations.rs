@@ -83,7 +83,9 @@ pub struct MessageItem {
 /// items and replies say, computed (nothing of it is stored). `surface` is `public` for a
 /// comment conversation, `relay` for buyer mail relayed by Amazon, else
 /// `private`; `owed_items` and `next_deadline` count the owed items of a public one; and
-/// `held_replies` the replies waiting for a human.
+/// `held_replies` the replies waiting for a human. `owner_items` counts the open tasks the
+/// automatic replies left the owner on it while the agent keeps the conversation
+/// (`autoreply::keep`); left out when there is none.
 #[derive(Debug, Serialize)]
 pub struct ConversationView {
     #[serde(flatten)]
@@ -94,6 +96,12 @@ pub struct ConversationView {
     #[serde(with = "time::serde::rfc3339::option")]
     pub next_deadline: Option<OffsetDateTime>,
     pub held_replies: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub owner_items: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl std::ops::Deref for ConversationView {
@@ -127,12 +135,18 @@ pub(crate) async fn view(
         .iter()
         .filter(|row| row.conversation_id == conversation.id)
         .count();
+    let owner_items = r
+        .auto_reply()
+        .owner_items_open(conversation.id)
+        .await?
+        .len();
     Ok(ConversationView {
         surface,
         channel: conversation_channel(&conversation.kind_key),
         owed_items,
         next_deadline,
         held_replies: u32::try_from(held_replies).unwrap_or(u32::MAX),
+        owner_items: u32::try_from(owner_items).unwrap_or(u32::MAX),
         conversation,
     })
 }

@@ -236,8 +236,8 @@ async fn studio_exact_catalog_and_gate_set() {
     // five knowledge base tables of 0046_knowledge_base, and the automatic replies' queue and runs
     // of 0047_inbox_auto_reply, and the owner's notices of 0049_owner_notices, and the automatic
     // replies' orders of 0050_auto_reply_orders, and the brand tokens of 0053_studio_brand, and
-    // the chat files of 0055_message_media.
-    assert_eq!(all_tables.len(), 118);
+    // the chat files of 0055_message_media, and the owner items of 0056_auto_reply_owner_items.
+    assert_eq!(all_tables.len(), 119);
 
     // All 28 Studio tables are tenant-scoped, including intelligence, productions and the brand
     // tokens.

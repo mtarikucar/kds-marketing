@@ -17,7 +17,10 @@
 //!   sent, never again, and so does a row found still `sending` later (a crash in between).
 //! - **What it says**: what happened, the reason in plain words (a fixed table of codes), for an
 //!   order its amount and the shop's reference, and the conversation's link in the panel. Never a
-//!   customer's name, text or summary; the row holds codes and ids only.
+//!   customer's name, text or summary; the row holds codes and ids only. While the agent keeps
+//!   every conversation (`AutoReply::keeps`), a would-be hand-over's notice says the automatic
+//!   replies need the owner on a point and keep the conversation (its dedupe key starts with
+//!   `NEEDS_YOU`: one per open item of the owner's).
 //! - **Never back in the inbox** (`own_notice`): a polled mail (the notice's inbox copy, its Sent
 //!   copy, an answer to it, or a bounce of it) is dropped when its `Message-ID` or `In-Reply-To` is
 //!   `<jeeta-notice.{id}.…>`, or it comes from the workspace's own mailbox address with
@@ -63,6 +66,9 @@ const SENDING_STALE: Duration = Duration::minutes(10);
 pub const BOUNCE_WINDOW: Duration = Duration::minutes(30);
 /// What every notice's `Message-ID` starts with.
 const ID_PREFIX: &str = "jeeta-notice.";
+/// What the dedupe key of a notice starts with when the automatic replies kept the conversation
+/// and ask the owner (`autoreply::keep`): `needs_you:{conversation}:{task}`.
+pub(crate) const NEEDS_YOU: &str = "needs_you:";
 /// The subjects of the notices.
 const SUBJECTS: [&str; 2] = [
     "Jeeta: bir konuşma sizi bekliyor",
@@ -546,16 +552,7 @@ async fn recipients(r: &mut dyn TenantRepos) -> Result<Vec<String>, AppError> {
 /// A notice's subject and its three lines: what happened, why (in plain words; for an order its
 /// amount and the shop's reference, `order`) and where.
 fn words(deps: &Deps, row: &NoticeRow, order: Option<&OrderRow>) -> (&'static str, String) {
-    let (subject, what) = match row.kind {
-        NoticeKind::HandedOver => (
-            "Jeeta: bir konuşma sizi bekliyor",
-            "Otomatik yanıt bir konuşmayı size devretti.",
-        ),
-        NoticeKind::OrderCreated => (
-            "Jeeta: yeni sipariş oluşturuldu",
-            "Otomatik yanıt yeni bir sipariş oluşturdu.",
-        ),
-    };
+    let (subject, what) = headline(row);
     let why = match row.kind {
         NoticeKind::HandedOver => format!("Neden: {}", reason_words(row.reason.as_deref())),
         NoticeKind::OrderCreated => match order {
@@ -584,6 +581,26 @@ fn words(deps: &Deps, row: &NoticeRow, order: Option<&OrderRow>) -> (&'static st
     )
 }
 
+/// A notice's subject and its first line, what happened.
+fn headline(row: &NoticeRow) -> (&'static str, &'static str) {
+    match row.kind {
+        // The conversation stayed the agent's: the owner is needed on one point.
+        NoticeKind::HandedOver if row.dedupe_key.starts_with(NEEDS_YOU) => (
+            "Jeeta: bir konuşma sizi bekliyor",
+            "Otomatik yanıtın bir konuda size ihtiyacı var; konuşma otomatik yanıtta kalıyor ve \
+             siz Devral'a basmadıkça müşteriye o yanıt vermeye devam ediyor.",
+        ),
+        NoticeKind::HandedOver => (
+            "Jeeta: bir konuşma sizi bekliyor",
+            "Otomatik yanıt bir konuşmayı size devretti.",
+        ),
+        NoticeKind::OrderCreated => (
+            "Jeeta: yeni sipariş oluşturuldu",
+            "Otomatik yanıt yeni bir sipariş oluşturdu.",
+        ),
+    }
+}
+
 /// Minor units as whole units, with the kuruş only when there are some.
 fn whole(minor: i64) -> String {
     if minor % 100 == 0 {
@@ -609,6 +626,7 @@ pub(crate) fn reason_words(code: Option<&str>) -> &'static str {
         "failed" => "Otomatik yanıt şu an yanıt üretemedi",
         "requote" => "Müşteri ikinci bir teklif istedi",
         "human_quoted" => "Fiyatı ekipten biri konuşmuştu",
+        "response_overdue" => "Müşteri zamanında yanıt alamadı",
         c if c.starts_with("limit_") => "Günlük otomatik yanıt sınırı doldu",
         c if c.starts_with("judge_") => "Hazırlanan yanıt denetimden geçmedi",
         "order_link_unsent" => "Sipariş oluştu, ödeme bağlantısını siz gönderin",
@@ -678,6 +696,34 @@ x-jeeta-notice:  {b}
         row.attempts = MAX_ATTEMPTS;
         after_failure(&mut row, now);
         assert_eq!(row.state, NoticeState::Failed);
+    }
+
+    #[test]
+    fn a_kept_conversations_notice_says_it_needs_the_owner_and_stays_the_agents() {
+        let row = |key: &str| NoticeRow {
+            id: Uuid::now_v7(),
+            kind: NoticeKind::HandedOver,
+            conversation_id: ConversationId::new_v7(),
+            dedupe_key: key.into(),
+            reason: Some("not_covered".into()),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            state: NoticeState::Queued,
+            attempts: 0,
+            next_at: None,
+            sent_at: None,
+            mailbox_capability_id: None,
+        };
+        let (subject, kept) = headline(&row(&format!("{NEEDS_YOU}c:t")));
+        assert_eq!(subject, SUBJECTS[0]);
+        assert!(kept.contains("size ihtiyacı var"), "{kept}");
+        assert!(kept.contains("otomatik yanıtta kalıyor"), "{kept}");
+        assert!(!kept.contains("devretti"), "{kept}");
+        let (_, handed) = headline(&row("handed_over:c:1"));
+        assert!(handed.contains("size devretti"), "{handed}");
+        assert_eq!(
+            reason_words(Some("response_overdue")),
+            "Müşteri zamanında yanıt alamadı"
+        );
     }
 
     #[test]

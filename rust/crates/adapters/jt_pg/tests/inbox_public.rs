@@ -796,3 +796,9 @@ async fn auto_reply_handover_mark() {
     let db = TestDb::new().await;
     jt_testkit::inbox_contract::auto_reply_handover_mark(uow(&db)).await;
 }
+
+#[tokio::test]
+async fn auto_reply_owner_items() {
+    let db = TestDb::new().await;
+    jt_testkit::inbox_contract::auto_reply_owner_items(uow(&db)).await;
+}

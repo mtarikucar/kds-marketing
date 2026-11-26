@@ -7,10 +7,10 @@
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::reply_model::{
-    AutoReplyRepo, OrderRow, OrderState, QueueRow, RunOutcome, RunRow, Usage,
+    AutoReplyRepo, OrderRow, OrderState, OwnerItem, QueueRow, RunOutcome, RunRow, Usage,
 };
 use jt_capability::CapabilityId;
-use jt_inbox::{ConversationId, JourneyId};
+use jt_inbox::{ConversationId, JourneyId, TaskId};
 use jt_tenancy::WorkspaceId;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -731,5 +731,116 @@ impl AutoReplyRepo for PgTenantRepos {
         .await
         .map_err(|e| map_sqlx(e, "clear the erased person's payment links"))?;
         Ok(())
+    }
+
+    async fn owner_item(
+        &mut self,
+        conversation: ConversationId,
+        reason: &str,
+    ) -> Result<Option<OwnerItem>, AppError> {
+        let ws = self.workspace_id();
+        let record: Option<OwnerItemRecord> = sqlx::query_as(
+            "select conversation_id, reason, task_id, created_at, line_outbox_id \
+             from auto_reply_owner_items where workspace_id = $1 and conversation_id = $2 \
+             and reason = $3",
+        )
+        .bind(ws.as_uuid())
+        .bind(conversation.as_uuid())
+        .bind(reason)
+        .fetch_optional(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "read an owner item"))?;
+        Ok(record.map(OwnerItemRecord::into_item))
+    }
+
+    async fn owner_item_save(&mut self, item: &OwnerItem) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        sqlx::query(
+            "insert into auto_reply_owner_items (workspace_id, conversation_id, reason, task_id, \
+             created_at, line_outbox_id) values ($1, $2, $3, $4, $5, $6) \
+             on conflict (workspace_id, conversation_id, reason) do update set \
+             task_id = excluded.task_id, created_at = excluded.created_at, \
+             line_outbox_id = excluded.line_outbox_id",
+        )
+        .bind(ws.as_uuid())
+        .bind(item.conversation_id.as_uuid())
+        .bind(&item.reason)
+        .bind(item.task_id.as_uuid())
+        .bind(item.created_at)
+        .bind(item.line_outbox_id)
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "save an owner item"))?;
+        Ok(())
+    }
+
+    async fn owner_items_open(
+        &mut self,
+        conversation: ConversationId,
+    ) -> Result<Vec<OwnerItem>, AppError> {
+        let ws = self.workspace_id();
+        let records: Vec<OwnerItemRecord> = sqlx::query_as(
+            "select i.conversation_id, i.reason, i.task_id, i.created_at, i.line_outbox_id \
+             from auto_reply_owner_items i join tasks t on t.workspace_id = i.workspace_id \
+             and t.id = i.task_id where i.workspace_id = $1 and i.conversation_id = $2 \
+             and t.status = 'open' order by i.created_at, i.reason",
+        )
+        .bind(ws.as_uuid())
+        .bind(conversation.as_uuid())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list a conversation's open owner items"))?;
+        Ok(records
+            .into_iter()
+            .map(OwnerItemRecord::into_item)
+            .collect())
+    }
+
+    async fn owner_tasks_open(&mut self) -> Result<Vec<TaskId>, AppError> {
+        let ws = self.workspace_id();
+        let ids: Vec<Uuid> = sqlx::query_scalar(
+            "select distinct i.task_id from auto_reply_owner_items i join tasks t \
+             on t.workspace_id = i.workspace_id and t.id = i.task_id \
+             where i.workspace_id = $1 and t.status = 'open'",
+        )
+        .bind(ws.as_uuid())
+        .fetch_all(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "list the owner items' open tasks"))?;
+        Ok(ids.into_iter().map(TaskId::from).collect())
+    }
+
+    async fn owner_items_delete(&mut self, conversation: ConversationId) -> Result<(), AppError> {
+        let ws = self.workspace_id();
+        sqlx::query(
+            "delete from auto_reply_owner_items where workspace_id = $1 and conversation_id = $2",
+        )
+        .bind(ws.as_uuid())
+        .bind(conversation.as_uuid())
+        .execute(self.tx.conn())
+        .await
+        .map_err(|e| map_sqlx(e, "remove a conversation's owner items"))?;
+        Ok(())
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct OwnerItemRecord {
+    conversation_id: Uuid,
+    reason: String,
+    task_id: Uuid,
+    created_at: OffsetDateTime,
+    line_outbox_id: Option<Uuid>,
+}
+
+impl OwnerItemRecord {
+    fn into_item(self) -> OwnerItem {
+        OwnerItem {
+            conversation_id: ConversationId::from(self.conversation_id),
+            reason: self.reason,
+            task_id: TaskId::from(self.task_id),
+            created_at: self.created_at,
+            line_outbox_id: self.line_outbox_id,
+        }
     }
 }

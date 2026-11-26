@@ -506,8 +506,19 @@ impl ConversationRepo for MemTenant {
         after: Option<(OffsetDateTime, ConversationId)>,
         limit: u32,
     ) -> Result<Vec<Conversation>, AppError> {
-        let mut rows: Vec<_> = self
-            .state()
+        let state = self.state();
+        // The agent holds it (open or answered) and the owner has an open task of the automatic
+        // replies on it (`auto_reply_owner_items`).
+        let asks_owner = |r: &Conversation| {
+            r.executor == Executor::Agent
+                && matches!(r.state, ConvState::Open | ConvState::Theirs)
+                && state.auto_reply.owner_items.iter().any(|(w, i)| {
+                    *w == self.ws
+                        && i.conversation_id == r.id
+                        && super::autoreply::task_open(&state.inbox.tasks, self.ws, i.task_id)
+                })
+        };
+        let mut rows: Vec<_> = state
             .inbox
             .conversations
             .iter()
@@ -516,7 +527,7 @@ impl ConversationRepo for MemTenant {
                     && after.is_none_or(|key| (r.created_at, r.id) > key)
                     && match queue {
                         ConversationQueue::All => true,
-                        ConversationQueue::Ours => r.state == ConvState::Ours,
+                        ConversationQueue::Ours => r.state == ConvState::Ours || asks_owner(r),
                         ConversationQueue::Unassigned => {
                             r.executor == Executor::Human { user_id: None }
                                 && r.state != ConvState::Closed

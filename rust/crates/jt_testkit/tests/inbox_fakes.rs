@@ -159,3 +159,9 @@ async fn auto_reply_handover_mark() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::inbox_contract::auto_reply_handover_mark(uow).await;
 }
+
+#[tokio::test]
+async fn auto_reply_owner_items() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::inbox_contract::auto_reply_owner_items(uow).await;
+}
