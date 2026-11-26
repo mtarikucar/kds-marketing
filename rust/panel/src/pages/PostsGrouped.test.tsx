@@ -140,6 +140,34 @@ describe('one line per content', () => {
   });
 });
 
+describe('two versions on one platform', () => {
+  const [feed, story] = content('area-f', [
+    postRow('slot:f-feed', { title: 'Örnek içerik F', format: 'feed_post', publish_at: ahead(26 * HOUR), actions: { cancel: { kind: 'post', slot_id: 'f-feed', expected_revision: 1 } } }),
+    postRow('slot:f-story', { title: 'Örnek içerik F', format: 'story', publish_at: ahead(28 * HOUR), actions: { cancel: { kind: 'post', slot_id: 'f-story', expected_revision: 1 } } }),
+  ]);
+  const formats = (el: Element) => [...el.querySelectorAll('[data-version]')].map((c) => c.querySelector('[data-testid="version-format"]')?.textContent ?? null);
+
+  it('names each chip’s format when two versions of a line share a platform, and only then', async () => {
+    open('/posts', postsOut({ rows: [feed, story, alone, failed, live] }));
+    const [f, c, a] = await lines();
+    expect(formats(f)).toEqual([P.format.feed_post, P.format.story]);
+    // One version per platform: the chips stay as short as they were.
+    expect(formats(c)).toEqual([null]);
+    expect(formats(a)).toEqual([null, null]);
+  });
+
+  it('names every block’s format in the panel, the header line the selected one’s', async () => {
+    open('/posts?slot=f-story', postsOut({ rows: [feed, story] }), {}, 'phone');
+    const sheet = await screen.findByRole('dialog', { name: P.panel.label });
+    expect(await within(sheet).findByText('Hikâye · tek görsel · Genel')).toBeInTheDocument();
+    const blocks = within(sheet).getAllByRole('listitem').filter((li) => li.hasAttribute('data-version'));
+    expect(blocks.map((b) => within(b).getByTestId('version-format').textContent)).toEqual([P.format.feed_post, P.format.story]);
+    // The other block's head says which version it opens.
+    expect(within(blocks[0]).getAllByRole('button')[0]).toHaveAccessibleName(/^Instagram · .+ · Gönderi$/);
+    expect(within(blocks[1]).getByRole('button', { name: P.actions.cancel })).toBeInTheDocument();
+  });
+});
+
 describe('the panel shows the post', () => {
   it('shows a picture first, as wide as the panel, and opens it full size', async () => {
     const user = userEvent.setup();

@@ -88,6 +88,14 @@ const panelReady = async p => p.getByRole('region', { name: tr.postsPage.media.l
 add('posts-grouped', '/posts', groupedAnswers, { ready: async p => p.getByRole('region', { name: tr.postsPage.table.label }).waitFor() });
 add('posts-detail-image', '/posts?slot=g-tt', groupedAnswers, { ready: panelReady });
 add('posts-detail-carousel', '/posts?slot=h-ig', groupedAnswers, { ready: panelReady });
+// Two versions of one content on one platform (a post and a story): the format tells them apart.
+const [samePost, sameStory] = content('area-p', [
+  posts.postRow('slot:p-feed', { title: 'Örnek içerik: gönderi ve hikâye', format: 'feed_post', cover: media('p1'), actions: { cancel: { kind: 'post', slot_id: 'p-feed', expected_revision: 1 } } }),
+  posts.postRow('slot:p-story', { title: 'Örnek içerik: gönderi ve hikâye', format: 'story', publish_at: posts.ahead(28 * 3600_000), cover: media('p1'), actions: { cancel: { kind: 'post', slot_id: 'p-story', expected_revision: 1 } } }),
+]);
+const samePlatform = posts.postsAnswers(posts.postsOut({ rows: [samePost, sameStory, groupFailed, groupLive, groupAlone] }));
+add('posts-same-platform', '/posts', samePlatform, { ready: async p => p.getByRole('region', { name: tr.postsPage.table.label }).waitFor() });
+add('posts-same-platform-detail', '/posts?slot=p-story', samePlatform, { ready: panelReady });
 add('posts-empty', '/posts', { 'GET /api/content/posts': posts.postsOut({ rows: [], counts: { all: 0, you: 0, stages: {} } }) });
 add('posts-approval', '/posts?slot=s-approve', {}, { ready: async p => p.getByRole('button', { name: tr.postsPage.actions.approve }).first().waitFor() });
 add('posts-brake', '/posts', { 'GET /api/content/posts': posts.postsOut({ brake: { revision: 3, can_resume: true } }) });

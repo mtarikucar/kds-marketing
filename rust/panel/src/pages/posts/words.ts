@@ -77,6 +77,9 @@ export function formatWords(t: TFunction, row: Pick<PostRow, 'format' | 'media'>
   return name;
 }
 
+/** The format's one word (`Gönderi`, `Hikâye`, `Reels`…); empty for none or an unknown one. */
+export const formatName = (t: TFunction, format: string | null | undefined): string => (isFormat(format) ? t(`postsPage.format.${format}`) : '');
+
 /** The table's sub-line: `{Kategori} · {Biçim}`. */
 export function subLine(t: TFunction, row: PostRow): string {
   const format = formatWords(t, row, true);

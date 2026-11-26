@@ -8,7 +8,7 @@ import { useNeedWake, useNow } from '@/lib/wake';
 import { RowActionBar } from './actions';
 import { PostMedia } from './PostMedia';
 import { ChannelBadge } from './PostsTable';
-import { categoryTitle, channelAndTime, formatWords, platformName, STATUS_TONE, statusLine, statusWord, subStateLine, waitSentence, whenWords } from './words';
+import { categoryTitle, channelAndTime, formatName, formatWords, platformName, STATUS_TONE, statusLine, statusWord, subStateLine, waitSentence, whenWords } from './words';
 
 const PILL = {
   red: 'bg-danger-subtle text-danger',
@@ -100,9 +100,12 @@ function VersionBlock({ view, current, brake, onResumeAll, onAccounts, onTiktok,
   const sub = row && !wait ? subStateLine(t, row.sub_state, lang) : null;
   const pill = row ? statusLine(t, row, lang) : statusWord(t, { status, tiktok_draft: false });
   const tone = row?.status === 'published' && row.tiktok_draft ? 'green' : STATUS_TONE[status];
+  // The block always names its format: it is where a version is cancelled or edited.
+  const format = row ? formatName(t, row.format) : '';
   const head = (
     <>
       <ChannelBadge channel={channel && { ...channel, label: platformName(channel.kind) }} />
+      {format && <span data-testid="version-format" className="text-[13px] font-semibold">{format}</span>}
       {channel?.name && <span className="min-w-0 truncate text-[13px]">{channel.name}</span>}
       <span data-testid="version-status" className={cn('inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold', PILL[tone])}>{pill}</span>
       <span className="text-[13px] tabular-nums text-muted-foreground">
@@ -118,7 +121,7 @@ function VersionBlock({ view, current, brake, onResumeAll, onAccounts, onTiktok,
         <button
           type="button"
           className="flex w-full flex-wrap items-center gap-2 rounded-md text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          aria-label={channelAndTime(t, channel, at, lang)}
+          aria-label={[channelAndTime(t, channel, at, lang), format].filter(Boolean).join(' · ')}
           onClick={() => onSelect(view.id)}
         >
           {head}
