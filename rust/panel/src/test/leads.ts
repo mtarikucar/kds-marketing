@@ -82,6 +82,7 @@ export function row(n: number, extra: Partial<ProspectRow> = {}): ProspectRow {
     country: 'TR',
     language: 'tr',
     segment_key: 'kafeler',
+    icp_key: 'kafeler_izmir',
     labels: [],
     research_task_id: taskId(1),
     latest_score: { score: 72, digest: 'abc123', at: '2026-11-01T09:00:00Z' },
@@ -112,6 +113,7 @@ export function prospect(n: number, extra: Partial<Prospect> = {}): Prospect {
     country: 'TR',
     language: 'tr',
     segment_key: 'kafeler',
+    icp_key: 'kafeler_izmir',
     labels: [],
     contact: {
       phone: {
@@ -181,6 +183,14 @@ export function prospectOut(n: number, extra: Partial<Prospect> = {}): ProspectG
     duplicate_candidates: [
       { prospect_id: prospectId(n + 1), business_name: `Örnek Kafe ${n + 1}`, city: 'İzmir', status: 'new', matched: ['domain'] },
     ],
+    research_task: task(1),
+    scored_under: {
+      criteria: [
+        { key: 'sube_sayisi', description: 'Birden fazla şubesi var mı', weight: 40 },
+        { key: 'aktif_sosyal', description: 'Sosyal medyada düzenli paylaşım yapıyor mu', weight: 60 },
+      ],
+      qualify_at: 60,
+    },
     ledger: [
       {
         id: 41,

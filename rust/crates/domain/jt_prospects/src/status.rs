@@ -177,7 +177,7 @@ pub fn next_status(
 /// Empties what a do-not-contact prospect must not keep (spec §3.2): the business name becomes
 /// `"—"`; contact fields, size, signals, notes, labels and the pages it was discovered on are
 /// emptied. Ids, status, the origin's recorder and time, the decision, the score summary and the
-/// coarse business facts (sector, city, district, country, language, segment) stay.
+/// coarse business facts (sector, city, district, country, language, segment, purpose) stay.
 pub fn scrub_for_dnc(p: &mut Prospect) {
     p.business_name = "—".to_owned();
     p.contact = ContactFields::default();

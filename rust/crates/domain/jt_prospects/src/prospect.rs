@@ -48,9 +48,14 @@ pub struct Prospect {
     /// A BCP 47 primary tag, lower-case.
     #[serde(default)]
     pub language: Option<String>,
-    /// A strategy audience segment key.
+    /// A strategy audience segment key: what kind of business it is.
     #[serde(default)]
     pub segment_key: Option<String>,
+    /// The ICP entry (`IcpEntry::key`) the business was sought for: its purpose, what the
+    /// workspace wants from it. A research task gives it (a standing task its own entry, an
+    /// ad-hoc task the entry it names); `None` when nobody said.
+    #[serde(default)]
+    pub icp_key: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]
@@ -312,6 +317,10 @@ pub struct CreateInput {
     pub language: Option<String>,
     #[serde(default)]
     pub segment_key: Option<String>,
+    /// The ICP entry the business is sought for. With a `research_task_id` whose task names an
+    /// entry, that entry is recorded (this, if given, must be it).
+    #[serde(default)]
+    pub icp_key: Option<String>,
     #[serde(default)]
     pub country: Option<String>,
     #[serde(default)]
@@ -361,6 +370,8 @@ pub struct SetFields {
     #[serde(default)]
     pub segment_key: Option<String>,
     #[serde(default)]
+    pub icp_key: Option<String>,
+    #[serde(default)]
     pub labels: Option<Vec<String>>,
     #[serde(default)]
     pub phone: Option<FieldInput<String>>,
@@ -407,6 +418,7 @@ pub enum FieldName {
     District,
     Language,
     SegmentKey,
+    IcpKey,
     Labels,
     Phone,
     Email,
@@ -429,6 +441,7 @@ impl FieldName {
             FieldName::District => "district",
             FieldName::Language => "language",
             FieldName::SegmentKey => "segment_key",
+            FieldName::IcpKey => "icp_key",
             FieldName::Labels => "labels",
             FieldName::Phone => "phone",
             FieldName::Email => "email",
@@ -467,6 +480,7 @@ impl Prospect {
             (FieldName::District, self.district.is_some()),
             (FieldName::Language, self.language.is_some()),
             (FieldName::SegmentKey, self.segment_key.is_some()),
+            (FieldName::IcpKey, self.icp_key.is_some()),
             (FieldName::Labels, !self.labels.is_empty()),
             (FieldName::Phone, c.phone.is_some()),
             (FieldName::Email, c.email.is_some()),
@@ -508,6 +522,17 @@ fn validate_segment(value: Option<&str>) -> Result<(), ProspectError> {
     match value {
         Some(v) if jt_strategy::validate_segment_key(v.trim()).is_err() => {
             Err(invalid("segment_key", "invalid"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// An ICP entry key is shaped like a segment key: `[a-z0-9_]{2,32}`. Whether the entry exists
+/// is the application's to check (it reads the strategy).
+fn validate_icp_key(value: Option<&str>) -> Result<(), ProspectError> {
+    match value {
+        Some(v) if jt_strategy::validate_segment_key(v.trim()).is_err() => {
+            Err(invalid("icp_key", "invalid"))
         }
         _ => Ok(()),
     }
@@ -657,6 +682,7 @@ pub fn validate_create(
     optional_text("district", input.district.as_deref(), 80)?;
     validate_language(input.language.as_deref())?;
     validate_segment(input.segment_key.as_deref())?;
+    validate_icp_key(input.icp_key.as_deref())?;
     if let Some(c) = &input.country {
         let c = c.trim();
         if c.len() != 2 || !c.bytes().all(|b| b.is_ascii_alphabetic()) {
@@ -845,6 +871,7 @@ pub fn build(
             .unwrap_or_else(default_country),
         language: input.language.map(|l| l.trim().to_ascii_lowercase()),
         segment_key: trimmed(input.segment_key),
+        icp_key: trimmed(input.icp_key),
         labels: labels_of(input.labels),
         contact,
         size: input.size.map(|f| field_of(f, r, normal_size)),
@@ -891,6 +918,7 @@ pub fn apply_update(
         (FieldName::District, s.district.is_some()),
         (FieldName::Language, s.language.is_some()),
         (FieldName::SegmentKey, s.segment_key.is_some()),
+        (FieldName::IcpKey, s.icp_key.is_some()),
         (FieldName::Labels, s.labels.is_some()),
         (FieldName::Phone, s.phone.is_some()),
         (FieldName::Email, s.email.is_some()),
@@ -917,6 +945,7 @@ pub fn apply_update(
     optional_text("district", s.district.as_deref(), 80)?;
     validate_language(s.language.as_deref())?;
     validate_segment(s.segment_key.as_deref())?;
+    validate_icp_key(s.icp_key.as_deref())?;
     if let Some(l) = &s.labels {
         validate_labels(l)?;
     }
@@ -950,6 +979,7 @@ pub fn apply_update(
             FieldName::District => p.district = None,
             FieldName::Language => p.language = None,
             FieldName::SegmentKey => p.segment_key = None,
+            FieldName::IcpKey => p.icp_key = None,
             FieldName::Labels => p.labels.clear(),
             FieldName::Phone => c.phone = None,
             FieldName::Email => c.email = None,
@@ -979,6 +1009,9 @@ pub fn apply_update(
     }
     if let Some(v) = s.segment_key {
         p.segment_key = Some(normal_text(v));
+    }
+    if let Some(v) = s.icp_key {
+        p.icp_key = Some(normal_text(v));
     }
     if let Some(v) = s.labels {
         p.labels = labels_of(v);

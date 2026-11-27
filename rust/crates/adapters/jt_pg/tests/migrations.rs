@@ -53,8 +53,8 @@ const TABLES_BEFORE_MAIL_FILES: i64 = TABLES_AFTER_ALL - 3;
 /// The tables before `0026_outreach` adds its four (and `0028_mail_files` its one).
 const TABLES_BEFORE_OUTREACH: i64 = TABLES_BEFORE_MAIL_FILES - 4;
 
-/// Migrations `0001_foundation` through `0056_auto_reply_owner_items`.
-const MIGRATIONS: i64 = 56;
+/// Migrations `0001_foundation` through `0057_prospect_purpose`.
+const MIGRATIONS: i64 = 57;
 
 /// The migration versions.
 fn versions() -> Vec<i64> {
@@ -272,6 +272,7 @@ async fn up_and_down_scripts_are_idempotent_on_their_own() {
     // Newest first, each `down` twice: the second run is a no-op. 0005 drops its tables, trigger
     // functions and the column it added; 0004 its index; 0003 its tables and trigger function.
     for name in [
+        "0057_prospect_purpose",
         "0056_auto_reply_owner_items",
         "0055_message_media",
         "0054_composed_material_analysis",
@@ -1393,6 +1394,7 @@ async fn studio_migration_up_down_up() {
         include_str!("../../../../migrations/0054_composed_material_analysis.up.sql"),
         include_str!("../../../../migrations/0055_message_media.up.sql"),
         include_str!("../../../../migrations/0056_auto_reply_owner_items.up.sql"),
+        include_str!("../../../../migrations/0057_prospect_purpose.up.sql"),
     ] {
         sqlx::raw_sql(sql).execute(&db.pool).await.unwrap();
     }
@@ -1429,6 +1431,7 @@ async fn project_tables_down(pool: &PgPool) {
     // tables after them), the lane approval record on `studio_control`, then the account snapshots
     // (they reference `capabilities`) and the pause columns on the posting policy.
     for down in [
+        include_str!("../../../../migrations/0057_prospect_purpose.down.sql"),
         include_str!("../../../../migrations/0056_auto_reply_owner_items.down.sql"),
         include_str!("../../../../migrations/0055_message_media.down.sql"),
         include_str!("../../../../migrations/0054_composed_material_analysis.down.sql"),
@@ -4225,4 +4228,127 @@ async fn remove_marketplace_migration_is_repeatable_and_refuses_while_a_marketpl
             assert!(marketplace_schema(&db.pool).await, "{refusal}");
         }
     }
+}
+
+/// Each prospect of `ws` with its purpose, revision and update time, by id.
+async fn purposes(
+    pool: &PgPool,
+    ws: Uuid,
+) -> Vec<(Uuid, Option<String>, i64, time::OffsetDateTime)> {
+    let mut tx = PlatformTx::begin(pool).await.unwrap();
+    sqlx::query_as(
+        "select id, icp_key, revision, updated_at from prospects where workspace_id = $1 \
+         order by id",
+    )
+    .bind(ws)
+    .fetch_all(tx.conn())
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn prospect_purpose_backfills_only_what_a_standing_task_says_and_repeats() {
+    let db = TestDb::new().await; // already migrated up, 0057 included
+    let dir = migrations_dir();
+    let up = std::fs::read_to_string(dir.join("0057_prospect_purpose.up.sql")).unwrap();
+    let down = std::fs::read_to_string(dir.join("0057_prospect_purpose.down.sql")).unwrap();
+    // The release before: no purpose column.
+    try_run(&db.pool, &down).await.unwrap();
+    assert!(!column_exists(&db.pool, ("prospects", "icp_key")).await);
+    let (ws, _) = db.seed_workspace("prospect-purpose").await;
+    let ws = ws.as_uuid();
+    let (version, standing, ad_hoc) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    // A prospect of the standing task, one of the ad-hoc task, one of none.
+    let (of_standing, of_ad_hoc, of_none) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    sqlx::query(
+        "insert into strategy_versions (id, workspace_id, number, status, sections, \
+         created_by_component, created_at) values ($1, $2, 1, 'draft', '{}', 'test', now())",
+    )
+    .bind(version)
+    .bind(ws)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    for (task, kind, status) in [
+        (
+            standing,
+            serde_json::json!({"type": "standing", "icp_key": "kafeler_merkez"}),
+            "open",
+        ),
+        (
+            ad_hoc,
+            serde_json::json!({"type": "ad_hoc", "target_count": 5}),
+            "done",
+        ),
+    ] {
+        sqlx::query(
+            "insert into research_tasks (workspace_id, id, kind, strategy_version_id, brief, \
+             rubric_digest, daily_cap, status, created_by, created_at, closed_at) \
+             values ($1, $2, $3, $4, '{}', 'd', 5, $5, '{\"kind\": \"system\", \"job\": \"test\"}', \
+             now(), case when $5 = 'open' then null else now() end)",
+        )
+        .bind(ws)
+        .bind(task)
+        .bind(kind)
+        .bind(version)
+        .bind(status)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    for (id, task) in [
+        (of_standing, Some(standing)),
+        (of_ad_hoc, Some(ad_hoc)),
+        (of_none, None),
+    ] {
+        sqlx::query(
+            "insert into prospects (workspace_id, id, status, business_name, entity_kind, data, \
+             research_task_id, created_at, updated_at) values ($1, $2, 'new', 'Örnek Kafe', \
+             'legal_entity', '{}', $3, '2026-11-01T09:00:00Z', '2026-11-01T09:00:00Z')",
+        )
+        .bind(ws)
+        .bind(id)
+        .bind(task)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let stamp = time::macros::datetime!(2026-11-01 09:00 UTC);
+    let mut expected = vec![
+        (of_standing, Some("kafeler_merkez".to_owned()), 1, stamp),
+        (of_ad_hoc, None, 1, stamp),
+        (of_none, None, 1, stamp),
+    ];
+    expected.sort_by_key(|row| row.0);
+
+    // Up, twice: only the standing task's prospect learns its purpose; no revision or update
+    // time moves.
+    for _ in 0..2 {
+        try_run(&db.pool, &up).await.unwrap();
+        assert_eq!(purposes(&db.pool, ws).await, expected);
+    }
+    // A purpose is a key or nothing.
+    let mut tx = PlatformTx::begin(&db.pool).await.unwrap();
+    let refused = sqlx::query("update prospects set icp_key = 'Kafe Merkez' where id = $1")
+        .bind(of_none)
+        .execute(tx.conn())
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("prospects_icp_key_check"),
+        "{refused}"
+    );
+    drop(tx);
+
+    // Down, twice: the column goes, the rows stay.
+    for _ in 0..2 {
+        try_run(&db.pool, &down).await.unwrap();
+        assert!(!column_exists(&db.pool, ("prospects", "icp_key")).await);
+        assert!(!constraint_exists(&db.pool, "prospects_icp_key_check").await);
+    }
+    try_run(&db.pool, &up).await.unwrap();
+    assert!(constraint_exists(&db.pool, "prospects_icp_key_check").await);
+    assert_eq!(purposes(&db.pool, ws).await, expected);
 }

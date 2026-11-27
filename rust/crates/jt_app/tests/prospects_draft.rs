@@ -59,6 +59,7 @@ fn input() -> CreateInput {
             },
         }],
         notes: String::new(),
+        icp_key: None,
         research_task_id: None,
         discovered_at: vec![],
         distinct_from: vec![],

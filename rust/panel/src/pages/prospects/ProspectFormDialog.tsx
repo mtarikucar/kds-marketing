@@ -34,7 +34,7 @@ import {
   type DraftProblem,
   type ProspectDraft,
 } from './form';
-import type { SegmentOption } from './segments';
+import { usePoolPurposes, type SegmentOption } from './segments';
 
 const ENTITY_KINDS: readonly EntityKind[] = ['unknown_business', 'legal_entity', 'sole_trader'];
 
@@ -51,6 +51,7 @@ const PROBLEM_COPY: Record<DraftProblem, PoolCopyKey> = {
 const SERVER_FIELD: Record<string, DraftField> = {
   business_name: 'business_name',
   segment_key: 'segment_key',
+  icp_key: 'icp_key',
   sector: 'sector',
   city: 'city',
   district: 'district',
@@ -104,6 +105,8 @@ export function ProspectFormDialog({
   const [draft, setDraft] = useState<ProspectDraft>(() => draftOf(prospect, copy('sourceDefault')));
   const [tried, setTried] = useState(false);
   const [requestKey] = useState(newRequestKey);
+  // The purposes offered are the workspace's own ICP entries (and the one it holds now).
+  const purposes = usePoolPurposes([prospect?.icp_key ?? null], draft.icp_key);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -195,6 +198,18 @@ export function ProspectFormDialog({
                   <select id={id} className={selectClass} value={draft.segment_key} onChange={(e) => change('segment_key', e.target.value)}>
                     <option value="">{copy('fNoSegment')}</option>
                     {segments.map((s) => (
+                      <option key={s.key} value={s.key}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </Field>
+              <Field label={copy('fPurpose')} error={errorOf('icp_key')}>
+                {({ id }) => (
+                  <select id={id} className={selectClass} value={draft.icp_key} onChange={(e) => change('icp_key', e.target.value)}>
+                    <option value="">{copy('fNoSegment')}</option>
+                    {purposes.map((s) => (
                       <option key={s.key} value={s.key}>
                         {s.name}
                       </option>

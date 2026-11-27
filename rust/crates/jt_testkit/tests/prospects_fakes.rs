@@ -44,6 +44,12 @@ async fn list_filters_and_cursor() {
 }
 
 #[tokio::test]
+async fn the_purpose_filters_and_every_filter_counts() {
+    let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
+    jt_testkit::prospects_contract::the_purpose_filters_and_every_filter_counts(uow).await;
+}
+
+#[tokio::test]
 async fn delete_returns_keys_and_cascades_scores() {
     let uow = std::sync::Arc::new(jt_testkit::fakes::InMemoryUow::new());
     jt_testkit::prospects_contract::delete_returns_keys_and_cascades_scores(uow).await;

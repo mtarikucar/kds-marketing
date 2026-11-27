@@ -8,14 +8,14 @@
 //! Every count is computed from the rows (no counter to drift). Locks are not modelled: races are
 //! tested on PostgreSQL.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::prospects::{
-    BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, Page, Promoted,
+    BlockReason, BlocklistRepo, CountBy, Inserted, ListCursor, MAX_PROSPECT_PAGE, Page, Promoted,
     ProspectQuery, ProspectRepo, ProspectRow, ResearchTaskQuery, ResearchTaskRepo, ScoreRow,
-    TaskTally, Updated, is_key_fingerprint, is_key_hash, prospect_matches,
+    TaskTally, Updated, count_key, is_key_fingerprint, is_key_hash, prospect_matches,
 };
 use jt_inbox::PersonId;
 use jt_prospects::{
@@ -70,8 +70,8 @@ fn distinct(keys: &[Key]) -> Vec<Key> {
 }
 
 /// The checks of `prospects` and `prospect_keys` a written row and its keys meet: a decision
-/// exactly when rejected or do-not-contact (`prospects_decided_check`), keys of 1 to 400
-/// characters (`prospect_keys.value`).
+/// exactly when rejected or do-not-contact (`prospects_decided_check`), a purpose shaped like a
+/// key (`prospects_icp_key_check`), keys of 1 to 400 characters (`prospect_keys.value`).
 fn row_checks(p: &Prospect, keys: &[Key]) -> Result<(), AppError> {
     let decided = matches!(
         p.status,
@@ -80,6 +80,14 @@ fn row_checks(p: &Prospect, keys: &[Key]) -> Result<(), AppError> {
     if decided != p.decision.is_some() {
         return Err(AppError::internal(
             "prospects_decided_check: a decision exactly when rejected or do-not-contact",
+        ));
+    }
+    if p.icp_key
+        .as_deref()
+        .is_some_and(|k| jt_strategy::validate_segment_key(k).is_err())
+    {
+        return Err(AppError::internal(
+            "prospects_icp_key_check: a purpose is [a-z0-9_]{2,32}",
         ));
     }
     if keys
@@ -283,6 +291,24 @@ impl ProspectRepo for MemTenant {
             None
         };
         Ok(Page { items, next })
+    }
+
+    async fn count_by(
+        &mut self,
+        q: &ProspectQuery,
+        by: CountBy,
+    ) -> Result<Vec<(Option<String>, u32)>, AppError> {
+        let ws = self.ws;
+        let mut counts: BTreeMap<Option<String>, u32> = BTreeMap::new();
+        for p in self
+            .pool()
+            .prospects
+            .iter()
+            .filter(|p| p.workspace_id == ws && prospect_matches(p, q))
+        {
+            *counts.entry(count_key(p, by)).or_default() += 1;
+        }
+        Ok(counts.into_iter().collect())
     }
 
     async fn find_by_keys(&mut self, keys: &[Key]) -> Result<Vec<(KeyKind, ProspectId)>, AppError> {

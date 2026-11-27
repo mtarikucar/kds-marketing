@@ -192,9 +192,34 @@ fn task_kind_is_tagged_by_type() {
         .unwrap(),
         serde_json::json!({"type": "standing", "icp_key": "kafeler_ist"})
     );
+    // An ad-hoc task that names no ICP entry is stored as before; one that does carries it.
     assert_eq!(
-        serde_json::to_value(TaskKind::AdHoc { target_count: 20 }).unwrap(),
+        serde_json::to_value(TaskKind::AdHoc {
+            target_count: 20,
+            icp_key: None
+        })
+        .unwrap(),
         serde_json::json!({"type": "ad_hoc", "target_count": 20})
+    );
+    let named = TaskKind::AdHoc {
+        target_count: 20,
+        icp_key: Some("kafeler_ist".into()),
+    };
+    assert_eq!(
+        serde_json::to_value(&named).unwrap(),
+        serde_json::json!({"type": "ad_hoc", "target_count": 20, "icp_key": "kafeler_ist"})
+    );
+    // A task stored before the purpose existed reads as naming none.
+    let stored: TaskKind =
+        serde_json::from_value(serde_json::json!({"type": "ad_hoc", "target_count": 5})).unwrap();
+    assert_eq!(stored.icp_key(), None);
+    assert_eq!(named.icp_key(), Some("kafeler_ist"));
+    assert_eq!(
+        TaskKind::Standing {
+            icp_key: "kafeler_ist".into()
+        }
+        .icp_key(),
+        Some("kafeler_ist")
     );
     let keys: Vec<&str> = [
         TaskStatus::Open,
@@ -210,8 +235,10 @@ fn task_kind_is_tagged_by_type() {
 
 #[test]
 fn the_playbook_is_versioned_english_text() {
-    assert_eq!(playbook::PLAYBOOK_VERSION, 2);
-    assert!(playbook::TEXT.starts_with("JEETA PROSPECTING PLAYBOOK v2\n"));
+    assert_eq!(playbook::PLAYBOOK_VERSION, 3);
+    assert!(playbook::TEXT.starts_with("JEETA PROSPECTING PLAYBOOK v3\n"));
     assert!(playbook::TEXT.contains("jeeta.prospects.check"));
+    // The purpose a prospect is recorded for: its task's ICP entry, else the agent's icp_key.
+    assert!(playbook::TEXT.contains("icp_key"));
     assert!(!playbook::TEXT.ends_with('\n'));
 }

@@ -125,6 +125,7 @@ fn ad_hoc(target_count: u16, daily_cap: u16) -> CreateInput {
         brief: brief(),
         target_count,
         daily_cap,
+        icp_key: None,
         request_key: None,
     }
 }
@@ -162,6 +163,7 @@ fn prospect(name: &str, phone: &str, task: Option<ResearchTaskId>) -> ProspectIn
         size: None,
         signals: vec![],
         notes: String::new(),
+        icp_key: None,
         research_task_id: task,
         discovered_at: vec![],
         distinct_from: vec![],
@@ -351,7 +353,13 @@ async fn ad_hoc_tasks_need_prospecting_and_a_valid_brief() {
     let out = research::tasks_create(&w.deps, &agent, ad_hoc(10, 5))
         .await
         .unwrap();
-    assert_eq!(out.task.kind, TaskKind::AdHoc { target_count: 10 });
+    assert_eq!(
+        out.task.kind,
+        TaskKind::AdHoc {
+            target_count: 10,
+            icp_key: None
+        }
+    );
     assert!(out.task.created_by.is_agent());
     assert_eq!(out.task.rubric_digest, prospects::rubric_digest(&rubric()));
     assert_eq!(out.remaining_today, 5);
@@ -771,4 +779,74 @@ async fn found_today_counts_the_workspaces_local_day_only() {
     let item = page.items.iter().find(|x| x.task.id == task.id).unwrap();
     assert_eq!((item.found, item.found_today), (1, 0));
     assert_eq!(item.remaining_today, 5, "a new day, the whole cap");
+}
+
+#[tokio::test]
+async fn an_ad_hoc_task_may_serve_an_icp_entry_and_its_prospects_take_it_as_their_purpose() {
+    let w = active_world().await;
+    approve(&w, 1, vec![entry("kafeler", 20, 0)]).await;
+    let agent = w.agent(&["prospects.work"]).await;
+    // An entry the approved strategy does not hold is refused.
+    let mut unknown = ad_hoc(10, 5);
+    unknown.icp_key = Some("yok_boyle".into());
+    let e = err(research::tasks_create(&w.deps, &agent, unknown).await);
+    assert_invalid(&e, "icp_key");
+    assert_eq!(e.details["reason"], "unknown_icp_entry");
+    // A brief that names another segment than the entry's contradicts it.
+    let mut contradicted = ad_hoc(10, 5);
+    contradicted.icp_key = Some("kafeler".into());
+    contradicted.brief.segment_key = Some("pastaneler".into());
+    let e = err(research::tasks_create(&w.deps, &agent, contradicted).await);
+    assert_invalid(&e, "segment_key");
+    assert_eq!(e.details["reason"], "not_the_entrys_segment");
+    // Named, the task keeps the entry and a brief without a segment takes the entry's.
+    let mut named = ad_hoc(10, 5);
+    named.icp_key = Some("kafeler".into());
+    named.brief.segment_key = None;
+    let out = research::tasks_create(&w.deps, &agent, named)
+        .await
+        .unwrap();
+    assert_eq!(
+        out.task.kind,
+        TaskKind::AdHoc {
+            target_count: 10,
+            icp_key: Some("kafeler".into())
+        }
+    );
+    assert_eq!(out.task.brief.segment_key.as_deref(), Some("kafeler"));
+    // What is recorded for it is sought for that entry; naming another is refused.
+    let p = prospects::create(
+        &w.deps,
+        &agent,
+        prospect("Örnek Kafe", "0500 000 00 41", Some(out.task.id)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(p.prospect.icp_key.as_deref(), Some("kafeler"));
+    let mut other = prospect("Örnek Kafe 2", "0500 000 00 42", Some(out.task.id));
+    other.icp_key = Some("baska_kapi".into());
+    let e = err(prospects::create(&w.deps, &agent, other).await);
+    assert_invalid(&e, "icp_key");
+    assert_eq!(e.details["reason"], "not_the_tasks_entry");
+    // A standing task gives its own entry, and the playbook names it for both tasks.
+    plan(&w, FIXED_NOW).await;
+    let standing = tasks(&w)
+        .into_iter()
+        .find(|t| matches!(t.kind, TaskKind::Standing { .. }))
+        .unwrap();
+    let p = prospects::create(
+        &w.deps,
+        &agent,
+        prospect("Örnek Kafe 3", "0500 000 00 43", Some(standing.id)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(p.prospect.icp_key.as_deref(), Some("kafeler"));
+    let book = prospects::playbook(&w.deps, &agent).await.unwrap();
+    assert!(
+        book.workspace
+            .remaining_today
+            .iter()
+            .all(|r| r.icp_key.as_deref() == Some("kafeler"))
+    );
 }

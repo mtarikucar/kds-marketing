@@ -113,6 +113,7 @@ fn prospect(name: &str, phone: &str) -> CreateInput {
         size: None,
         signals: vec![],
         notes: String::new(),
+        icp_key: None,
         research_task_id: None,
         discovered_at: vec![],
         distinct_from: vec![],

@@ -91,4 +91,18 @@ describe('prospect form', () => {
       clear: ['district', 'labels', 'email'],
     });
   });
+
+  it('sets_and_clears_the_purpose_like_the_audience', () => {
+    const p = prospect(1);
+    const source = 'Fuarda kartvizit aldım';
+    expect(draftOf(p, source).icp_key).toBe('kafeler_izmir');
+    expect(updateBody(p, { ...draftOf(p, source), icp_key: 'okul_isbirligi' }, AT)).toEqual({
+      expected_revision: 3,
+      set: { icp_key: 'okul_isbirligi' },
+      clear: [],
+    });
+    expect(updateBody(p, { ...draftOf(p, source), icp_key: '' }, AT)).toEqual({ expected_revision: 3, set: {}, clear: ['icp_key'] });
+    const body = createBody({ ...draftOf(undefined, source), business_name: 'Örnek', icp_key: 'okul_isbirligi' }, AT, 'k');
+    expect(body.icp_key).toBe('okul_isbirligi');
+  });
 });

@@ -205,6 +205,7 @@ async fn promoted_in(w: &World, city: &str, phone: &str) -> JourneyId {
             size: None,
             signals: vec![],
             notes: String::new(),
+            icp_key: None,
             research_task_id: None,
             discovered_at: vec![],
             distinct_from: vec![],

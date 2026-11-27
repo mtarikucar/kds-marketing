@@ -239,6 +239,7 @@ async fn qualified_prospect(w: &World, name: &str, email: &str) -> jt_prospects:
             size: None,
             signals: vec![],
             notes: String::new(),
+            icp_key: None,
             research_task_id: None,
             discovered_at: vec![],
             distinct_from: vec![],

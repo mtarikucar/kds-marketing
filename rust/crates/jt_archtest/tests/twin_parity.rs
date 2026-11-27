@@ -4460,6 +4460,44 @@ async fn prospects_answer_the_same_over_the_panel_and_mcp() {
     .await;
     assert_eq!(human, agent);
     assert_eq!(human["items"].as_array().unwrap().len(), 1);
+    assert!(human.get("counts").is_none(), "counts only when asked");
+
+    // With counts, both surfaces count every class alike; a prospect nobody gave a purpose is
+    // counted without one.
+    let resp = send(
+        &app,
+        panel(
+            Method::GET,
+            "/api/prospects?limit=10&counts=true",
+            Some(&cookie),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let human = json_body(resp).await;
+    let agent = call_tool(
+        &app,
+        &key,
+        &session,
+        "jeeta.prospects.list",
+        json!({ "limit": 10, "counts": true }),
+    )
+    .await;
+    assert_eq!(human, agent);
+    assert_eq!(human["counts"]["total"], 1);
+    assert_eq!(
+        human["counts"]["city"],
+        json!([{ "key": "İstanbul", "count": 1 }])
+    );
+    assert_eq!(
+        human["counts"]["icp_key"],
+        json!([{ "key": null, "count": 1 }])
+    );
+    assert_eq!(
+        human["counts"]["status"],
+        json!([{ "key": "new", "count": 1 }])
+    );
 
     let check = json!({ "phone": "+90 500 000 00 00" });
     let resp = send(

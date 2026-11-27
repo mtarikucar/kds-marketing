@@ -13,7 +13,8 @@
 //!
 //! A prospect is grouped by its record (a promoted prospect is never edited or scored again, so
 //! its record is its snapshot at promotion): its source (`origin.via`), research task, segment,
-//! sector, city, score bucket (the promotion's, else the latest score's) or rubric digest.
+//! purpose (`icp_key`), sector, city, score bucket (the promotion's, else the latest score's) or
+//! rubric digest.
 
 use std::collections::BTreeMap;
 
@@ -39,6 +40,8 @@ pub enum GroupBy {
     Source,
     ResearchTask,
     Segment,
+    /// The ICP entry a prospect was sought for (`icp_key`).
+    Purpose,
     Sector,
     City,
     ScoreBucket,
@@ -109,6 +112,7 @@ fn key_of(p: &Prospect, by: GroupBy) -> Option<String> {
             .and_then(|v| v.as_str().map(str::to_owned)),
         GroupBy::ResearchTask => p.research_task_id.map(|t| t.to_string()),
         GroupBy::Segment => p.segment_key.clone(),
+        GroupBy::Purpose => p.icp_key.clone(),
         GroupBy::Sector => p.sector.clone(),
         GroupBy::City => p.city.clone(),
         GroupBy::ScoreBucket => p

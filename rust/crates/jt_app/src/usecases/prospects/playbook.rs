@@ -2,7 +2,7 @@
 //! pool's pending work (spec §3.17: `research_due`, `prospects_to_score`,
 //! `prospects_to_promote`).
 
-use jt_prospects::{KeyKind, ResearchTaskId, TaskKind};
+use jt_prospects::{KeyKind, ResearchTaskId};
 use jt_strategy::{IcpEntry, Rubric, StrategyVersion};
 use jt_tenancy::Permission;
 use serde::Serialize;
@@ -34,7 +34,7 @@ pub struct Caps {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TaskRemaining {
     pub task_id: ResearchTaskId,
-    /// The ICP entry of a standing task.
+    /// The ICP entry the task serves: a standing task's, the one an ad-hoc task names.
     pub icp_key: Option<String>,
     pub remaining: u32,
 }
@@ -95,10 +95,7 @@ pub async fn playbook(deps: &Deps, ctx: &Ctx) -> Result<PlaybookOut, AppError> {
         let left = remaining(r.as_mut(), &policy.timezone, &t, version.as_ref(), ctx.now).await?;
         tasks.push(TaskRemaining {
             task_id: t.id,
-            icp_key: match &t.kind {
-                TaskKind::Standing { icp_key } => Some(icp_key.clone()),
-                TaskKind::AdHoc { .. } => None,
-            },
+            icp_key: t.kind.icp_key().map(str::to_owned),
             remaining: left,
         });
     }

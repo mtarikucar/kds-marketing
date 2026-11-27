@@ -196,8 +196,25 @@ pub fn remaining_today(c: &Capacity) -> u32 {
 pub enum TaskKind {
     /// One per ICP entry of the approved strategy version, kept open by the planning job.
     Standing { icp_key: String },
-    /// Asked for by a person or an agent: done when `target_count` (`1..=500`) are found.
-    AdHoc { target_count: u16 },
+    /// Asked for by a person or an agent: done when `target_count` (`1..=500`) are found. It may
+    /// name the ICP entry it serves (`icp_key`), which its prospects then take as their purpose;
+    /// a task stored before 2026-11-27 names none.
+    AdHoc {
+        target_count: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icp_key: Option<String>,
+    },
+}
+
+impl TaskKind {
+    /// The ICP entry the task's prospects are sought for: a standing task's own, the one an
+    /// ad-hoc task names, if any.
+    pub fn icp_key(&self) -> Option<&str> {
+        match self {
+            TaskKind::Standing { icp_key } => Some(icp_key.as_str()),
+            TaskKind::AdHoc { icp_key, .. } => icp_key.as_deref(),
+        }
+    }
 }
 
 /// A research task's state.

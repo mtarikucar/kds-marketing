@@ -35,8 +35,8 @@ pub use blocklist::{
 pub use dedupe::Flag;
 pub use playbook::{PlaybookOut, playbook};
 pub use pool::{
-    CheckInput, CheckOut, DuplicateCandidate, GetOut, ListInput, ListOut, NextPage, ProspectOut,
-    check, create, get, list, update,
+    CheckInput, CheckOut, CountOut, DuplicateCandidate, GetOut, ListInput, ListOut, NextPage,
+    PoolCounts, ProspectOut, check, create, get, list, update,
 };
 pub use promote::{
     MAX_PROMOTE_BATCH, PromoteInput, PromoteOut, PromoteOutcome, ProspectSummary, promote,

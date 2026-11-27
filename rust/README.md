@@ -138,6 +138,7 @@ döndürür. `0001`–`0032` arasında otuz iki göç vardır:
 | `0053_studio_brand` | Composed posts (`studio.post_render`): `studio_brand`, one row per workspace holding its brand tokens (colours, the two bundled fonts, brand name, logo material) as validated JSON with a `revision`; forced RLS; 114 tables. No row means the neutral defaults. Down drops the table: composed posts go back to the defaults, composed materials keep their files and `composition`. |
 | `0054_composed_material_analysis` | A composed material (`studio.post_render`, `data ? 'composition'`) is created analysed; this marks the analysis of every live composed material complete (its fields kept as its own, any lease ended), so it no longer shows as agents' analysis work. Uploads are untouched; no table. Down changes nothing. |
 | `0055_message_media` | Chat files (`usecases::inbox::media`): `message_media`, one row per image or document a chat message carries (a customer's WhatsApp file `pending` with the provider's media id when its message is consumed, `stored` once the `inbox_media` job fetched and checked it, `failed` with why, `deleted` once its bytes went by retention or erasure; the bytes live in the file store, never here); forced RLS; 115 tables. Additive. Down drops the table (the files left in the store go with the store's daily sweep), and is refused while an outbox entry waiting to be sent carries an image (`intent.media`). |
+| `0057_prospect_purpose` | A prospect's purpose (owner request 2026-11-27): `prospects.icp_key`, the ICP entry (the "sales door") the business was sought for, with its check `prospects_icp_key_check` (`[a-z0-9_]{2,32}`). Backfills only what is certain: a prospect recorded for a standing research task takes that task's entry; one of an ad-hoc task or of none keeps none. Neither revision nor `updated_at` moves. Down drops the column and its check. No new table. |
 
 `0008` geri alınırken mevcut `mail` olayları korunur: hiç mail satırı yoksa sağlayıcı CHECK'i
 `meta/netgsm/x` değerlerine döner; mail satırı varsa genişletilmiş CHECK kalır. Bu koşullu geri
@@ -2798,6 +2799,18 @@ never values. Gated by the strategy, except do-not-contact and erasure, which ru
 status (an objection is always recordable); `prospects.work` (`prospects.manage` where noted),
 which the rep role does not hold.
 
+A prospect is classified by its segment (`segment_key`, what kind of business) and its **purpose**
+(`icp_key`, since `0057`: the ICP entry, the "sales door", it was sought for). `prospects.create`
+takes the purpose from the research task (a standing task's entry, the entry an ad-hoc task names;
+an `icp_key` given with such a task must be it: `not_the_tasks_entry`), or outside a task from the
+`icp_key` given, which must be an entry of the approved ICP (`unknown_icp_entry`); a person may set
+or clear it with `prospects.update`. Nothing is guessed: a prospect nobody gave a purpose has none.
+`prospects.list` filters by it and, with `counts: true`, answers how many prospects each value of
+every filter holds (status, segment, purpose, score bucket, city, research task), each counted under
+the other filters; `prospects.get` answers the research task the prospect was recorded for and the
+rubric its latest score was computed under (`scored_under`: criteria, descriptions, weights,
+`qualify_at`), so a reader sees where it came from and what it advanced on.
+
 In the panel (since 2026-11-10) the pool is one screen, the list on the left and the open prospect
 beside it (`/prospects/{id}`), and a prospect's first contact is one action, "Mesaj gönder", built
 from the rows below and adding no use case: it qualifies a new prospect, promotes it
@@ -2815,8 +2828,8 @@ from the panel; `prospects.promote` itself is unchanged for agents and keys.
 | `prospects.check` | `POST /api/prospects/check` | `jeeta.prospects.check` | READ | `{ok, flags}` or the refusal create would meet; writes nothing |
 | `prospects.create` | `POST /api/prospects` | `jeeta.prospects.create` | WRITE | one business with evidence per field; `{prospect, flags}`; `request_key` replays the recorded prospect 24 h |
 | `prospects.update` | `PATCH /api/prospects/{prospect_id}` | `jeeta.prospects.update` | WRITE | `{expected_revision, set, clear, distinct_from}`; new keys re-checked |
-| `prospects.list` | `GET /api/prospects` | `jeeta.prospects.list` | READ | filters, newest first, no contact values |
-| `prospects.get` | `GET /api/prospects/{prospect_id}` | `jeeta.prospects.get` | READ | evidence, latest 20 scores, duplicate candidates, history |
+| `prospects.list` | `GET /api/prospects` | `jeeta.prospects.list` | READ | filters (status, task, city, segment, purpose `icp_key`, bucket), newest first, no contact values; `counts=true` adds each filter's values with their counts |
+| `prospects.get` | `GET /api/prospects/{prospect_id}` | `jeeta.prospects.get` | READ | evidence, latest 20 scores and the rubric of the latest (`scored_under`), its research task, duplicate candidates, history |
 | `prospects.score` | `POST /api/prospects/{prospect_id}/scores` | `jeeta.prospects.score` | WRITE | under the approved rubric's digest; `qualify_at` qualifies |
 | `prospects.decide` | `POST /api/prospects/{prospect_id}/decision` | `jeeta.prospects.decide` | WRITE | qualify, reject (fixed reasons), reopen (a person with `prospects.manage`) |
 | `prospects.do_not_contact` | `POST /api/prospects/do-not-contact` | `jeeta.prospects.do_not_contact` | DESTRUCTIVE | `confirm`; a prospect (scrubbed, scores deleted) or raw hard keys (their holders marked too); agents too; any workspace status |
@@ -2825,7 +2838,7 @@ from the panel; `prospects.promote` itself is unchanged for agents and keys.
 | `prospects.settings_get` | `GET /api/prospects/settings` | `jeeta.prospects.settings_get` | READ | time zone, retention, promotion cap |
 | `prospects.settings_set` | `PUT /api/prospects/settings` | `jeeta.prospects.settings_set` | WRITE | `prospects.manage`; bounded; stores only the keys given |
 | `prospects.promote` | `POST /api/prospects/promote` | `jeeta.prospects.promote` | WRITE | 1 to 50, each in its own transaction; also `inbox.work`; a person, an identity per deliverable phone and email, a business recipient, a journey of source `prospect`, no consent; distributed at once; one outcome per prospect; `prospects_to_promote` in `work.pending` |
-| `prospects.report` | `GET /api/prospects/report` | `jeeta.prospects.report` | READ | `?from&to&group_by` (`[from, to)`, RFC 3339, at most 366 days); computed at read time; per group the prospects created in the range (created, scored, qualified, rejected by reason) and those promoted in it (contacted, replied, meetings, quoted, won, lost by reason, won revenue per currency, never summed across currencies, and the funnel's rates); grouped by the record at promotion (source, research task, segment, sector, city, score bucket, rubric digest) |
+| `prospects.report` | `GET /api/prospects/report` | `jeeta.prospects.report` | READ | `?from&to&group_by` (`[from, to)`, RFC 3339, at most 366 days); computed at read time; per group the prospects created in the range (created, scored, qualified, rejected by reason) and those promoted in it (contacted, replied, meetings, quoted, won, lost by reason, won revenue per currency, never summed across currencies, and the funnel's rates); grouped by the record at promotion (source, research task, segment, purpose, sector, city, score bucket, rubric digest) |
 
 #### Research tasks (`jeeta.research.*`, leads L2)
 
@@ -2845,7 +2858,7 @@ without a score under the approved rubric) to keys with `prospects.work`. Gated 
 |---|---|---|---|---|
 | `research.tasks_list` | `GET /api/research/tasks` | `jeeta.research.tasks_list` | READ | `?status&limit&before_at&before_id`; each `{task, remaining_today}` |
 | `research.tasks_get` | `GET /api/research/tasks/{task_id}` | `jeeta.research.tasks_get` | READ | the task, `remaining_today`, `found` and its 20 newest prospects (rows) |
-| `research.tasks_create` | `POST /api/research/tasks` | `jeeta.research.tasks_create` | WRITE | an ad-hoc `{brief, target_count, daily_cap}`; `prospecting_off` without ICP; `request_key` replays 24 h |
+| `research.tasks_create` | `POST /api/research/tasks` | `jeeta.research.tasks_create` | WRITE | an ad-hoc `{brief, target_count, daily_cap, icp_key?}` (the ICP entry it serves; its prospects take it as their purpose); `prospecting_off` without ICP; `request_key` replays 24 h |
 | `research.tasks_claim` | `POST /api/research/tasks/{task_id}/claim` | `jeeta.research.tasks_claim` | WRITE | two hours; another recorder's live claim is answered (`held_by_other`), never taken |
 | `research.tasks_close` | `POST /api/research/tasks/{task_id}/close` | `jeeta.research.tasks_close` | WRITE | an ad-hoc task, `done` or `canceled`; a standing one is `standing_task` |
 

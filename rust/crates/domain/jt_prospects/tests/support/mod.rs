@@ -48,6 +48,7 @@ pub fn input() -> CreateInput {
         district: Some("Kadıköy".into()),
         language: Some("tr".into()),
         segment_key: Some("kafeler".into()),
+        icp_key: None,
         country: None,
         labels: vec![],
         phone: Some(field("0500 000 00 00".into())),
