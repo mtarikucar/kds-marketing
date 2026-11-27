@@ -1594,7 +1594,7 @@ async fn judge(
                 }),
             ) = (s.human_priced, &s.bargain)
             else {
-                return Ok(Verdict::None);
+                return Ok((Verdict::None, None));
             };
             discounted_text = discount_message(text, *price, &s.currency, &s.cards, year);
             (
