@@ -255,9 +255,6 @@ pub(crate) struct AutoSend<'a> {
     pub activity_revision: i64,
     /// The quote it delivers, when it is one.
     pub quote: Option<&'a crate::ports::compliance::QuoteRow>,
-    /// A hand-over's line to the customer: written as the system's (a person holds the
-    /// conversation from now on), for the generation the hand-over left.
-    pub handing_over: bool,
 }
 
 /// A test email's facts (spec 2026-10-30-leads-pool-outreach-design.md §7.1
@@ -508,8 +505,7 @@ pub(crate) async fn enqueue_in(
     let j = lock_current_journey(r, c.person_id).await?;
     let author = match (ctx.actor.clone(), auto) {
         // An automatic reply is the agent's: a person's hold stops it as it stops an agent's.
-        (_, Some(a)) if !a.handing_over => Author::Agent,
-        (_, Some(_)) => Author::System,
+        (_, Some(_)) => Author::Agent,
         (Actor::Human { user_id }, None) => Author::Human(user_id),
         (Actor::Agent { .. }, None) => Author::Agent,
         (Actor::System { .. }, None) => Author::System,
@@ -630,7 +626,6 @@ pub(crate) async fn enqueue_in(
             intent["auto_reply"] = json!({
                 "run_id": a.run_id,
                 "activity_revision": a.activity_revision,
-                "handing_over": a.handing_over,
             });
             if let Some(quote) = a.quote {
                 intent["quote_id"] = json!(quote.id);
@@ -2062,8 +2057,9 @@ async fn record_result_with(
                 )
                 .await?;
             } else if !row.conversation_merged
-                // A hand-over's line to the customer leaves the conversation owed to the person
-                // it went to (`autoreply`): it does not answer the customer.
+                // A hand-over's line to the customer, queued while hand-overs still gave the
+                // conversation to a person, leaves it owed to that person: it does not answer the
+                // customer.
                 && row.intent["auto_reply"]["handing_over"] != true
             {
                 // Coalesced sends reconcile receipts and journeys but never conversation activity,

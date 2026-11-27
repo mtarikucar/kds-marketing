@@ -16,6 +16,11 @@ const ASSEMBLED = new Set(['inbox.response_sla', 'inbox.snooze_wake']);
  * §7.4, PR 2: the frame apply). Remove a name once the server writes it.
  */
 const COMING = new Set(['strategy.frame_applied']);
+/**
+ * Actions the server wrote before and no longer writes, still in the ledger: an automatic
+ * hand-over, before the agent kept every conversation (`inbox.autoreply.needs_owner` since).
+ */
+const RETIRED = new Set(['inbox.autoreply.handed_over']);
 
 function rustSources(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
@@ -35,7 +40,7 @@ describe('the home log’s wording of ledger actions', () => {
   it('words only actions the server names', () => {
     const source = rustSources(USE_CASES).join('\n');
     const codes = [...new Set(actionCodes.tr.map(code => code.split(':')[0]))];
-    expect(codes.filter(code => !ASSEMBLED.has(code) && !COMING.has(code) && !source.includes(`"${code}"`))).toEqual([]);
+    expect(codes.filter(code => !ASSEMBLED.has(code) && !COMING.has(code) && !RETIRED.has(code) && !source.includes(`"${code}"`))).toEqual([]);
   });
 
   it('words a send result by how it ended', () => {

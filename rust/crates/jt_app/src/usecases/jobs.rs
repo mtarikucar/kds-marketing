@@ -1903,8 +1903,8 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                     if super::inbox::autoreply::not_waiting(deps, r.as_mut(), &c, now).await? {
                         continue;
                     }
-                    // While the agent keeps every conversation, a served one is never handed
-                    // over: the owner is asked instead, once.
+                    // The agent keeps every conversation the automatic replies serve: the owner is
+                    // asked instead, once.
                     if super::inbox::autoreply::kept_overdue(deps, &ctx, r.as_mut(), &c).await? {
                         continue;
                     }
@@ -1913,11 +1913,8 @@ async fn run_inbox_timer(deps: &Deps, now: OffsetDateTime, job: Job) -> JobRepor
                         .open_for(c.person_id)
                         .await?
                         .and_then(|j| j.owner);
-                    let generation = r
-                        .conversations()
+                    r.conversations()
                         .update_executor(c.id, Executor::Human { user_id: owner })
-                        .await?;
-                    super::inbox::autoreply::handed_by_job(deps, r.as_mut(), &c, generation, now)
                         .await?;
                     if let Some((deadline, item_id)) = due {
                         super::inbox::record(

@@ -199,8 +199,6 @@ function AutoReplyField({
   onNotify,
   discount,
   onDiscount,
-  keeps,
-  onKeeps,
   invalid,
 }: {
   auto: AutoReplyView;
@@ -214,8 +212,6 @@ function AutoReplyField({
   onNotify: (on: boolean) => void;
   discount: [number, number];
   onDiscount: (discount: [number, number]) => void;
-  keeps: boolean;
-  onKeeps: (on: boolean) => void;
   invalid: boolean;
 }) {
   const { t } = useTranslation();
@@ -271,15 +267,6 @@ function AutoReplyField({
         </div>
       )}
       {on && <p className="text-caption text-muted-foreground">{t('knowledge.rules.dialog.autoReplyHelp')}</p>}
-      {on && (
-        <div className="flex flex-col gap-1">
-          <label className="flex items-center gap-2 text-sm">
-            <Switch checked={keeps} onCheckedChange={onKeeps} disabled={!auto.available} aria-describedby="knowledge-auto-keeps-help" />
-            {t('knowledge.rules.dialog.keeps')}
-          </label>
-          <p id="knowledge-auto-keeps-help" className="text-caption text-muted-foreground">{t('knowledge.rules.dialog.keepsHelp')}</p>
-        </div>
-      )}
       {on && auto.notify.available && (
         <label className="flex items-center gap-2 text-sm">
           <Checkbox checked={notify} onCheckedChange={(v) => onNotify(v === true)} />
@@ -341,7 +328,6 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
   const [autoInvalid, setAutoInvalid] = useState(false);
   const [notify, setNotify] = useState(true);
   const [discount, setDiscount] = useState<[number, number]>([0, 0]);
-  const [keeps, setKeeps] = useState(false);
   const showMessage = !!base.message_cap || base.metered;
 
   const save = useKnowledgeMutation(
@@ -371,7 +357,6 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
     setAutoMax(from.auto_reply.price?.max_minor ?? null);
     setNotify(from.auto_reply.notify.on);
     setDiscount([from.auto_reply.discount_preferred_pct, from.auto_reply.discount_max_pct]);
-    setKeeps(from.auto_reply.keeps_conversations ?? false);
   };
 
   // The rules as read each time the dialog opens; a later read leaves the person's edits alone.
@@ -435,9 +420,6 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
         discount_preferred_pct: discount[0],
         discount_max_pct: discount[1],
       };
-    }
-    if (keeps !== (stored.keeps_conversations ?? false)) {
-      input.auto_reply = { ...(input.auto_reply ?? { capability_ids: autoIds }), keeps_conversations: keeps };
     }
     save.mutate(input);
   };
@@ -523,8 +505,6 @@ function RulesDialog({ rules, open, onOpenChange }: { rules: RulesOut; open: boo
               onNotify={setNotify}
               discount={discount}
               onDiscount={setDiscount}
-              keeps={keeps}
-              onKeeps={setKeeps}
               invalid={autoInvalid}
             />
           )}

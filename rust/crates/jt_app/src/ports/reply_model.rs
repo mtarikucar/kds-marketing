@@ -375,10 +375,10 @@ pub struct QueueRow {
     /// up to then is handled); the job's sweep schedules a newer one left without.
     pub handled_at: Option<OffsetDateTime>,
     /// The last automatic hand-over (the automatic replies, the server or the response-time
-    /// job): the executor generation it wrote and when. While the conversation is still at that
-    /// generation and no person wrote since, a person does not hold it: the customer's next
-    /// message brings the assistant back. Written only by [`AutoReplyRepo::handover_mark`];
-    /// [`AutoReplyRepo::queue_save`] keeps it as stored.
+    /// job), from before the agent kept every conversation: the executor generation it wrote and
+    /// when. While the conversation is still at that generation and no person wrote since, a
+    /// person does not hold it: the customer's next message brings the assistant back. Written
+    /// only by [`AutoReplyRepo::handover_mark`]; [`AutoReplyRepo::queue_save`] keeps it as stored.
     pub auto_handed_generation: Option<u32>,
     pub auto_handed_at: Option<OffsetDateTime>,
     /// When the owner was last told of an automatic hand-over (its notice) and the customer
@@ -526,7 +526,7 @@ impl OrderState {
     }
 }
 
-/// While the agent keeps every conversation (`AutoReply::keeps`): what the automatic replies
+/// The agent keeps every conversation (`usecases::inbox::autoreply`): what the automatic replies
 /// asked the owner about in one conversation, for one reason (`0056_auto_reply_owner_items`). The
 /// open item itself is a task on the person's journey ([`OwnerItem::task_id`]); this row ties it to
 /// the conversation, so one reason asks once until the task is done. Codes and ids only.
@@ -599,7 +599,8 @@ pub trait AutoReplyRepo: Send + Sync {
     /// Records an automatic hand-over of conversation `id` at `at` (making its queue row when
     /// there is none): `generation`, the executor generation it wrote, when the assistant may come
     /// back from it (none: a person finishes it); with `told`, that the owner was told of it then,
-    /// for that reason.
+    /// for that reason. The server makes none any more (the agent keeps every conversation): the
+    /// marks stored before still bring the assistant back, and this writes them as they were.
     async fn handover_mark(
         &mut self,
         id: ConversationId,

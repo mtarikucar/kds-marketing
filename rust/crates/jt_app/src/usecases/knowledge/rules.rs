@@ -348,10 +348,6 @@ async fn auto_reply_of(
         },
         discount_preferred_pct,
         discount_max_pct,
-        // Off unless turned on; none in the input keeps the stored setting.
-        keeps_conversations: input
-            .keeps_conversations
-            .unwrap_or_else(|| stored.is_some_and(AutoReply::keeps)),
     }))
 }
 

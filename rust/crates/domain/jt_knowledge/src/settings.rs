@@ -304,11 +304,6 @@ pub struct AutoReply {
         deserialize_with = "lenient_pct"
     )]
     pub discount_max_pct: u8,
-    /// The agent keeps every conversation (`usecases::inbox::autoreply`, "keep"): where the
-    /// automatic replies would hand a conversation to a person, it stays the agent's and the owner
-    /// is asked instead (an open task). Off unless turned on, and stored only while on.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub keeps_conversations: bool,
 }
 
 fn is_zero(n: &u8) -> bool {
@@ -356,11 +351,6 @@ impl AutoReply {
     pub fn notifies(&self) -> bool {
         self.notify_email != Some(false)
     }
-
-    /// Whether the agent keeps every conversation: a hand-over never changes who holds one.
-    pub fn keeps(&self) -> bool {
-        self.keeps_conversations
-    }
 }
 
 /// The automatic replies as a person writes them: the capabilities, and the range (required while
@@ -382,9 +372,6 @@ pub struct AutoReplyInput {
     pub discount_preferred_pct: Option<u8>,
     #[serde(default)]
     pub discount_max_pct: Option<u8>,
-    /// The agent keeps every conversation, on or off; none keeps the stored setting.
-    #[serde(default)]
-    pub keeps_conversations: Option<bool>,
 }
 
 /// The bargaining discount `input` sets, over `stored` (preferred, largest): each at most
@@ -480,29 +467,25 @@ mod auto_reply_tests {
             notify_email: None,
             discount_preferred_pct: None,
             discount_max_pct: None,
-            keeps_conversations: None,
         }
     }
 
     #[test]
-    fn keeping_every_conversation_is_off_unless_stored_on_and_stored_only_while_on() {
-        let off: AutoReply =
-            serde_json::from_value(json!({"capability_ids": [], "quote_valid_days": 7})).unwrap();
-        assert!(!off.keeps());
-        assert!(
-            serde_json::to_value(&off)
-                .unwrap()
-                .get("keeps_conversations")
-                .is_none(),
-            "a workspace that never turned it on stores nothing new"
-        );
-        let on = AutoReply {
-            keeps_conversations: true,
-            ..off
-        };
-        let stored = serde_json::to_value(&on).unwrap();
-        assert_eq!(stored["keeps_conversations"], true);
-        assert!(serde_json::from_value::<AutoReply>(stored).unwrap().keeps());
+    fn the_retired_keep_setting_still_reads_and_is_not_stored_again() {
+        // Stored while the agent's keeping every conversation was a setting; it is how every
+        // workspace works now (`usecases::inbox::autoreply`).
+        for on in [true, false] {
+            let stored: AutoReply = serde_json::from_value(json!({
+                "capability_ids": [], "quote_valid_days": 7, "keeps_conversations": on
+            }))
+            .unwrap();
+            assert!(
+                serde_json::to_value(&stored)
+                    .unwrap()
+                    .get("keeps_conversations")
+                    .is_none()
+            );
+        }
     }
 
     #[test]
@@ -568,7 +551,6 @@ mod auto_reply_tests {
             notify_email: None,
             discount_preferred_pct: None,
             discount_max_pct: None,
-            keeps_conversations: None,
         };
         assert_eq!(reason(&twice), "duplicate");
         assert_eq!(

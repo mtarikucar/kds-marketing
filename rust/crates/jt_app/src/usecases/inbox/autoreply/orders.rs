@@ -88,18 +88,19 @@ confirm. When the customer confirms it, call `create_order` again with exactly t
 If the customer corrects something, call it again with the corrected details: a new summary \
 follows.
 - Never write the summary, their details, an amount or a link yourself, in `text` or anywhere.
-- Never promise payment terms, deadlines or refunds the cards do not state. A payment question \
-the cards don't answer, a change of the order, or a cancellation: `hand_over` with \
-`payment_problem`.
+- Never promise payment terms, deadlines or refunds the cards do not state. A payment that \
+failed or is disputed: `hand_over` with `payment_problem`. A cancellation, or a change that needs \
+a new price: `hand_over` with `not_covered`. A choice the customer makes before ordering (an \
+option, a detail, whose name goes on the order) is yours: carry on.
 - If the order exists and the customer asks for the link again, call `create_order` again with \
 the same details.";
 
 /// The fixed message the payment link goes in; the link follows it.
 pub const ORDER_LINK: &str =
     "Siparişiniz oluşturuldu. Ödemeyi kartla ya da havaleyle bu bağlantıdan yapabilirsiniz:";
-/// The fixed line to the customer when the order could not be created.
-pub const ORDER_LATER: &str =
-    "Siparişinizi ekibimiz tamamlayacak, kısa süre içinde dönüş yapacağız.";
+/// The fixed line to the customer when the order could not be created: the agent will get back
+/// to them (it never says the matter was passed on).
+pub const ORDER_LATER: &str = "Siparişinizi kontrol edip kısa süre içinde size dönüş yapacağım.";
 /// The second check's facts for the model's line that goes with the link.
 pub const ORDER_FACTS: &str = "The server's facts: this message accompanies an order the server \
 creates for the quoted amount; it may state no price.";
@@ -220,8 +221,9 @@ pub(super) fn done_part(reference: &str) -> String {
     };
     format!(
         "\n# The order\nThis customer's order was created and its payment link sent.{named} \
-         Answer questions about it only from the cards. A change, a cancellation or a payment \
-         question the cards do not answer: `hand_over` with `payment_problem`.\n"
+         Answer questions about it from the cards and the conversation. A payment that failed or \
+         is disputed: `hand_over` with `payment_problem`; a cancellation, or a change that needs a \
+         new price: `hand_over` with `not_covered`.\n"
     )
 }
 
@@ -256,7 +258,7 @@ fn checked_line(
     if line.is_empty() {
         return Ok(None);
     }
-    rules::check_reply_in(line, &s.cards, year, s.reading()).map_err(|r| r.key())?;
+    s.check(line, year).map_err(|r| r.key())?;
     if let Some(reason) = verdict.refusal() {
         return Err(reason);
     }
@@ -918,7 +920,7 @@ fn failure_note(o: &OrderRow) -> String {
     text
 }
 
-/// Hands conversation `c` (when it is still the agent's) to a person over a failed order, with
+/// Asks the owner over a failed order of conversation `c` (when it is still the agent's), with
 /// the fixed line and the note; else only the note. The line's outbox id, when one was queued.
 async fn hand_over_failed(
     deps: &Deps,
@@ -951,7 +953,6 @@ async fn hand_over_failed(
                     by: By::Server,
                     summary: Some(&text),
                     line: Some(ORDER_LATER),
-                    cards: "",
                     line_allowed: true,
                 },
             )
@@ -999,7 +1000,7 @@ async fn finish_order(
         && (outbound_after_summary(r.as_mut(), &o).await?
             || !only_harmless_since(r.as_mut(), &o, c.as_ref()).await?);
     let person = person_after_summary(r.as_mut(), &o).await?;
-    // Still the agent's and ours, whatever else happened: a held-back link goes to a person.
+    // Still the agent's and ours, whatever else happened: a held-back link asks the owner.
     let agents = c
         .clone()
         .filter(|c| c.executor == Executor::Agent && c.state == ConvState::Ours);
@@ -1058,7 +1059,6 @@ async fn finish_order(
                             .await?
                             .activity_revision,
                         quote: None,
-                        handing_over: false,
                     };
                     enqueue(deps, ctx, r.as_mut(), c.id, &message, &send).await?
                 }
@@ -1091,8 +1091,7 @@ async fn finish_order(
                     .await?;
                     match &agents {
                         Some(c) => {
-                            // A keep's line to the customer, when one was queued (a hand-over
-                            // queues none here).
+                            // The keep's line to the customer, when one was queued.
                             if let Some(outbox) = hand_over(
                                 deps,
                                 ctx,
@@ -1104,7 +1103,6 @@ async fn finish_order(
                                     by: By::Server,
                                     summary: Some(&text),
                                     line: None,
-                                    cards: "",
                                     line_allowed: false,
                                 },
                             )
@@ -1177,7 +1175,8 @@ async fn accept_quote(
 
 /// The sweep's part for workspace `ws` (see [`reconcile`]): every order left `calling` longer
 /// than [`ORDER_CALL_STALE`] (a crash between the shop's call and its answer) becomes `unknown`,
-/// and its conversation goes to a person (`order_interrupted`). Errors are logged with a code.
+/// and the owner is asked about its conversation (`order_interrupted`). Errors are logged with a
+/// code.
 pub(super) async fn interrupted(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime) {
     let result = async {
         let ids = {

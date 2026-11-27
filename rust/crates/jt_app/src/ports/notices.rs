@@ -81,7 +81,8 @@ pub struct NoticeRow {
     pub id: Uuid,
     pub kind: NoticeKind,
     pub conversation_id: ConversationId,
-    /// One notice per thing told of: `handed_over:{conversation}:{generation}`, `order:{order}`.
+    /// One notice per thing told of: `needs_you:{conversation}:{task}` (before the agent kept every
+    /// conversation, `handed_over:{conversation}:{generation}`), `order:{order}`.
     pub dedupe_key: String,
     /// The hand-over's reason code, or `daily_cap` for a skipped notice.
     pub reason: Option<String>,
