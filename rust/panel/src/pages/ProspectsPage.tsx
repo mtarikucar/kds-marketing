@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, SlidersHorizontal } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { getPlaybook, listProspects } from '@/api/prospects';
 import {
   SCORE_BUCKETS,
@@ -24,7 +24,6 @@ import {
   DialogTitle,
   EmptyState,
   IconButton,
-  Input,
   toast,
 } from '@/components/ui';
 import { formatRelative } from '@/lib/format';
@@ -43,9 +42,10 @@ import { ProspectPane } from './ProspectDetail';
 import { usePoolCopy, type PoolCopyKey } from './prospects/copy';
 import { PoolHeader, tabClass } from './prospects/PoolHeader';
 import { ProspectFormDialog } from './prospects/ProspectFormDialog';
-import { usePoolSegments } from './prospects/segments';
+import { countOf, filterChoices, keyWords, shortDate, type FilterChoice } from './prospects/purpose';
+import { usePoolPurposes, usePoolSegments } from './prospects/segments';
 import { useTaskCopy } from './research/copy';
-import { useOpenTasks, useSegmentNames } from './research/data';
+import { useAllTasks, useSegmentNames } from './research/data';
 import { taskName } from './research/words';
 
 export { promoteOutcomeText } from './prospects/words';
@@ -59,8 +59,15 @@ interface Filters {
   bucket: ScoreBucket | '';
   city: string;
   segment: string;
+  /** The purpose: an ICP entry key. */
+  purpose: string;
   task: string;
 }
+
+const NO_FILTERS: Filters = { status: '', bucket: '', city: '', segment: '', purpose: '', task: '' };
+
+/** The score bands, the best first: the order a person works through them. */
+const BUCKETS_BEST_FIRST: readonly ScoreBucket[] = [...SCORE_BUCKETS].reverse();
 
 /** The status tabs, in the order a prospect moves through them. */
 const TABS: readonly { status: ProspectStatus | ''; label: PoolCopyKey }[] = [
@@ -112,6 +119,41 @@ function PlaybookDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+/**
+ * One compact filter of the header: its name while nothing is chosen (choosing it again clears
+ * the filter), each choice with how many prospects it holds under the other filters.
+ */
+function FilterSelect({
+  label,
+  placeholder,
+  value,
+  choices,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  choices: readonly FilterChoice[];
+  onChange: (value: string) => void;
+}) {
+  const copy = usePoolCopy();
+  return (
+    <select
+      aria-label={label}
+      className={cn(selectClass, 'w-auto max-w-[12rem] py-1', value ? 'border-primary font-medium text-foreground' : 'text-muted-foreground')}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">{placeholder}</option>
+      {choices.map((c) => (
+        <option key={c.value} value={c.value}>
+          {c.count === null ? c.label : copy('withCount', { label: c.label, n: c.count })}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /** One prospect as a compact row: the name opens it (the link covers the row), the box selects it. */
 function Row({
   row,
@@ -122,7 +164,7 @@ function Row({
   onToggle,
 }: {
   row: ProspectRow;
-  /** The name of the row's audience segment, when it has one. */
+  /** What the row is for: its purpose's name, else its audience segment's, when it has one. */
   segment?: string;
   current: boolean;
   showStatus: boolean;
@@ -186,14 +228,8 @@ export function ProspectsPage() {
   const key = useLeadsKey();
   const { prospectId } = useParams();
   const [params] = useSearchParams();
-  const [moreFilters, setMoreFilters] = useState(() => Boolean(params.get('task')));
-  const [filters, setFilters] = useState<Filters>(() => ({
-    status: '',
-    bucket: '',
-    city: '',
-    segment: '',
-    task: params.get('task') ?? '',
-  }));
+  const linkedTask = params.get('task') ?? '';
+  const [filters, setFilters] = useState<Filters>(() => ({ ...NO_FILTERS, task: linkedTask }));
   // The cursors of the pages before this one: empty on the first page.
   const [cursors, setCursors] = useState<NextPage[]>([]);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -207,12 +243,16 @@ export function ProspectsPage() {
   const canAdd = can(session.data, 'prospects.work');
 
   const page = cursors.at(-1);
-  const query: ProspectListQuery = {
+  const filtered: ProspectListQuery = {
     status: filters.status || undefined,
     bucket: filters.bucket || undefined,
     city: filters.city.trim() || undefined,
     segment_key: filters.segment.trim() || undefined,
+    icp_key: filters.purpose || undefined,
     research_task_id: filters.task || undefined,
+  };
+  const query: ProspectListQuery = {
+    ...filtered,
     limit: PROSPECTS_PAGE,
     before_at: page?.before_at,
     before_id: page?.before_id,
@@ -222,16 +262,39 @@ export function ProspectsPage() {
     queryFn: () => listProspects(query),
     placeholderData: keepPreviousData,
   });
-  const tasks = useOpenTasks();
+  // How full each class is, every filter counted under the others: one small read per filter set.
+  const counted = useQuery({
+    queryKey: [...key, 'prospects', 'counts', filtered],
+    queryFn: () => listProspects({ ...filtered, limit: 1, counts: true }),
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+  const counts = counted.data?.counts;
+  const tasks = useAllTasks();
   const taskCopy = useTaskCopy();
   const segmentNames = useSegmentNames();
   const rows = useMemo(() => list.data?.items ?? [], [list.data]);
-  // The audience filter lists this workspace's own segments, never a fixed list.
+  // The classes are this workspace's own segments and ICP entries, never a fixed list.
   const segments = usePoolSegments(
     rows.map((r) => r.segment_key),
     filters.segment,
   );
+  const purposes = usePoolPurposes(
+    rows.map((r) => r.icp_key),
+    filters.purpose,
+  );
+  const language = taskCopy.language;
+  const purposeName = (icpKey: string) => purposes.find((x) => x.key === icpKey)?.name ?? keyWords(icpKey, language);
   const segmentName = (segmentKey: string | null) => segments.find((s) => s.key === segmentKey)?.name;
+  const rowClass = (r: ProspectRow) => (r.icp_key ? purposeName(r.icp_key) : (segmentName(r.segment_key) ?? r.segment_key ?? undefined));
+
+  // A link to a task's prospects (`?task=`) chooses that task, also while the page is open.
+  useEffect(() => {
+    if (!linkedTask) return;
+    setFilters((f) => (f.task === linkedTask ? f : { ...f, task: linkedTask }));
+    setCursors([]);
+    setSelected(new Set());
+  }, [linkedTask]);
 
   const setFilter = <K extends keyof Filters>(name: K, value: Filters[K]) => {
     setFilters((f) => ({ ...f, [name]: value }));
@@ -256,16 +319,58 @@ export function ProspectsPage() {
     else if (out[0]) toast.success(out[0].text);
   };
 
-  const extraFilters = [filters.bucket, filters.task, filters.city].filter(Boolean).length;
+  const classFilters = [filters.purpose, filters.segment, filters.bucket, filters.city, filters.task].filter(Boolean).length;
   const hasFilters = Object.values(filters).some(Boolean);
   const clearFilters = () => {
-    setFilters({ status: '', bucket: '', city: '', segment: '', task: '' });
+    setFilters(NO_FILTERS);
+    setCursors([]);
+    setSelected(new Set());
+  };
+  const clearClasses = () => {
+    setFilters((f) => ({ ...NO_FILTERS, status: f.status }));
     setCursors([]);
     setSelected(new Set());
   };
   const allOnPage = rows.length > 0 && rows.every((r) => selected.has(r.id));
-  const taskItems = tasks.data?.items ?? [];
   const blockable = chosen.filter((r) => r.status !== 'promoted' && r.status !== 'do_not_contact');
+
+  // Each filter's choices: the workspace's own values first, then whatever the pool holds.
+  const allTasks = (tasks.data?.pages ?? []).flatMap((p) => p.items.map((x) => x.task));
+  const countedTasks = new Set((counts?.research_task_id ?? []).map((c) => c.key));
+  const taskLabel = (id: string) => {
+    const task = allTasks.find((x) => x.id === id);
+    if (task) return `${taskName(taskCopy, task, segmentNames)} · ${shortDate(task.created_at, language)}`;
+    return id === filters.task ? t('leads.prospects.filters.thisTask') : copy('olderTask');
+  };
+  const choices = {
+    purpose: filterChoices(
+      purposes.map((x) => x.key),
+      counts?.icp_key,
+      filters.purpose,
+      purposeName,
+    ),
+    segment: filterChoices(
+      segments.map((x) => x.key),
+      counts?.segment_key,
+      filters.segment,
+      (k) => segmentName(k) ?? k,
+    ),
+    bucket: filterChoices(BUCKETS_BEST_FIRST, counts?.bucket, filters.bucket, (b) => b),
+    city: filterChoices(
+      (counts?.city ?? []).flatMap((c) => (c.key ? [c.key] : [])).sort((a, b) => a.localeCompare(b, language)),
+      counts?.city,
+      filters.city,
+      (c) => c,
+    ),
+    task: filterChoices(
+      allTasks.filter((x) => x.status === 'open' || countedTasks.has(x.id)).map((x) => x.id),
+      counts?.research_task_id,
+      filters.task,
+      taskLabel,
+    ),
+  };
+  const statusCount = (status: ProspectStatus | '') =>
+    status === '' ? (counts ? counts.status.reduce((n, c) => n + c.count, 0) : null) : countOf(counts?.status, status);
 
   return (
     <div className="flex min-w-0 flex-col lg:h-[calc(100dvh-61px)] lg:min-h-[36rem]">
@@ -288,80 +393,64 @@ export function ProspectsPage() {
 
       <div className={cn('flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2', prospectId && 'hidden lg:flex')}>
         <div role="group" aria-label={copy('tabs')} className="flex min-w-0 gap-0.5 overflow-x-auto">
-          {TABS.map(({ status, label }) => (
-            <button
-              key={label}
-              type="button"
-              aria-pressed={filters.status === status}
-              onClick={() => setFilter('status', status)}
-              className={tabClass(filters.status === status)}
-            >
-              {copy(label)}
-            </button>
-          ))}
+          {TABS.map(({ status, label }) => {
+            const n = statusCount(status);
+            return (
+              <button
+                key={label}
+                type="button"
+                aria-pressed={filters.status === status}
+                onClick={() => setFilter('status', status)}
+                className={tabClass(filters.status === status)}
+              >
+                {copy(label)}
+                {n !== null && <span className="ms-1 text-xs font-normal tabular-nums text-muted-foreground"> {n}</span>}
+              </button>
+            );
+          })}
         </div>
-        <label className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-          {t('leads.prospects.filters.segment')}
-          <select
-            className={cn(selectClass, 'w-auto max-w-[16rem] py-1 text-foreground')}
+        <div role="group" aria-label={copy('filters')} className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <FilterSelect
+            label={t('leads.prospects.filters.purpose')}
+            placeholder={copy('fltPurpose')}
+            value={filters.purpose}
+            choices={choices.purpose}
+            onChange={(v) => setFilter('purpose', v)}
+          />
+          <FilterSelect
+            label={t('leads.prospects.filters.segment')}
+            placeholder={copy('fltSegment')}
             value={filters.segment}
-            onChange={(e) => setFilter('segment', e.target.value)}
-          >
-            <option value="">{t('leads.prospects.filters.all')}</option>
-            {segments.map((s) => (
-              <option key={s.key} value={s.key}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="button"
-          aria-expanded={moreFilters}
-          aria-controls="prospect-more-filters"
-          className="ms-auto flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={() => setMoreFilters((v) => !v)}
-        >
-          <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-          {moreFilters ? t('leads.ux.hideFilters', { defaultValue: 'Hide extra filters' }) : t('leads.ux.moreFilters', { defaultValue: 'More filters' })}
-          {extraFilters > 0 && ` (${extraFilters})`}
-        </button>
-      </div>
-
-      <div
-        id="prospect-more-filters"
-        hidden={!moreFilters}
-        className={moreFilters ? cn('grid gap-3 border-b border-border px-4 py-3 sm:grid-cols-3', prospectId && 'hidden lg:grid') : 'hidden'}
-      >
-        <label className="flex flex-col gap-1 text-sm">
-          {t('leads.prospects.filters.bucket')}
-          <select className={selectClass} value={filters.bucket} onChange={(e) => setFilter('bucket', e.target.value as ScoreBucket | '')}>
-            <option value="">{t('leads.prospects.filters.all')}</option>
-            {SCORE_BUCKETS.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          {t('leads.prospects.filters.task')}
-          <select className={selectClass} value={filters.task} onChange={(e) => setFilter('task', e.target.value)}>
-            <option value="">{t('leads.prospects.filters.all')}</option>
-            {filters.task && !taskItems.some((x) => x.task.id === filters.task) && (
-              <option value={filters.task}>{t('leads.prospects.filters.thisTask')}</option>
-            )}
-            {taskItems.map(({ task }) => (
-              <option key={task.id} value={task.id}>
-                {taskName(taskCopy, task, segmentNames)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          {t('leads.prospects.filters.city')}
-          <Input value={filters.city} autoComplete="off" onChange={(e) => setFilter('city', e.target.value)} />
-        </label>
+            choices={choices.segment}
+            onChange={(v) => setFilter('segment', v)}
+          />
+          <FilterSelect
+            label={t('leads.prospects.filters.bucket')}
+            placeholder={copy('fltScore')}
+            value={filters.bucket}
+            choices={choices.bucket}
+            onChange={(v) => setFilter('bucket', v as ScoreBucket | '')}
+          />
+          <FilterSelect
+            label={t('leads.prospects.filters.city')}
+            placeholder={copy('fltCity')}
+            value={filters.city}
+            choices={choices.city}
+            onChange={(v) => setFilter('city', v)}
+          />
+          <FilterSelect
+            label={t('leads.prospects.filters.task')}
+            placeholder={copy('fltTask')}
+            value={filters.task}
+            choices={choices.task}
+            onChange={(v) => setFilter('task', v)}
+          />
+          {classFilters > 0 && (
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={clearClasses}>
+              {copy('fltClear')}
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 lg:grid-cols-[22rem_minmax(0,1fr)]">
@@ -423,7 +512,7 @@ export function ProspectsPage() {
                   <Row
                     key={row.id}
                     row={row}
-                    segment={segmentName(row.segment_key) ?? row.segment_key ?? undefined}
+                    segment={rowClass(row)}
                     current={row.id === prospectId}
                     showStatus={filters.status === ''}
                     checked={selected.has(row.id)}

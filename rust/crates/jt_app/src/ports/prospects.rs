@@ -118,9 +118,67 @@ pub struct ProspectQuery {
     pub segment_key: Option<String>,
     /// The latest score's bucket; unscored prospects are in none.
     pub bucket: Option<Bucket>,
+    /// The ICP entry the prospects were sought for (their purpose).
+    pub icp_key: Option<String>,
     /// `1..=MAX_PROSPECT_PAGE`.
     pub limit: u32,
     pub after: Option<ListCursor>,
+}
+
+/// What [`ProspectRepo::count_by`] counts the pool by: each of the list's filters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CountBy {
+    Status,
+    Segment,
+    Purpose,
+    Bucket,
+    City,
+    Task,
+}
+
+impl CountBy {
+    /// Every dimension, in the order the pool's counts answer them.
+    pub const ALL: &[CountBy] = &[
+        CountBy::Status,
+        CountBy::Segment,
+        CountBy::Purpose,
+        CountBy::Bucket,
+        CountBy::City,
+        CountBy::Task,
+    ];
+
+    /// `q` without this dimension's own filter (and without a cursor): what its counts are taken
+    /// under, so choosing one value never hides the others.
+    pub fn others(self, q: &ProspectQuery) -> ProspectQuery {
+        let mut q = q.clone();
+        match self {
+            CountBy::Status => q.status = None,
+            CountBy::Segment => q.segment_key = None,
+            CountBy::Purpose => q.icp_key = None,
+            CountBy::Bucket => q.bucket = None,
+            CountBy::City => q.city = None,
+            CountBy::Task => q.research_task_id = None,
+        }
+        q.after = None;
+        q
+    }
+}
+
+/// The value prospect `p` is counted under for `by`: its status key, segment, ICP entry, latest
+/// score's bucket key, city or research task id (hyphenated); `None` when it has none. The one
+/// rule both adapters count by.
+pub fn count_key(p: &Prospect, by: CountBy) -> Option<String> {
+    match by {
+        CountBy::Status => Some(p.status.key().to_owned()),
+        CountBy::Segment => p.segment_key.clone(),
+        CountBy::Purpose => p.icp_key.clone(),
+        CountBy::Bucket => p
+            .latest_score
+            .as_ref()
+            .map(|s| jt_prospects::bucket(s.score).key().to_owned()),
+        CountBy::City => p.city.clone(),
+        CountBy::Task => p.research_task_id.map(|t| t.to_string()),
+    }
 }
 
 /// A prospect as the pool's list shows it: its facts and which fields it holds, without values
@@ -137,6 +195,8 @@ pub struct ProspectRow {
     pub country: String,
     pub language: Option<String>,
     pub segment_key: Option<String>,
+    /// The ICP entry it was sought for (its purpose).
+    pub icp_key: Option<String>,
     pub labels: Vec<String>,
     pub research_task_id: Option<ResearchTaskId>,
     pub latest_score: Option<ScoreSummary>,
@@ -172,6 +232,7 @@ impl ProspectRow {
             country: p.country.clone(),
             language: p.language.clone(),
             segment_key: p.segment_key.clone(),
+            icp_key: p.icp_key.clone(),
             labels: p.labels.clone(),
             research_task_id: p.research_task_id,
             latest_score: p.latest_score.clone(),
@@ -258,6 +319,9 @@ pub fn prospect_matches(p: &Prospect, q: &ProspectQuery) -> bool {
                 .as_ref()
                 .is_some_and(|s| jt_prospects::bucket(s.score) == b)
         })
+        && q.icp_key
+            .as_ref()
+            .is_none_or(|k| p.icp_key.as_ref() == Some(k))
 }
 
 /// The pool's prospects.
@@ -285,6 +349,13 @@ pub trait ProspectRepo: Send + Sync {
     async fn lock(&mut self, id: ProspectId) -> Result<Option<Prospect>, AppError>;
     /// The prospects `q` selects, at most `q.limit` (capped at [`MAX_PROSPECT_PAGE`]).
     async fn list(&mut self, q: &ProspectQuery) -> Result<Page<ProspectRow>, AppError>;
+    /// How many prospects pass every filter of `q` (its cursor and limit aside) for each value of
+    /// `by` ([`count_key`]; `None` for those without one): each value once, in any order.
+    async fn count_by(
+        &mut self,
+        q: &ProspectQuery,
+        by: CountBy,
+    ) -> Result<Vec<(Option<String>, u32)>, AppError>;
     /// Every prospect holding one of `keys` (hard or soft), with the kind it holds it by;
     /// ordered by kind, then prospect id, each pair once.
     async fn find_by_keys(&mut self, keys: &[Key]) -> Result<Vec<(KeyKind, ProspectId)>, AppError>;

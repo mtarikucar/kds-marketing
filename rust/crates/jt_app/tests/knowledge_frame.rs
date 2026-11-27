@@ -2046,6 +2046,7 @@ async fn found_one(w: &World, task: jt_prospects::ResearchTaskId) {
             size: None,
             signals: vec![],
             notes: String::new(),
+            icp_key: None,
             research_task_id: Some(task),
             discovered_at: vec![],
             distinct_from: vec![],

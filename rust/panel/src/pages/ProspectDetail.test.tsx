@@ -3,7 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import tr from '@/i18n/tr.json';
 import { delayed, mockFetch, renderAt } from '@/test/render';
-import { LOADED, agentsList, leadsMe, leadsRep, prospectId, prospectOut, team } from '@/test/leads';
+import { LOADED, agentsList, leadsMe, leadsRep, prospectId, prospectOut, taskId, team } from '@/test/leads';
 
 const ID = prospectId(1);
 
@@ -333,5 +333,65 @@ describe('ProspectDetail', () => {
       [`GET /api/prospects/${ID}`]: prospectOut(1, { status: 'do_not_contact' }),
     });
     expect(screen.queryByRole('button', { name: 'Bilgileri düzenle' })).not.toBeInTheDocument();
+  });
+});
+
+describe('ProspectDetail: why it is here', () => {
+  const why = () => within(screen.getByRole('region', { name: 'Neden burada' }));
+  const fact = (label: string) => why().getByText(label).nextElementSibling as HTMLElement;
+
+  it('says what it is for, the task and the agent that found it, and that it passed the threshold', async () => {
+    await open();
+    expect(fact('Amaç')).toHaveTextContent('Kafeler izmir');
+    expect(fact('Kitle')).toHaveTextContent('kafeler');
+    // The task opens this task's prospects in the pool.
+    const task = within(fact('Görev')).getByRole('link');
+    expect(task).toHaveAttribute('href', `/prospects?task=${taskId(1)}`);
+    expect(task).toHaveTextContent('Bilgi bankasından');
+    await waitFor(() => expect(fact('Bulan')).toHaveTextContent('arastirma-ajani (ajan, Ada Sahip adına)'));
+    // Scored under the rubric the server read for it: its threshold and weights.
+    expect(screen.getByTestId('prospect-verdict')).toHaveTextContent('Eşiği geçti · 72/60');
+    const score = within(screen.getByRole('list', { name: 'Puan' }));
+    expect(score.getByText('30/40')).toBeInTheDocument();
+    expect(score.getByText('Sube sayisi')).toHaveAttribute('title', 'Birden fazla şubesi var mı');
+  });
+
+  it('says where a low score fell short', async () => {
+    const out = prospectOut(1, { status: 'new' });
+    const low = {
+      ...out.scores[0],
+      score: 30,
+      reasons: [
+        { criterion: 'sube_sayisi', points: 10, evidence: 'Tek şube', source: null },
+        { criterion: 'aktif_sosyal', points: 20, evidence: 'Ayda bir gönderi', source: null },
+      ],
+    };
+    await open({ [`GET /api/prospects/${ID}`]: { ...out, scores: [low] } });
+    expect(screen.getByTestId('prospect-verdict')).toHaveTextContent(
+      'Eşiğin altında · 30/60 · Eksik: Aktif sosyal 20/60, Sube sayisi 10/40',
+    );
+  });
+
+  it('says why it was rejected, by whom', async () => {
+    const decision = {
+      kind: { rejected: 'not_icp' as const },
+      note: 'Yalnızca toptan satış',
+      by: { kind: 'human' as const, user_id: leadsMe.user_id },
+      at: '2026-11-02T10:00:00Z',
+    };
+    await open({ [`GET /api/prospects/${ID}`]: prospectOut(1, { status: 'rejected', decision }) });
+    await waitFor(() =>
+      expect(screen.getByTestId('prospect-verdict')).toHaveTextContent(
+        `${tr.leads.prospect.rejectedFor.replace('{{reason}}', tr.leads.rejectReasons.not_icp)} · Yalnızca toptan satış · Ada Sahip`,
+      ),
+    );
+  });
+
+  it('says "Bilinmiyor" for what nobody recorded, and how it came without a task', async () => {
+    const out = prospectOut(1, { icp_key: null, research_task_id: null, origin: { ...prospectOut(1).prospect.origin, via: 'manual' } });
+    await open({ [`GET /api/prospects/${ID}`]: { ...out, research_task: null, scored_under: null, scores: [] } });
+    expect(fact('Amaç')).toHaveTextContent('Bilinmiyor');
+    expect(fact('Görev')).toHaveTextContent(tr.leads.originVia.manual);
+    expect(screen.getByTestId('prospect-verdict')).toHaveTextContent('Puan bekliyor');
   });
 });

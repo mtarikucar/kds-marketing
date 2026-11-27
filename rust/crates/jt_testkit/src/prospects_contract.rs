@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use jt_app::ports::prospects::{
-    BlockReason, Inserted, ListCursor, Promoted, ProspectQuery, ResearchTaskQuery, ScoreRow,
-    TaskTally, Updated,
+    BlockReason, CountBy, Inserted, ListCursor, Promoted, ProspectQuery, ResearchTaskQuery,
+    ScoreRow, TaskTally, Updated,
 };
 use jt_app::ports::{UnitOfWork, WorkspacePolicy};
 use jt_ledger::Actor;
@@ -71,6 +71,7 @@ pub fn input(name: &str, phone: &str) -> CreateInput {
         size: None,
         signals: vec![],
         notes: "a corner cafe".into(),
+        icp_key: None,
         research_task_id: None,
         discovered_at: vec![],
         distinct_from: vec![],
@@ -196,7 +197,10 @@ pub async fn insert_then_get_round_trips_every_field(uow: Arc<dyn UnitOfWork>) {
         f.ws,
         f.user,
         version,
-        TaskKind::AdHoc { target_count: 5 },
+        TaskKind::AdHoc {
+            target_count: 5,
+            icp_key: None,
+        },
         at(0),
     );
     let mut tx = uow.tenant(f.ws).await.unwrap();
@@ -231,6 +235,7 @@ pub async fn insert_then_get_round_trips_every_field(uow: Arc<dyn UnitOfWork>) {
         source: source().remove(0),
     }];
     i.research_task_id = Some(t.id);
+    i.icp_key = Some("kafeler_ist".into());
     i.discovered_at = source();
     i.distinct_from = vec![ProspectId(Uuid::from_u128(7))];
     let mut p = prospect(f.ws, f.user, i, at(1));
@@ -506,7 +511,10 @@ pub async fn list_filters_and_cursor(uow: Arc<dyn UnitOfWork>) {
         f.ws,
         f.user,
         version,
-        TaskKind::AdHoc { target_count: 5 },
+        TaskKind::AdHoc {
+            target_count: 5,
+            icp_key: None,
+        },
         at(0),
     );
     let mut tx = uow.tenant(f.ws).await.unwrap();
@@ -679,6 +687,183 @@ pub async fn list_filters_and_cursor(uow: Arc<dyn UnitOfWork>) {
         }
     }
     assert_eq!(seen, ids.iter().rev().copied().collect::<Vec<_>>());
+}
+
+/// `rows` in value order (`None` first), to compare a count whose order is the adapter's.
+fn sorted(mut rows: Vec<(Option<String>, u32)>) -> Vec<(Option<String>, u32)> {
+    rows.sort();
+    rows
+}
+
+pub async fn the_purpose_filters_and_every_filter_counts(uow: Arc<dyn UnitOfWork>) {
+    let f = Fixture::new(uow.clone()).await;
+    let version = approved_version(&uow, f.ws).await;
+    let t = task(
+        f.ws,
+        f.user,
+        version,
+        TaskKind::Standing {
+            icp_key: "kafeler_merkez".into(),
+        },
+        at(0),
+    );
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert!(tx.research_tasks().insert(&t).await.unwrap());
+    tx.commit().await.unwrap();
+    // Two prospects sought for the central cafes (the task's, one of them in Ankara), one for the
+    // seaside ones, one for no purpose.
+    let mut ids = Vec::new();
+    for (n, purpose, city, from_task) in [
+        (0u8, Some("kafeler_merkez"), "İstanbul", Some(t.id)),
+        (1, Some("kafeler_merkez"), "Ankara", Some(t.id)),
+        (2, Some("kafeler_sahil"), "İstanbul", None),
+        (3, None, "İstanbul", None),
+    ] {
+        let mut i = input(&format!("Kafe {n}"), &format!("0500 000 00 1{n}"));
+        i.icp_key = purpose.map(str::to_owned);
+        i.city = Some(city.into());
+        i.research_task_id = from_task;
+        let p = prospect(f.ws, f.user, i, at(i64::from(n)));
+        assert_eq!(store(&uow, &p).await, Inserted::Ok);
+        ids.push(p.id);
+    }
+    // The first scored 80 (bucket 75-100) and qualified.
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    tx.prospects()
+        .record_score(&ScoreRow {
+            id: Uuid::now_v7(),
+            prospect_id: ids[0],
+            score: 80,
+            reasons: vec![],
+            rubric_digest: "d".into(),
+            strategy_version_id: None,
+            recorder: human(f.user),
+            at: at(30),
+        })
+        .await
+        .unwrap();
+    tx.prospects()
+        .set_status(ids[0], ProspectStatus::Qualified, None, at(31), 1)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let s = |v: &str| Some(v.to_owned());
+    let all = ProspectQuery {
+        limit: 10,
+        ..Default::default()
+    };
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let page = tx
+        .prospects()
+        .list(&ProspectQuery {
+            icp_key: s("kafeler_merkez"),
+            ..all.clone()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [ids[1], ids[0]]
+    );
+    assert_eq!(page.items[0].icp_key.as_deref(), Some("kafeler_merkez"));
+    // Every filter's values, counted under no filter.
+    let p = tx.prospects();
+    assert_eq!(
+        sorted(p.count_by(&all, CountBy::Status).await.unwrap()),
+        [(s("new"), 3), (s("qualified"), 1)]
+    );
+    assert_eq!(
+        sorted(p.count_by(&all, CountBy::Segment).await.unwrap()),
+        [(s("kafeler"), 4)]
+    );
+    assert_eq!(
+        sorted(p.count_by(&all, CountBy::Purpose).await.unwrap()),
+        [(None, 1), (s("kafeler_merkez"), 2), (s("kafeler_sahil"), 1)]
+    );
+    assert_eq!(
+        sorted(p.count_by(&all, CountBy::Bucket).await.unwrap()),
+        [(None, 3), (s("75-100"), 1)]
+    );
+    assert_eq!(
+        sorted(p.count_by(&all, CountBy::City).await.unwrap()),
+        [(s("Ankara"), 1), (s("İstanbul"), 3)]
+    );
+    assert_eq!(
+        sorted(p.count_by(&all, CountBy::Task).await.unwrap()),
+        [(None, 2), (Some(t.id.to_string()), 2)]
+    );
+    // Under a filter: only what it selects is counted.
+    let in_istanbul = ProspectQuery {
+        city: s("İstanbul"),
+        ..all.clone()
+    };
+    assert_eq!(
+        sorted(p.count_by(&in_istanbul, CountBy::Purpose).await.unwrap()),
+        [(None, 1), (s("kafeler_merkez"), 1), (s("kafeler_sahil"), 1)]
+    );
+    let new = ProspectQuery {
+        status: Some(ProspectStatus::New),
+        ..all.clone()
+    };
+    assert_eq!(
+        sorted(p.count_by(&new, CountBy::City).await.unwrap()),
+        [(s("Ankara"), 1), (s("İstanbul"), 2)]
+    );
+    let top = ProspectQuery {
+        bucket: Some(Bucket::B75To100),
+        ..all.clone()
+    };
+    assert_eq!(
+        sorted(p.count_by(&top, CountBy::Purpose).await.unwrap()),
+        [(s("kafeler_merkez"), 1)]
+    );
+    let central = ProspectQuery {
+        icp_key: s("kafeler_merkez"),
+        ..all.clone()
+    };
+    assert_eq!(
+        sorted(p.count_by(&central, CountBy::Task).await.unwrap()),
+        [(Some(t.id.to_string()), 2)]
+    );
+    drop(tx);
+    // Another workspace counts none of them.
+    let mut o = uow.tenant(f.other).await.unwrap();
+    assert!(
+        o.prospects()
+            .count_by(&all, CountBy::Status)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    drop(o);
+    // A purpose is written with the record and read back.
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    let mut changed = tx.prospects().lock(ids[3]).await.unwrap().unwrap();
+    changed.icp_key = s("kafeler_sahil");
+    changed.revision = 2;
+    assert_eq!(
+        tx.prospects()
+            .update(&changed, &derive_keys(&changed), 1)
+            .await
+            .unwrap(),
+        Updated::Ok
+    );
+    tx.commit().await.unwrap();
+    assert_eq!(
+        get(&uow, f.ws, ids[3]).await.unwrap().icp_key.as_deref(),
+        Some("kafeler_sahil")
+    );
+    // A purpose that is no key is never stored.
+    let mut bad = prospect(f.ws, f.user, input("Kafe 9", "0500 000 00 19"), at(9));
+    bad.icp_key = s("Kafe Merkez");
+    let mut tx = uow.tenant(f.ws).await.unwrap();
+    assert!(
+        tx.prospects()
+            .insert(&bad, &derive_keys(&bad))
+            .await
+            .is_err()
+    );
 }
 
 pub async fn delete_returns_keys_and_cascades_scores(uow: Arc<dyn UnitOfWork>) {
@@ -1051,7 +1236,10 @@ pub async fn research_tasks_round_trip_and_one_standing_per_entry(uow: Arc<dyn U
         f.ws,
         f.user,
         version,
-        TaskKind::AdHoc { target_count: 10 },
+        TaskKind::AdHoc {
+            target_count: 10,
+            icp_key: None,
+        },
         at(3),
     );
     let mut t = uow.tenant(f.ws).await.unwrap();
@@ -1190,7 +1378,16 @@ pub async fn research_tasks_are_carried_to_a_newer_version(uow: Arc<dyn UnitOfWo
     };
     let (a, b) = (standing(v1, "kafeler", 0), standing(v1, "pastaneler", 1));
     let taken = standing(v2, "pastaneler", 2);
-    let adhoc = task(f.ws, f.user, v1, TaskKind::AdHoc { target_count: 5 }, at(3));
+    let adhoc = task(
+        f.ws,
+        f.user,
+        v1,
+        TaskKind::AdHoc {
+            target_count: 5,
+            icp_key: None,
+        },
+        at(3),
+    );
     for x in [&a, &b, &taken, &adhoc] {
         assert!(t.research_tasks().insert(x).await.unwrap());
     }
@@ -1648,7 +1845,10 @@ pub async fn rows_are_workspace_scoped(uow: Arc<dyn UnitOfWork>) {
         f.ws,
         f.user,
         version,
-        TaskKind::AdHoc { target_count: 1 },
+        TaskKind::AdHoc {
+            target_count: 1,
+            icp_key: None,
+        },
         at(0),
     );
     let mut t = uow.tenant(f.ws).await.unwrap();

@@ -1673,7 +1673,10 @@ export interface Prospect {
   district: string | null;
   country: string;
   language: string | null;
+  /** The audience segment: what kind of business it is. */
   segment_key: string | null;
+  /** The purpose: the ICP entry (its key) the business was sought for; `null` when nobody said. */
+  icp_key: string | null;
   labels: string[];
   contact: ContactFields;
   size: ProspectField<SizeHint> | null;
@@ -1697,6 +1700,7 @@ export type ProspectFieldName =
   | 'district'
   | 'language'
   | 'segment_key'
+  | 'icp_key'
   | 'labels'
   | 'phone'
   | 'email'
@@ -1721,6 +1725,8 @@ export interface ProspectRow {
   country: string;
   language: string | null;
   segment_key: string | null;
+  /** The purpose: the ICP entry it was sought for. */
+  icp_key: string | null;
   labels: string[];
   research_task_id: Uuid | null;
   latest_score: ScoreSummary | null;
@@ -1769,16 +1775,42 @@ export interface ProspectListQuery {
   city?: string;
   segment_key?: string;
   bucket?: ScoreBucket;
+  /** The purpose: an ICP entry key. */
+  icp_key?: string;
   /** `1..=200`, 50 unless given. */
   limit?: number;
   before_at?: string;
   before_id?: Uuid;
+  /** Also answer `counts`. */
+  counts?: boolean;
+}
+
+/** `jt_app::usecases::prospects::CountOut`: one value of a filter; `key: null` is "without one". */
+export interface PoolCountRow {
+  key: string | null;
+  count: number;
+}
+
+/**
+ * `jt_app::usecases::prospects::PoolCounts`: how many prospects each value of every filter holds,
+ * each counted under the other filters; largest first, those without a value last.
+ */
+export interface PoolCounts {
+  total: number;
+  status: PoolCountRow[];
+  segment_key: PoolCountRow[];
+  icp_key: PoolCountRow[];
+  bucket: PoolCountRow[];
+  city: PoolCountRow[];
+  research_task_id: PoolCountRow[];
 }
 
 /** `jt_app::usecases::prospects::ListOut`. */
 export interface ProspectListOut {
   items: ProspectRow[];
   next: NextPage | null;
+  /** With `counts: true` only. */
+  counts?: PoolCounts;
 }
 
 /** `jt_prospects::Reason`: one criterion's points and why. */
@@ -1810,6 +1842,10 @@ export interface ProspectGetOut {
   duplicate_candidates: DuplicateCandidate[];
   /** The pool's ledger entries about it, newest first. */
   ledger: LedgerEntryOut[];
+  /** The research task it was recorded for, while that task is stored. */
+  research_task: ResearchTask | null;
+  /** The rubric its latest score was computed under, while that strategy version is stored. */
+  scored_under: Rubric | null;
 }
 
 /** `jt_app::usecases::prospects::CheckInput`. */
@@ -1982,7 +2018,10 @@ export type TaskStatus = 'open' | 'done' | 'canceled' | 'superseded';
 export const TASK_STATUSES: readonly TaskStatus[] = ['open', 'done', 'canceled', 'superseded'];
 
 /** `jt_prospects::TaskKind`, tagged by `type`. */
-export type TaskKind = { type: 'standing'; icp_key: string } | { type: 'ad_hoc'; target_count: number };
+export type TaskKind =
+  | { type: 'standing'; icp_key: string }
+  /** `icp_key`: the ICP entry a one-off task serves, when it names one. */
+  | { type: 'ad_hoc'; target_count: number; icp_key?: string | null };
 
 /** `jt_prospects::Brief`: what to look for, where, and what disqualifies. */
 export interface Brief {
@@ -2060,6 +2099,8 @@ export interface TaskCreateInput {
   target_count: number;
   /** `1..=500` a local day. */
   daily_cap: number;
+  /** The ICP entry the task serves; its prospects take it as their purpose. */
+  icp_key?: string;
   request_key?: string;
 }
 

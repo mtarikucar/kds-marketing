@@ -1,9 +1,11 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { getPlaybook } from '@/api/prospects';
 import { getStrategy } from '@/api/strategy';
 import type { IcpEntry, Segment } from '@/api/types';
 import { useLeadsKey } from '../LeadsShared';
+import { keyWords } from './purpose';
 
 /** One choice of the audience filter. */
 export interface SegmentOption {
@@ -30,6 +32,26 @@ export function segmentOptions(
     if (key && !keys.includes(key)) keys.push(key);
   }
   return keys.map((key) => ({ key, name: names.get(key) || key }));
+}
+
+/**
+ * This workspace's purposes for the pool: one per ICP entry (the "sales door" a candidate is
+ * sought for), in the entries' order, then any a prospect in view carries, then `current`. An ICP
+ * entry has no name of its own: its key is shown as words.
+ */
+export function usePoolPurposes(carried: readonly (string | null)[] = [], current = ''): SegmentOption[] {
+  const key = useLeadsKey();
+  const { i18n } = useTranslation();
+  const language = i18n.resolvedLanguage ?? i18n.language;
+  const book = useQuery({ queryKey: [...key, 'prospects', 'playbook'], queryFn: getPlaybook, retry: false });
+  const carriedKey = carried.filter(Boolean).join('|');
+  return useMemo(() => {
+    const keys: string[] = [];
+    for (const k of [...(book.data?.workspace.icp ?? []).map((e) => e.key), ...(carriedKey ? carriedKey.split('|') : []), current]) {
+      if (k && !keys.includes(k)) keys.push(k);
+    }
+    return keys.map((k) => ({ key: k, name: keyWords(k, language) }));
+  }, [book.data, carriedKey, current, language]);
 }
 
 /**

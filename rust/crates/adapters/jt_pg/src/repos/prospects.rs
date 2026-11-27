@@ -1,21 +1,22 @@
 //! `prospects`, `prospect_keys`, `prospect_scores` and `prospect_blocklist` (migration
-//! `0020_prospects`). A prospect's listed and filtered facts are columns; the rest of the record
-//! (contact fields with their evidence, size, signals, notes, origin, decision) is `data`, read
-//! tolerantly. Hard keys are checked before a write, under the pool lock the use cases take; a
-//! racing writer without it is caught by the `prospect_keys_hard` unique index.
+//! `0020_prospects`; the purpose column `icp_key` is `0057_prospect_purpose`'s). A prospect's
+//! listed and filtered facts are columns; the rest of the record (contact fields with their
+//! evidence, size, signals, notes, origin, decision) is `data`, read tolerantly. Hard keys are
+//! checked before a write, under the pool lock the use cases take; a racing writer without it is
+//! caught by the `prospect_keys_hard` unique index.
 
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
 use jt_app::error::AppError;
 use jt_app::ports::prospects::{
-    BlockReason, BlocklistRepo, Inserted, ListCursor, MAX_PROSPECT_PAGE, MAX_REPORT_ROWS, Page,
-    Promoted, ProspectQuery, ProspectRepo, ProspectRow, ScoreRow, TaskTally, Updated,
+    BlockReason, BlocklistRepo, CountBy, Inserted, ListCursor, MAX_PROSPECT_PAGE, MAX_REPORT_ROWS,
+    Page, Promoted, ProspectQuery, ProspectRepo, ProspectRow, ScoreRow, TaskTally, Updated,
     is_key_fingerprint, is_key_hash,
 };
 use jt_inbox::{JourneyId, PersonId};
 use jt_prospects::{
-    ContactFields, Decision, EntityKind, Field, Key, KeyKind, Origin, Promotion, Prospect,
+    Bucket, ContactFields, Decision, EntityKind, Field, Key, KeyKind, Origin, Promotion, Prospect,
     ProspectId, ProspectStatus, PurgeCutoffs, ResearchTaskId, ScoreSummary, Signal, SizeHint,
     bucket,
 };
@@ -31,10 +32,44 @@ use crate::uow::PgTenantRepos;
 
 /// The columns a [`Record`] is read from.
 const COLUMNS: &str = "workspace_id, id, status, business_name, entity_kind, sector, city, \
-                       district, country, language, segment_key, labels, data, research_task_id, \
-                       latest_score, latest_digest, latest_scored_at, promoted_person_id, \
-                       promoted_journey_id, promoted_at, promoted_score, revision, \
-                       created_at, updated_at";
+                       district, country, language, segment_key, icp_key, labels, data, \
+                       research_task_id, latest_score, latest_digest, latest_scored_at, \
+                       promoted_person_id, promoted_journey_id, promoted_at, promoted_score, \
+                       revision, created_at, updated_at";
+
+/// The list's filters over `prospects`, binding `$2` to `$8`: status, research task, city,
+/// segment, the latest score's range (`$6`, `$7`) and purpose. `$1` is the workspace.
+const FILTERS: &str = "($2::text is null or status = $2) \
+                       and ($3::uuid is null or research_task_id = $3) \
+                       and ($4::text is null or city = $4) \
+                       and ($5::text is null or segment_key = $5) \
+                       and ($6::smallint is null or latest_score between $6 and $7) \
+                       and ($8::text is null or icp_key = $8)";
+
+/// The SQL of the value a prospect is counted under for `by` (`jt_app`'s `count_key`): the
+/// bucket's arms come from `Bucket::ALL`, so the two never drift.
+fn count_expression(by: CountBy) -> String {
+    match by {
+        CountBy::Status => "status".to_owned(),
+        CountBy::Segment => "segment_key".to_owned(),
+        CountBy::Purpose => "icp_key".to_owned(),
+        CountBy::Bucket => {
+            let arms: String = Bucket::ALL
+                .iter()
+                .map(|b| {
+                    let (low, high) = b.range();
+                    format!(
+                        " when latest_score between {low} and {high} then '{}'",
+                        b.key()
+                    )
+                })
+                .collect();
+            format!("case{arms} end")
+        }
+        CountBy::City => "city".to_owned(),
+        CountBy::Task => "research_task_id::text".to_owned(),
+    }
+}
 
 /// What `data` holds: the record but its columns.
 #[derive(Serialize, Deserialize)]
@@ -65,6 +100,7 @@ struct Record {
     country: String,
     language: Option<String>,
     segment_key: Option<String>,
+    icp_key: Option<String>,
     labels: Vec<String>,
     data: Value,
     research_task_id: Option<Uuid>,
@@ -131,6 +167,7 @@ impl Record {
             country: self.country,
             language: self.language,
             segment_key: self.segment_key,
+            icp_key: self.icp_key,
             labels: self.labels,
             contact: data.contact,
             size: data.size,
@@ -309,8 +346,8 @@ impl ProspectRepo for PgTenantRepos {
             "insert into prospects (workspace_id, id, status, business_name, entity_kind, sector, \
              city, district, country, language, segment_key, labels, data, research_task_id, \
              latest_score, latest_digest, latest_scored_at, decided_at, revision, created_at, \
-             updated_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, \
-             $15, $16, $17, $18, $19, $20, $21) on conflict do nothing",
+             updated_at, icp_key) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, \
+             $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) on conflict do nothing",
         )
         .bind(ws.as_uuid())
         .bind(p.id.as_uuid())
@@ -333,6 +370,7 @@ impl ProspectRepo for PgTenantRepos {
         .bind(i64::from(p.revision))
         .bind(p.created_at)
         .bind(p.updated_at)
+        .bind(&p.icp_key)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "insert prospect"))?;
@@ -380,7 +418,7 @@ impl ProspectRepo for PgTenantRepos {
              labels = $12, data = $13, research_task_id = $14, latest_score = $15, \
              latest_digest = $16, latest_scored_at = $17, promoted_person_id = $18, \
              promoted_journey_id = $19, promoted_at = $20, promoted_score = $21, \
-             decided_at = $22, updated_at = $23, revision = revision + 1 \
+             decided_at = $22, updated_at = $23, icp_key = $25, revision = revision + 1 \
              where workspace_id = $1 and id = $2 and revision = $24",
         )
         .bind(ws.as_uuid())
@@ -407,6 +445,7 @@ impl ProspectRepo for PgTenantRepos {
         .bind(p.decision.as_ref().map(|d| d.at))
         .bind(p.updated_at)
         .bind(i64::from(expected_revision))
+        .bind(&p.icp_key)
         .execute(self.tx.conn())
         .await
         .map_err(|e| map_sqlx(e, "update prospect"))?;
@@ -444,14 +483,9 @@ impl ProspectRepo for PgTenantRepos {
         let limit = q.limit.clamp(1, MAX_PROSPECT_PAGE);
         let range = q.bucket.map(|b| b.range());
         let sql = format!(
-            "select {COLUMNS} from prospects where workspace_id = $1 \
-             and ($2::text is null or status = $2) \
-             and ($3::uuid is null or research_task_id = $3) \
-             and ($4::text is null or city = $4) \
-             and ($5::text is null or segment_key = $5) \
-             and ($6::smallint is null or latest_score between $6 and $7) \
-             and ($8::timestamptz is null or (created_at, id) < ($8, $9)) \
-             order by created_at desc, id desc limit $10"
+            "select {COLUMNS} from prospects where workspace_id = $1 and {FILTERS} \
+             and ($9::timestamptz is null or (created_at, id) < ($9, $10)) \
+             order by created_at desc, id desc limit $11"
         );
         let rows: Vec<Record> = sqlx::query_as(&sql)
             .bind(self.workspace_id().as_uuid())
@@ -461,6 +495,7 @@ impl ProspectRepo for PgTenantRepos {
             .bind(&q.segment_key)
             .bind(range.map(|r| i16::from(r.0)))
             .bind(range.map(|r| i16::from(r.1)))
+            .bind(&q.icp_key)
             .bind(q.after.map(|c| c.created_at))
             .bind(q.after.map(|c| c.id))
             .bind(i64::from(limit) + 1)
@@ -481,6 +516,35 @@ impl ProspectRepo for PgTenantRepos {
             None
         };
         Ok(Page { items, next })
+    }
+
+    async fn count_by(
+        &mut self,
+        q: &ProspectQuery,
+        by: CountBy,
+    ) -> Result<Vec<(Option<String>, u32)>, AppError> {
+        let range = q.bucket.map(|b| b.range());
+        let key = count_expression(by);
+        let sql = format!(
+            "select {key} as value, count(*) from prospects \
+             where workspace_id = $1 and {FILTERS} group by 1"
+        );
+        let rows: Vec<(Option<String>, i64)> = sqlx::query_as(&sql)
+            .bind(self.workspace_id().as_uuid())
+            .bind(q.status.map(|s| s.key()))
+            .bind(q.research_task_id.map(|t| t.as_uuid()))
+            .bind(&q.city)
+            .bind(&q.segment_key)
+            .bind(range.map(|r| i16::from(r.0)))
+            .bind(range.map(|r| i16::from(r.1)))
+            .bind(&q.icp_key)
+            .fetch_all(self.tx.conn())
+            .await
+            .map_err(|e| map_sqlx(e, "count prospects"))?;
+        Ok(rows
+            .into_iter()
+            .map(|(value, n)| (value, u32::try_from(n).unwrap_or(u32::MAX)))
+            .collect())
     }
 
     async fn find_by_keys(&mut self, keys: &[Key]) -> Result<Vec<(KeyKind, ProspectId)>, AppError> {

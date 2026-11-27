@@ -63,6 +63,13 @@ async fn list_filters_and_cursor() {
 }
 
 #[tokio::test]
+async fn the_purpose_filters_and_every_filter_counts() {
+    let db = TestDb::new().await;
+    let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));
+    jt_testkit::prospects_contract::the_purpose_filters_and_every_filter_counts(uow).await;
+}
+
+#[tokio::test]
 async fn delete_returns_keys_and_cascades_scores() {
     let db = TestDb::new().await;
     let uow = Arc::new(PgUnitOfWork::new(db.pool.clone()));

@@ -108,7 +108,7 @@ pub(crate) async fn remaining(
         .await?;
     let workspace_today = r.prospects().created_between(None, from, to).await?;
     let (target_left, backlog) = match &task.kind {
-        TaskKind::AdHoc { target_count } => {
+        TaskKind::AdHoc { target_count, .. } => {
             let found = r.prospects().count_for_task(task.id).await?;
             (Some(u32::from(*target_count).saturating_sub(found)), None)
         }
@@ -519,6 +519,10 @@ pub struct CreateInput {
     pub target_count: u16,
     /// `1..=500` prospects a local day.
     pub daily_cap: u16,
+    /// The ICP entry of the approved strategy the task serves: the prospects recorded for it take
+    /// it as their purpose. Its segment fills a brief that names none.
+    #[serde(default)]
+    pub icp_key: Option<String>,
     #[serde(default)]
     pub request_key: Option<String>,
 }
@@ -528,11 +532,12 @@ const MAX_REQUEST_KEY_CHARS: usize = 128;
 
 /// `jeeta.research.tasks_create`: an ad-hoc task under the approved strategy's rubric, while
 /// prospecting is on (`CONFLICT prospecting_off` else); a brief's segment must be one of the
-/// strategy's audience. A request key replays the task it created, read again, for 24 hours.
+/// strategy's audience, and an `icp_key` one of its ICP entries (whose segment the brief keeps).
+/// A request key replays the task it created, read again, for 24 hours.
 pub async fn tasks_create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<TaskOut, AppError> {
     ctx.require(Permission::ProspectsWork)?;
     let recorder = recorder(ctx)?;
-    let brief = input.brief.normalised();
+    let mut brief = input.brief.normalised();
     validate_brief(&brief).map_err(invalid_from)?;
     validate_ad_hoc(input.target_count, input.daily_cap).map_err(invalid_from)?;
     if let Some(k) = &input.request_key
@@ -556,6 +561,39 @@ pub async fn tasks_create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<
     let version = prospecting_version(r.as_mut())
         .await?
         .ok_or_else(prospecting_off)?;
+    // The ICP entry the task serves: one of the approved version's, whose segment the brief
+    // keeps (or takes, when it names none).
+    let icp_key = match input.icp_key.as_deref().map(str::trim) {
+        None => None,
+        Some(key) => {
+            let Some(entry) = version
+                .sections
+                .prospecting
+                .icp
+                .iter()
+                .find(|e| e.key == key)
+            else {
+                return Err(invalid_from(jt_prospects::ProspectError::Invalid {
+                    field: "icp_key",
+                    reason: "unknown_icp_entry",
+                }));
+            };
+            if brief
+                .segment_key
+                .as_ref()
+                .is_some_and(|segment| segment != &entry.segment_key)
+            {
+                return Err(invalid_from(jt_prospects::ProspectError::Invalid {
+                    field: "segment_key",
+                    reason: "not_the_entrys_segment",
+                }));
+            }
+            if brief.segment_key.is_none() {
+                brief.segment_key = Some(entry.segment_key.clone());
+            }
+            Some(entry.key.clone())
+        }
+    };
     if let Some(segment) = &brief.segment_key
         && !version.sections.audience.iter().any(|s| &s.key == segment)
     {
@@ -569,6 +607,7 @@ pub async fn tasks_create(deps: &Deps, ctx: &Ctx, input: CreateInput) -> Result<
         workspace_id: ctx.workspace_id,
         kind: TaskKind::AdHoc {
             target_count: input.target_count,
+            icp_key,
         },
         strategy_version_id: version.id,
         brief,
@@ -790,7 +829,7 @@ pub(crate) async fn close_if_found(
     ctx: &Ctx,
     task: &ResearchTask,
 ) -> Result<bool, AppError> {
-    let TaskKind::AdHoc { target_count } = task.kind else {
+    let TaskKind::AdHoc { target_count, .. } = task.kind else {
         return Ok(false);
     };
     if task.status != TaskStatus::Open

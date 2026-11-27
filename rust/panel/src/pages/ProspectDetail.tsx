@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { addNote, getJourney, getPerson } from '@/api/inbox';
 import { decideProspect, eraseProspect, getPlaybook, getProspect, updateProspect } from '@/api/prospects';
-import type { ContactPerson, InboxJourneyOut, Prospect, ProspectField, ProspectGetOut, SizeHint } from '@/api/types';
+import type { ContactPerson, InboxJourneyOut, Prospect, ProspectField, ProspectGetOut, Rubric, SizeHint } from '@/api/types';
 import { useSession } from '@/auth/useSession';
 import { ErrorCallout } from '@/components/ErrorCallout';
 import { QueryState } from '@/components/QueryState';
@@ -63,8 +63,12 @@ import {
 import { usePoolCopy, type PoolCopyKey } from './prospects/copy';
 import { MessageDialog } from './prospects/MessageDialog';
 import { ProspectFormDialog } from './prospects/ProspectFormDialog';
-import { usePoolSegments } from './prospects/segments';
+import { keyWords, shortDate, verdictOf } from './prospects/purpose';
+import { usePoolPurposes, usePoolSegments } from './prospects/segments';
 import { buildTimeline, stageOf, type StepKey, type TimelineEntry, type TimelineTone } from './prospects/timeline';
+import { useTaskCopy } from './research/copy';
+import { useSegmentNames } from './research/data';
+import { taskName } from './research/words';
 
 type ContactKey = 'phone' | 'email' | 'website' | 'instagram' | 'tiktok' | 'address';
 const CONTACT_KEYS: readonly ContactKey[] = ['phone', 'email', 'website', 'instagram', 'tiktok', 'address'];
@@ -486,20 +490,30 @@ function TimelineCard({ entries }: { entries: TimelineEntry[] }) {
   );
 }
 
-const criterionLabel = (key: string) => key.replace(/_/g, ' ').replace(/^./, (c) => c.toLocaleUpperCase());
+/**
+ * The rubric the latest score was made under: the one the server read for it (`scored_under`),
+ * else the current one when the score's digest is the current digest; `null` when neither.
+ */
+function useScoringRubric(data: ProspectGetOut): { rubric: Rubric | null; older: boolean } {
+  const key = useLeadsKey();
+  const playbook = useQuery({ queryKey: [...key, 'prospects', 'playbook'], queryFn: getPlaybook, retry: false });
+  const latest = data.scores[0];
+  const digest = playbook.data?.workspace.rubric_digest;
+  const current = !!latest && !!digest && digest === latest.rubric_digest;
+  const rubric = data.scored_under ?? (current ? (playbook.data?.workspace.rubric ?? null) : null);
+  return { rubric, older: !!latest && !!digest && !current };
+}
 
 /** The latest score criterion by criterion, and every score below it. */
 function ScoreCard({ data }: { data: ProspectGetOut }) {
   const { t, i18n } = useTranslation();
   const copy = usePoolCopy();
   const names = useLeadsNames();
-  const key = useLeadsKey();
-  const playbook = useQuery({ queryKey: [...key, 'prospects', 'playbook'], queryFn: getPlaybook, retry: false });
   const latest = data.scores[0];
-  const rubric = playbook.data?.workspace.rubric;
-  // Bars need the weights, which are the current rubric's: only when the score was made under it.
-  const current = !!latest && !!rubric && playbook.data?.workspace.rubric_digest === latest.rubric_digest;
-  const weight = (criterion: string) => (current ? rubric!.criteria.find((c) => c.key === criterion)?.weight : undefined);
+  const { rubric, older } = useScoringRubric(data);
+  const language = i18n.resolvedLanguage ?? i18n.language;
+  // Bars need the weights, which are those of the rubric the score was made under.
+  const criterion = (key: string) => rubric?.criteria.find((c) => c.key === key);
   return (
     <Card title={copy('scoreCard')}>
       {!latest ? (
@@ -508,18 +522,26 @@ function ScoreCard({ data }: { data: ProspectGetOut }) {
         <>
           <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
             <span className="text-lg font-semibold tabular-nums">{copy('scoreOf', { score: latest.score })}</span>
-            {current && <span className="text-xs text-muted-foreground">{copy('threshold', { n: rubric!.qualify_at })}</span>}
-            {!!rubric && !current && <span className="text-xs text-muted-foreground">{copy('olderRubric')}</span>}
+            {rubric && <span className="text-xs text-muted-foreground">{copy('threshold', { n: rubric.qualify_at })}</span>}
+            {older && <span className="text-xs text-muted-foreground">{copy('olderRubric')}</span>}
           </p>
           <ul className="flex flex-col gap-2" aria-label={copy('scoreCard')}>
             {latest.reasons.map((r) => {
-              const w = weight(r.criterion);
+              const c = criterion(r.criterion);
+              const w = c?.weight;
               return (
                 <li key={r.criterion} className="flex flex-col gap-0.5 text-xs">
                   <div className="flex items-center gap-2">
-                    <span className="w-24 shrink-0 truncate font-medium" title={r.criterion}>{criterionLabel(r.criterion)}</span>
+                    <span className="w-24 shrink-0 truncate font-medium" title={c?.description || r.criterion}>
+                      {keyWords(r.criterion, language)}
+                    </span>
                     <span className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-muted" aria-hidden="true">
-                      {w ? <span className="block h-full rounded-full bg-success" style={{ width: `${Math.min(100, (r.points / w) * 100)}%` }} /> : null}
+                      {w ? (
+                        <span
+                          className={cn('block h-full rounded-full', r.points * 2 >= w ? 'bg-success' : 'bg-warning')}
+                          style={{ width: `${Math.min(100, (r.points / w) * 100)}%` }}
+                        />
+                      ) : null}
                     </span>
                     <span className="shrink-0 tabular-nums">{w ? `${r.points}/${w}` : r.points}</span>
                   </div>
@@ -583,6 +605,95 @@ function ScoreCard({ data }: { data: ProspectGetOut }) {
   );
 }
 
+/**
+ * Why the candidate is in the pool, on the candidate itself: what it is for (its purpose and
+ * segment), the research task and the recorder that found it and where, and what was decided on
+ * it: the score against the threshold of the rubric it was made under and where it fell short, or
+ * the reason it was rejected or blocked. What nobody recorded reads "Bilinmiyor".
+ */
+function WhyCard({ data }: { data: ProspectGetOut }) {
+  const { t, i18n } = useTranslation();
+  const copy = usePoolCopy();
+  const taskCopy = useTaskCopy();
+  const names = useLeadsNames();
+  const segmentNames = useSegmentNames();
+  const p = data.prospect;
+  const language = i18n.resolvedLanguage ?? i18n.language;
+  const purposes = usePoolPurposes([p.icp_key]);
+  const segments = usePoolSegments([p.segment_key]);
+  const { rubric } = useScoringRubric(data);
+  const unknown = <span className="text-muted-foreground">{copy('unknown')}</span>;
+  const purpose = p.icp_key ? (purposes.find((x) => x.key === p.icp_key)?.name ?? keyWords(p.icp_key, language)) : null;
+  const segment = p.segment_key ? (segments.find((x) => x.key === p.segment_key)?.name ?? p.segment_key) : null;
+  const task = data.research_task;
+  const taskText = task
+    ? [taskName(taskCopy, task, segmentNames), taskCopy(task.kind.type === 'standing' ? 'fromKnowledge' : 'oneOff'), shortDate(task.created_at, language)].join(' · ')
+    : null;
+  const taskValue = task ? (
+    <Link to={`/prospects?task=${encodeURIComponent(task.id)}`} className="text-primary hover:underline" title={copy('taskProspects')}>
+      {taskText}
+    </Link>
+  ) : p.research_task_id ? (
+    copy('olderTask')
+  ) : (
+    t(`leads.originVia.${p.origin.via}`)
+  );
+  const found = [recorderText(t, names, p.origin.recorder), formatWhen(p.origin.at, i18n.language)].filter(Boolean).join(' · ');
+  const decision = p.decision
+    ? [
+        'rejected' in p.decision.kind
+          ? t('leads.prospect.rejectedFor', { reason: t(`leads.rejectReasons.${p.decision.kind.rejected}`) })
+          : t('leads.prospect.blockedFor', { reason: t(`leads.dncReasons.${p.decision.kind.do_not_contact}`) }),
+        p.decision.note || null,
+        copy('verdictBy', { who: recorderText(t, names, p.decision.by), when: formatWhen(p.decision.at, i18n.language) }),
+      ]
+        .filter(Boolean)
+        .join(' · ')
+    : null;
+  const verdict = verdictOf(data.scores[0], rubric);
+  const verdictText =
+    verdict.kind === 'unscored'
+      ? copy('verdictUnscored')
+      : verdict.kind === 'scored'
+        ? copy('verdictScored', { score: verdict.score })
+        : verdict.kind === 'passed'
+          ? copy('verdictPassed', { score: verdict.score, n: verdict.threshold })
+          : [
+              copy('verdictBelow', { score: verdict.score, n: verdict.threshold }),
+              verdict.short.length > 0
+                ? copy('verdictShort', { list: verdict.short.map((x) => `${keyWords(x.criterion, language)} ${x.points}/${x.weight}`).join(', ') })
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' · ');
+  return (
+    <Card title={copy('why')}>
+      <Facts
+        rows={[
+          [t('leads.prospect.purpose'), purpose ?? unknown],
+          [t('leads.prospect.segment'), segment ?? unknown],
+          [copy('whyTask'), taskValue],
+          [copy('whyFoundBy'), found],
+          [
+            copy('whyFoundOn'),
+            p.origin.discovered_at.length > 0 ? (
+              <ul className="flex flex-col text-xs" aria-label={copy('whyFoundOn')}>
+                {p.origin.discovered_at.map((source, i) => (
+                  <li key={i}>
+                    <SourceView source={source} />
+                  </li>
+                ))}
+              </ul>
+            ) : null,
+          ],
+          [copy('whyVerdict'), <span data-testid="prospect-verdict">{decision ?? verdictText}</span>],
+          [t('leads.prospect.purgeAfter'), p.purge_after ? formatDateTime(p.purge_after, i18n.language) : null],
+        ]}
+      />
+    </Card>
+  );
+}
+
 function Facts({ rows }: { rows: [string, ReactNode][] }) {
   return (
     <dl className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-sm">
@@ -636,6 +747,7 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
       city: t('leads.prospect.place'),
       district: t('leads.prospect.place'),
       segment_key: t('leads.prospect.segment'),
+      icp_key: t('leads.prospect.purpose'),
       language: t('leads.prospect.language'),
       labels: t('leads.prospect.labels'),
       notes: copy('notes'),
@@ -661,8 +773,8 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
   const contactPerson: ProspectField<ContactPerson> | null | undefined = p.contact.contact_person;
   const hasContact = CONTACT_KEYS.some((k) => p.contact[k]) || !!contactPerson || !!p.size;
   const place = [p.district, p.city].filter(Boolean).join(', ');
-  const segments = usePoolSegments([p.segment_key]);
-  const segmentName = segments.find((s) => s.key === p.segment_key)?.name ?? p.segment_key;
+  const purposes = usePoolPurposes([p.icp_key]);
+  const purposeName = p.icp_key ? (purposes.find((x) => x.key === p.icp_key)?.name ?? keyWords(p.icp_key, i18n.language)) : null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-2.5">
@@ -673,7 +785,7 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
         <h2 className="font-display text-lg font-medium leading-7">{p.business_name}</h2>
         <ProspectStatusBadge status={p.status} />
         {p.latest_score && <Badge tone="neutral">{t('leads.prospect.score', { score: p.latest_score.score })}</Badge>}
-        <span className="min-w-0 truncate text-sm text-muted-foreground">{[p.sector, place].filter(Boolean).join(' · ')}</span>
+        <span className="min-w-0 truncate text-sm text-muted-foreground">{[purposeName, p.sector, place].filter(Boolean).join(' · ')}</span>
         <div className="ms-auto">
           <Actions data={data} conversationHref={conversationHref} />
         </div>
@@ -685,6 +797,22 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
           <TimelineCard entries={entries} />
         </div>
         <div className="flex min-w-0 flex-col gap-5 border-t border-border bg-surface-muted/40 p-4 xl:min-h-0 xl:overflow-y-auto xl:border-s xl:border-t-0">
+          <WhyCard data={data} />
+          <ScoreCard data={data} />
+          {p.signals.length > 0 && (
+            <Card title={t('leads.prospect.signals')}>
+              <ul className="flex flex-col gap-2 text-sm" aria-label={t('leads.prospect.signals')}>
+                {p.signals.map((s, i) => (
+                  <li key={i} className="flex flex-col">
+                    <span>{s.text}</span>
+                    <span className="text-xs">
+                      <SourceView source={s.source} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
           <Card title={copy('contact')}>
             {/* The list stays in the page even when empty: it is what tells a reader the prospect has loaded. */}
             <ul aria-label={t('leads.prospect.fields')}>
@@ -710,34 +838,8 @@ function ProspectBody({ data }: { data: ProspectGetOut }) {
                 [t('leads.prospect.entity'), t(`leads.entityKinds.${p.entity_kind}`)],
                 [t('leads.prospect.sector'), p.sector],
                 [t('leads.prospect.place'), place || null],
-                [t('leads.prospect.segment'), segmentName],
                 [t('leads.prospect.language'), p.language],
                 [t('leads.prospect.labels'), p.labels.length ? p.labels.join(', ') : null],
-              ]}
-            />
-          </Card>
-          {p.signals.length > 0 && (
-            <Card title={t('leads.prospect.signals')}>
-              <ul className="flex flex-col gap-2 text-sm" aria-label={t('leads.prospect.signals')}>
-                {p.signals.map((s, i) => (
-                  <li key={i} className="flex flex-col">
-                    <span>{s.text}</span>
-                    <span className="text-xs">
-                      <SourceView source={s.source} />
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-          <ScoreCard data={data} />
-          <Card title={copy('record')}>
-            <Facts
-              rows={[
-                [t('leads.prospect.origin'), t(`leads.originVia.${p.origin.via}`)],
-                [t('leads.prospect.recordedBy'), recorderText(t, names, p.origin.recorder)],
-                [t('leads.prospect.created'), formatDateTime(p.created_at, i18n.language)],
-                [t('leads.prospect.purgeAfter'), p.purge_after ? formatDateTime(p.purge_after, i18n.language) : null],
               ]}
             />
           </Card>

@@ -58,7 +58,7 @@ const tr = {
   addBody: 'Kendi bildiğin bir işletmeyi havuza ekle. Yalnızca işletme adı zorunlu; gerisini sonra da doldurabilirsin.',
   editDetails: 'Bilgileri düzenle', editTitle: '{name}: bilgiler',
   editBody: 'Değiştirdiğin alan kaydedilir, boşalttığın alan silinir. İşletme adı ve türü sonradan değiştirilemez.',
-  fName: 'İşletme adı', fKind: 'İşletme türü', fSegment: 'Amaç (kitle)', fNoSegment: 'Seçilmedi',
+  fName: 'İşletme adı', fKind: 'İşletme türü', fSegment: 'Kitle', fPurpose: 'Amaç', fNoSegment: 'Seçilmedi',
   fSector: 'Sektör', fCity: 'Şehir', fDistrict: 'İlçe', fLabelsHint: 'Virgülle ayır.',
   fContactName: 'İlgili kişi', fContactRole: 'Görevi',
   fWebsiteHint: 'İşletmenin kendi sitesi; sosyal medya profili değil.', fHandleHint: 'Kullanıcı adı ya da profil bağlantısı.',
@@ -70,6 +70,13 @@ const tr = {
   added: 'Aday eklendi.', detailsSaved: 'Bilgiler kaydedildi.',
   similar: 'Havuzda benzer bir kayıt olabilir. Aday sayfasındaki olası mükerrerlere bak.',
   openExisting: 'Var olan kaydı aç',
+  // Classification and reasoning: what a candidate is for, where it came from, what it advanced on.
+  fltPurpose: 'Amaç', fltSegment: 'Kitle', fltScore: 'Puan', fltCity: 'Şehir', fltTask: 'Görev', fltClear: 'Temizle', filters: 'Filtreler',
+  withCount: '{label} ({n})', olderTask: 'Eski görev',
+  why: 'Neden burada', unknown: 'Bilinmiyor', whyTask: 'Görev', whyFoundBy: 'Bulan', whyFoundOn: 'Bulunduğu sayfa',
+  whyVerdict: 'Karar', noTask: 'Görevsiz', taskProspects: 'Bu görevin adayları',
+  verdictPassed: 'Eşiği geçti · {score}/{n}', verdictBelow: 'Eşiğin altında · {score}/{n}', verdictShort: 'Eksik: {list}',
+  verdictUnscored: 'Puan bekliyor', verdictScored: 'Puan {score}', verdictBy: '{who} · {when}',
 };
 
 const en: typeof tr = {
@@ -124,7 +131,7 @@ const en: typeof tr = {
   addBody: 'Add a business you know of to the pool. Only its name is required; the rest can follow later.',
   editDetails: 'Edit details', editTitle: '{name}: details',
   editBody: 'A field you change is saved, a field you empty is removed. The business name and kind cannot be changed afterwards.',
-  fName: 'Business name', fKind: 'Business kind', fSegment: 'Purpose (audience)', fNoSegment: 'None chosen',
+  fName: 'Business name', fKind: 'Business kind', fSegment: 'Audience', fPurpose: 'Purpose', fNoSegment: 'None chosen',
   fSector: 'Sector', fCity: 'City', fDistrict: 'District', fLabelsHint: 'Separate with commas.',
   fContactName: 'Contact person', fContactRole: 'Role',
   fWebsiteHint: 'The business’s own site, not a social media profile.', fHandleHint: 'A username or a profile link.',
@@ -136,6 +143,12 @@ const en: typeof tr = {
   added: 'Prospect added.', detailsSaved: 'Details saved.',
   similar: 'The pool may hold a similar record. See the possible duplicates on the prospect’s page.',
   openExisting: 'Open the existing record',
+  fltPurpose: 'Purpose', fltSegment: 'Audience', fltScore: 'Score', fltCity: 'City', fltTask: 'Task', fltClear: 'Clear', filters: 'Filters',
+  withCount: '{label} ({n})', olderTask: 'Older task',
+  why: 'Why it is here', unknown: 'Unknown', whyTask: 'Task', whyFoundBy: 'Found by', whyFoundOn: 'Found on',
+  whyVerdict: 'Verdict', noTask: 'No task', taskProspects: 'This task’s prospects',
+  verdictPassed: 'Above the threshold · {score}/{n}', verdictBelow: 'Below the threshold · {score}/{n}', verdictShort: 'Short on: {list}',
+  verdictUnscored: 'Awaiting a score', verdictScored: 'Score {score}', verdictBy: '{who} · {when}',
 };
 
 export type PoolCopyKey = keyof typeof tr;

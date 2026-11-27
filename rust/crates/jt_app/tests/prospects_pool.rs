@@ -56,6 +56,7 @@ fn input(name: &str, phone: &str) -> CreateInput {
         size: None,
         signals: vec![],
         notes: String::new(),
+        icp_key: None,
         research_task_id: None,
         discovered_at: vec![],
         distinct_from: vec![],
@@ -104,7 +105,10 @@ async fn task(w: &World, daily_cap: u16) -> jt_prospects::ResearchTaskId {
         w.ws,
         w.owner,
         version,
-        TaskKind::AdHoc { target_count: 100 },
+        TaskKind::AdHoc {
+            target_count: 100,
+            icp_key: None,
+        },
         FIXED_NOW,
     );
     let t = jt_prospects::ResearchTask { daily_cap, ..t };
@@ -984,6 +988,213 @@ async fn ledger_payloads_hold_no_values() {
             );
         }
     }
+}
+
+/// The rubric the purpose tests score under: one criterion.
+fn fit_rubric() -> jt_strategy::Rubric {
+    jt_strategy::Rubric {
+        criteria: vec![jt_strategy::Criterion {
+            key: "fit".into(),
+            description: "serves coffee".into(),
+            weight: 100,
+        }],
+        qualify_at: 60,
+    }
+}
+
+/// An open standing task for the ICP entry `kafeler` under the approved version.
+async fn standing_task(w: &World) -> jt_prospects::ResearchTask {
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    let version = r.strategy().current_approved().await.unwrap().unwrap().id;
+    let t = jt_testkit::prospects_contract::task(
+        w.ws,
+        w.owner,
+        version,
+        TaskKind::Standing {
+            icp_key: "kafeler".into(),
+        },
+        FIXED_NOW,
+    );
+    assert!(r.research_tasks().insert(&t).await.unwrap());
+    r.commit().await.unwrap();
+    t
+}
+
+#[tokio::test]
+async fn the_purpose_comes_from_the_task_or_names_an_icp_entry() {
+    let w = world().await;
+    approve_prospecting(&w, fit_rubric()).await;
+    let t = standing_task(&w).await;
+    // A prospect recorded for a standing task is sought for the task's entry.
+    let mut i = input("Örnek Kafe", "0500 000 00 21");
+    i.research_task_id = Some(t.id);
+    let from_task = create(&w, &w.owner_ctx, i).await.unwrap();
+    assert_eq!(from_task.icp_key.as_deref(), Some("kafeler"));
+    assert!(from_task.field_names().contains(&FieldName::IcpKey));
+    // Naming another entry for the task is refused.
+    let mut i = input("Örnek Kafe 2", "0500 000 00 22");
+    i.research_task_id = Some(t.id);
+    i.icp_key = Some("kafeler_sahil".into());
+    let e = err(create(&w, &w.owner_ctx, i).await);
+    assert_invalid(&e, "icp_key");
+    assert_eq!(reason(&e), "not_the_tasks_entry");
+    // Outside a task, the purpose given must be an entry of the approved ICP.
+    let mut i = input("Örnek Kafe 3", "0500 000 00 23");
+    i.icp_key = Some("yok_boyle".into());
+    let e = err(create(&w, &w.owner_ctx, i).await);
+    assert_invalid(&e, "icp_key");
+    assert_eq!(reason(&e), "unknown_icp_entry");
+    let mut i = input("Örnek Kafe 3", "0500 000 00 23");
+    i.icp_key = Some("kafeler".into());
+    let given = create(&w, &w.owner_ctx, i).await.unwrap();
+    assert_eq!(given.icp_key.as_deref(), Some("kafeler"));
+    // None given, none recorded: the pool does not guess.
+    let none = create(&w, &w.owner_ctx, input("Örnek Kafe 4", "0500 000 00 24"))
+        .await
+        .unwrap();
+    assert_eq!(none.icp_key, None);
+    // A person sets it to an entry and clears it; an unknown entry is refused.
+    let set = |key: &str| SetFields {
+        icp_key: Some(key.into()),
+        ..SetFields::default()
+    };
+    let e = err(prospects::update(
+        &w.deps,
+        &w.owner_ctx,
+        none.id,
+        update_input(1, set("yok_boyle"), vec![]),
+    )
+    .await);
+    assert_eq!(reason(&e), "unknown_icp_entry");
+    let out = prospects::update(
+        &w.deps,
+        &w.owner_ctx,
+        none.id,
+        update_input(1, set("kafeler"), vec![]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.prospect.icp_key.as_deref(), Some("kafeler"));
+    let out = prospects::update(
+        &w.deps,
+        &w.owner_ctx,
+        none.id,
+        update_input(2, SetFields::default(), vec![FieldName::IcpKey]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.prospect.icp_key, None);
+    // The ledger names the field changed, never a value.
+    let updated = w.entries("prospects.updated");
+    assert_eq!(payload(&updated[0])["fields"], json!(["icp_key"]));
+}
+
+#[tokio::test]
+async fn the_list_filters_by_purpose_counts_every_class_and_get_says_where_it_came_from() {
+    let w = world().await;
+    approve_prospecting(&w, fit_rubric()).await;
+    let t = standing_task(&w).await;
+    let mut i = input("Örnek Kafe", "0500 000 00 31");
+    i.research_task_id = Some(t.id);
+    let sought = create(&w, &w.owner_ctx, i).await.unwrap();
+    let mut i = input("Örnek Kafe 2", "0500 000 00 32");
+    i.city = Some("Ankara".into());
+    let unsought = create(&w, &w.owner_ctx, i).await.unwrap();
+    let page = prospects::list(
+        &w.deps,
+        &w.owner_ctx,
+        ListInput {
+            icp_key: Some("kafeler".into()),
+            ..ListInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [sought.id]
+    );
+    assert_eq!(page.items[0].icp_key.as_deref(), Some("kafeler"));
+    // Counts only when asked: the answer is as it was.
+    assert_eq!(page.counts, None);
+    assert!(serde_json::to_value(&page).unwrap().get("counts").is_none());
+    // Each filter counted under the others: the city's own counts ignore the city chosen.
+    let out = prospects::list(
+        &w.deps,
+        &w.owner_ctx,
+        ListInput {
+            city: Some("İstanbul".into()),
+            counts: true,
+            limit: Some(1),
+            ..ListInput::default()
+        },
+    )
+    .await
+    .unwrap();
+    let counts = out.counts.unwrap();
+    let pairs = |rows: &[prospects::CountOut]| {
+        rows.iter()
+            .map(|c| (c.key.clone(), c.count))
+            .collect::<Vec<_>>()
+    };
+    let s = |v: &str| Some(v.to_owned());
+    assert_eq!(counts.total, 1);
+    assert_eq!(pairs(&counts.city), [(s("Ankara"), 1), (s("İstanbul"), 1)]);
+    assert_eq!(pairs(&counts.icp_key), [(s("kafeler"), 1)]);
+    assert_eq!(pairs(&counts.status), [(s("new"), 1)]);
+    assert_eq!(pairs(&counts.segment_key), [(s("kafeler"), 1)]);
+    assert_eq!(pairs(&counts.bucket), [(None, 1)]);
+    assert_eq!(
+        pairs(&counts.research_task_id),
+        [(Some(t.id.to_string()), 1)]
+    );
+    // Without a filter: largest first, the prospects without a value last.
+    let all = prospects::list(
+        &w.deps,
+        &w.owner_ctx,
+        ListInput {
+            counts: true,
+            ..ListInput::default()
+        },
+    )
+    .await
+    .unwrap()
+    .counts
+    .unwrap();
+    assert_eq!(all.total, 2);
+    assert_eq!(pairs(&all.icp_key), [(s("kafeler"), 1), (None, 1)]);
+    // The candidate opens with the task it came from and the rubric its score was made under.
+    prospects::score(
+        &w.deps,
+        &w.owner_ctx,
+        sought.id,
+        jt_prospects::ScoreInput {
+            score: 40,
+            reasons: vec![jt_prospects::ReasonInput {
+                criterion: "fit".into(),
+                points: 40,
+                evidence: "Kahve var, menü kısa".into(),
+                source: None,
+            }],
+            rubric_digest: prospects::rubric_digest(&fit_rubric()),
+        },
+    )
+    .await
+    .unwrap();
+    let got = prospects::get(&w.deps, &w.owner_ctx, sought.id)
+        .await
+        .unwrap();
+    assert_eq!(got.scored_under, Some(fit_rubric()));
+    assert_eq!(got.scores[0].reasons[0].evidence, "Kahve var, menü kısa");
+    let task = got.research_task.unwrap();
+    assert_eq!(task.id, t.id);
+    assert_eq!(task.kind.icp_key(), Some("kafeler"));
+    // Of no task and never scored: neither.
+    let got = prospects::get(&w.deps, &w.owner_ctx, unsought.id)
+        .await
+        .unwrap();
+    assert_eq!(got.research_task, None);
+    assert_eq!(got.scored_under, None);
 }
 
 /// Puts an approved version with prospecting on (one ICP entry) and `rubric` in force.

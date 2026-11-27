@@ -224,3 +224,63 @@ async fn create_through_mcp_records_connection() {
         .unwrap();
     assert_eq!(got["prospect"], created["prospect"]);
 }
+
+/// What a candidate is for travels with it: the tools that record, edit, list, count and
+/// create research name the purpose (`icp_key`, an ICP entry key) in their schemas.
+#[test]
+fn the_purpose_and_the_counts_are_in_the_schemas() {
+    let tools = tools();
+    let research = tools_of("jeeta.research.");
+    let schema = |name: &str| tools[name].input_schema.as_value().clone();
+    let key_pattern = json!("^[a-z0-9_]{2,32}$");
+    let create = schema("jeeta.prospects.create");
+    assert_eq!(create["properties"]["icp_key"]["pattern"], key_pattern);
+    let update = schema("jeeta.prospects.update");
+    assert_eq!(
+        update["properties"]["set"]["properties"]["icp_key"]["pattern"],
+        key_pattern
+    );
+    assert!(
+        update["properties"]["clear"]["items"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("icp_key"))
+    );
+    let list = schema("jeeta.prospects.list");
+    assert_eq!(list["properties"]["icp_key"]["type"], "string");
+    assert_eq!(list["properties"]["counts"]["type"], "boolean");
+    assert!(
+        schema("jeeta.prospects.report")["properties"]["group_by"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("purpose"))
+    );
+    let tasks_create = research["jeeta.research.tasks_create"]
+        .input_schema
+        .as_value()
+        .clone();
+    assert_eq!(
+        tasks_create["properties"]["icp_key"]["pattern"],
+        key_pattern
+    );
+    for (name, words) in [
+        (
+            "jeeta.prospects.create",
+            &["icp_key", "not_the_tasks_entry"][..],
+        ),
+        ("jeeta.prospects.list", &["icp_key", "counts"][..]),
+        (
+            "jeeta.prospects.get",
+            &["research_task", "scored_under"][..],
+        ),
+    ] {
+        for word in words {
+            assert!(tools[name].description.contains(word), "{name}: {word}");
+        }
+    }
+    assert!(
+        research["jeeta.research.tasks_create"]
+            .description
+            .contains("icp_key")
+    );
+}

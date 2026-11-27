@@ -512,3 +512,70 @@ fn update_sets_clears_and_bumps_the_revision() {
     );
     assert_eq!(p.revision, 2, "a refused update changes nothing");
 }
+
+#[test]
+fn the_purpose_is_a_key_kept_set_and_cleared_like_the_segment() {
+    // A malformed key is refused on create and on update, by its field name.
+    let mut i = input();
+    i.icp_key = Some("Kafe Merkez".into());
+    assert_eq!(invalid(&i, &agent()), ("icp_key", "invalid"));
+    let mut i = input();
+    i.icp_key = Some(" kafeler_merkez ".into());
+    let mut p = prospect(i);
+    assert_eq!(p.icp_key.as_deref(), Some("kafeler_merkez"), "trimmed");
+    assert!(p.field_names().contains(&FieldName::IcpKey));
+    assert_eq!(FieldName::IcpKey.key(), "icp_key");
+    assert!(!FieldName::IcpKey.touches_keys());
+
+    let later = NOW + Duration::hours(1);
+    let wrong = UpdateInput {
+        expected_revision: 1,
+        set: SetFields {
+            icp_key: Some("x".into()),
+            ..SetFields::default()
+        },
+        clear: vec![],
+        distinct_from: vec![],
+    };
+    assert_eq!(
+        apply_update(&mut p, wrong, later, human()),
+        Err(ProspectError::Invalid {
+            field: "icp_key",
+            reason: "invalid"
+        })
+    );
+    let set = UpdateInput {
+        expected_revision: 1,
+        set: SetFields {
+            icp_key: Some("kafeler_sahil".into()),
+            ..SetFields::default()
+        },
+        clear: vec![],
+        distinct_from: vec![],
+    };
+    assert_eq!(
+        apply_update(&mut p, set, later, human()).unwrap(),
+        [FieldName::IcpKey]
+    );
+    assert_eq!(p.icp_key.as_deref(), Some("kafeler_sahil"));
+    let cleared = UpdateInput {
+        expected_revision: 2,
+        set: SetFields::default(),
+        clear: vec![FieldName::IcpKey],
+        distinct_from: vec![],
+    };
+    apply_update(&mut p, cleared, later, human()).unwrap();
+    assert_eq!(p.icp_key, None);
+    // A do-not-contact scrub keeps the purpose with the other coarse facts.
+    let mut i = input();
+    i.icp_key = Some("kafeler_merkez".into());
+    let mut p = prospect(i);
+    scrub_for_dnc(&mut p);
+    assert_eq!(p.icp_key.as_deref(), Some("kafeler_merkez"));
+    assert_eq!(p.segment_key.as_deref(), Some("kafeler"));
+    // A record stored before the purpose existed reads as naming none.
+    let mut stored = serde_json::to_value(prospect(input())).unwrap();
+    stored.as_object_mut().unwrap().remove("icp_key");
+    let back: Prospect = serde_json::from_value(stored).unwrap();
+    assert_eq!(back.icp_key, None);
+}

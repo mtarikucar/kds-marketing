@@ -74,6 +74,7 @@ fn base_input(name: &str, phone: &str) -> CreateInput {
         size: None,
         signals: vec![],
         notes: "a corner cafe".into(),
+        icp_key: None,
         research_task_id: None,
         discovered_at: vec![],
         distinct_from: vec![],

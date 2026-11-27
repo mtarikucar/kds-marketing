@@ -29,7 +29,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (null while none). A task's kind is standing (icp_key: one per ICP \
                           entry of the frame, derived from the card who_we_seek, kept by Jeeta \
                           and carried across frames while its entry stays) or ad_hoc \
-                          (target_count), with its brief (segment_key, sectors, areas, signals, \
+                          (target_count, and icp_key when it serves an entry), with its brief \
+                          (segment_key, sectors, areas, signals, \
                           exclusions, size_hint, language, note), rubric_digest, daily_cap, \
                           status and claim. Answers {items, next}: pass next.before_at and \
                           next.before_id back for the following page. [risk: READ]",
@@ -54,8 +55,12 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           brief {sectors (1 to 10), areas [{city, district?}] (1 to 20), \
                           signals and exclusions (up to 10 each), size_hint, language, note, \
                           segment_key? (one of the frame's audience)}, target_count (1 to \
-                          500) and daily_cap (1 to 500). It closes itself once target_count \
-                          prospects are recorded for it. CONFLICT prospecting_off while the \
+                          500), daily_cap (1 to 500) and icp_key? (the ICP entry it serves: \
+                          the prospects recorded for it take it as their purpose, and a brief \
+                          without a segment takes the entry's; VALIDATION icp_key \
+                          unknown_icp_entry, or segment_key not_the_entrys_segment). It closes \
+                          itself once target_count prospects are recorded for it. CONFLICT \
+                          prospecting_off while the \
                           knowledge base has no ICP yet: derive it (knowledge_derive, part \
                           prospecting). A request_key replays the task it \
                           created for 24 hours. Answers {task, remaining_today}. [risk: WRITE]",
@@ -152,6 +157,7 @@ fn create_schema() -> Schema {
             },
             "target_count": { "type": "integer", "minimum": 1, "maximum": 500 },
             "daily_cap": { "type": "integer", "minimum": 1, "maximum": 500 },
+            "icp_key": { "type": "string", "pattern": "^[a-z0-9_]{2,32}$", "description": "The ICP entry (a key of the playbook's workspace.icp) the task serves." },
             "request_key": text(128, "Replays the task it created for 24 hours."),
         },
         "required": ["brief", "target_count", "daily_cap"],

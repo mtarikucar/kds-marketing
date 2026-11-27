@@ -8,8 +8,8 @@ import type { EntityKind, Prospect } from '@/api/types';
 export const CONTACT_FIELDS = ['phone', 'email', 'website', 'instagram', 'tiktok', 'address'] as const;
 export type ContactField = (typeof CONTACT_FIELDS)[number];
 
-/** The business facts an update may set or clear. */
-const TEXT_FIELDS = ['segment_key', 'sector', 'city', 'district'] as const;
+/** The business facts an update may set or clear: the purpose (`icp_key`) among them. */
+const TEXT_FIELDS = ['segment_key', 'icp_key', 'sector', 'city', 'district'] as const;
 
 /** The pool's bounds (`jt_prospects`), in characters. */
 export const LIMITS = {
@@ -31,6 +31,8 @@ export interface ProspectDraft {
   business_name: string;
   entity_kind: EntityKind;
   segment_key: string;
+  /** The purpose: an ICP entry key, or `''` for none. */
+  icp_key: string;
   sector: string;
   city: string;
   district: string;
@@ -58,6 +60,7 @@ export function draftOf(p: Prospect | undefined, source: string): ProspectDraft 
     business_name: p?.business_name ?? '',
     entity_kind: p?.entity_kind ?? 'unknown_business',
     segment_key: p?.segment_key ?? '',
+    icp_key: p?.icp_key ?? '',
     sector: p?.sector ?? '',
     city: p?.city ?? '',
     district: p?.district ?? '',

@@ -1427,10 +1427,10 @@ Not legal advice; each item blocks what is named until answered.
 
 ---
 
-## Appendix A. Agent playbook (served by `jeeta.prospects.playbook`, `PLAYBOOK_VERSION = 2`)
+## Appendix A. Agent playbook (served by `jeeta.prospects.playbook`, `PLAYBOOK_VERSION = 3`)
 
 ```text
-JEETA PROSPECTING PLAYBOOK v2
+JEETA PROSPECTING PLAYBOOK v3
 
 Purpose. You find businesses that fit this workspace's ideal customer profile (ICP), which the owner's knowledge
 base sets (its card who_we_seek), record them in Jeeta's prospect pool with evidence, score them against the workspace's rubric, and promote the ones worth
@@ -1461,6 +1461,9 @@ What to record (jeeta.prospects.create).
 - business_name, entity_kind (legal_entity for a company such as A.Ş. or Ltd. Şti., sole_trader for a
   sole proprietorship or esnaf, unknown_business if you cannot tell), sector, city, district, language,
   segment_key (from the ICP entry), size (branches, employee band), signals (why it fits, each with its source).
+- research_task_id: the task you work on. The task's ICP entry becomes the prospect's purpose (icp_key), which the
+  owner sorts and reads the pool by; outside a task, give icp_key yourself (an entry key of the workspace section).
+  Record as signals what matches the entry's signals, so the owner sees what the business was found on.
 - Contact fields: phone, email, website, instagram, tiktok, address, contact_person. Each field needs at least
   one source URL of a public page where the business itself publishes that value (its website's contact page,
   its official profile, its listing). Give captured_at: when you saw it. The website is the business's own
@@ -1478,7 +1481,8 @@ What to record (jeeta.prospects.create).
 Scoring (jeeta.prospects.score).
 - Score 0-100 with the workspace's rubric: one reason per criterion, the points you give it (up to its weight),
   and the evidence in one sentence with its source. The points must add up to the score. Send the rubric_digest
-  from this playbook; if Jeeta answers rubric_mismatch, read the playbook again.
+  from this playbook; if Jeeta answers rubric_mismatch, read the playbook again. The owner reads the reasons as
+  why a prospect qualified or did not: say what you saw, and give its source.
 - A score at or above qualify_at qualifies the prospect automatically. Reject what does not fit with
   jeeta.prospects.decide and a reason (not_icp, closed_business, no_contact_data, competitor, already_customer,
   duplicate, other with a note).

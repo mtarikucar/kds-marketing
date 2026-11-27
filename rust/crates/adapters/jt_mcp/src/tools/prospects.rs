@@ -74,8 +74,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           again, for 24 hours. Read jeeta.prospects.playbook first, and call \
                           jeeta.prospects.check before researching a business in depth. A \
                           research_task_id records it for that task (CONFLICT task_closed when \
-                          the task is closed; an ad-hoc task closes itself at its target). \
-                          [risk: WRITE]",
+                          the task is closed; an ad-hoc task closes itself at its target) and \
+                          gives it the task's ICP entry as its purpose (icp_key, which the \
+                          owner sorts the pool by); outside a task give icp_key yourself (a key \
+                          of the playbook's workspace.icp). VALIDATION icp_key \
+                          not_the_tasks_entry or unknown_icp_entry. [risk: WRITE]",
             permissions: &[Permission::ProspectsWork],
             schema: create_schema,
             run: create,
@@ -86,7 +89,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           (prospect_id) at its revision (expected_revision): set fields, each \
                           with new evidence as on create, clear fields that are wrong or no \
                           longer published (clear: field names), name prospects it is not \
-                          (distinct_from). The business name and kind are not edited. New \
+                          (distinct_from). The business name and kind are not edited; the \
+                          purpose (icp_key) is set to another ICP entry or cleared. New \
                           contact values meet create's checks. Answers {prospect, flags} (as \
                           create's, for the keys the edit adds); CONFLICT stale_revision \
                           (revision: read it again), duplicate or not_editable. [risk: WRITE]",
@@ -98,11 +102,15 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             use_case: "prospects.list",
             description: "List the pool, newest first: filters status (new, qualified, \
                           rejected, promoted, do_not_contact), research_task_id, city, \
-                          segment_key, bucket (0-24, 25-49, 50-74, 75-100: the latest score); \
-                          limit 1 to 200 (50). Rows carry the business facts, which fields \
-                          are recorded (fields), the latest score and the purge time, never \
+                          segment_key, icp_key (the purpose: the ICP entry it was sought \
+                          for), bucket (0-24, 25-49, 50-74, 75-100: the latest score); limit 1 \
+                          to 200 (50). Rows carry the business facts, which fields are \
+                          recorded (fields), the latest score and the purge time, never \
                           contact values. Answers {items, next}: pass next.before_at and \
-                          next.before_id back for the following page. [risk: READ]",
+                          next.before_id back for the following page. With counts: true also \
+                          {counts: {total, status, segment_key, icp_key, bucket, city, \
+                          research_task_id}}, each a list of {key, count} (key null: without \
+                          one) counted under the other filters. [risk: READ]",
             permissions: &[Permission::ProspectsWork],
             schema: list_schema,
             run: list,
@@ -110,7 +118,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ToolDef {
             use_case: "prospects.get",
             description: "Read one prospect (prospect_id) with every field's evidence, its \
-                          latest scores, the prospects sharing its website or name and city \
+                          latest scores, the rubric the latest was computed under \
+                          (scored_under), the research task it was recorded for \
+                          (research_task), the prospects sharing its website or name and city \
                           (duplicate_candidates) and its ledger history. [risk: READ]",
             permissions: &[Permission::ProspectsWork],
             schema: id_schema,
@@ -121,7 +131,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             description: "Score a new or qualified prospect (prospect_id) 0-100 with the \
                           frame's rubric (derived from the card who_we_seek): one reason per \
                           criterion {criterion, \
-                          points up to its weight, evidence: one sentence, source?}; the points \
+                          points up to its weight, evidence: one sentence of what you saw, \
+                          source: where (give it: the owner reads these reasons as why the \
+                          prospect qualified or did not)}; the points \
                           add up to the score; rubric_digest is the digest the playbook gives. \
                           A score at or above the rubric's qualify_at qualifies a new prospect. \
                           Answers {score, status, qualified}; CONFLICT rubric_mismatch \
@@ -214,7 +226,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         },
         ToolDef {
             use_case: "prospects.report",
-            description: "Read the pool's report for [from, to) (RFC 3339 instants, at most 366                           days; computed now, nothing stored), grouped by group_by: source                           (default), research_task, segment, sector, city, score_bucket or                           rubric_digest (a promoted prospect by its record at promotion). Each                           group {key, created, scored, qualified, rejected {reason: n}} over the                           prospects created in the range, and {promoted, contacted, replied,                           meetings, quoted, won, lost {reason: n}, won_revenue {currency: minor                           units}, rates {promoted_to_replied, replied_to_meeting,                           meeting_to_won}} over those promoted in it (revenue is never summed                           across currencies). Read it weekly with jeeta.outreach.report:                           adapt targeting within the ICP of the frame; change the ICP or the rubric through                           jeeta.strategy.frame_apply (prospecting) when the card who_we_seek says so, else propose it                           with jeeta.strategy.proposal_create. [risk: READ]",
+            description: "Read the pool's report for [from, to) (RFC 3339 instants, at most 366                           days; computed now, nothing stored), grouped by group_by: source                           (default), research_task, segment, purpose (icp_key), sector, city, score_bucket or                           rubric_digest (a promoted prospect by its record at promotion). Each                           group {key, created, scored, qualified, rejected {reason: n}} over the                           prospects created in the range, and {promoted, contacted, replied,                           meetings, quoted, won, lost {reason: n}, won_revenue {currency: minor                           units}, rates {promoted_to_replied, replied_to_meeting,                           meeting_to_won}} over those promoted in it (revenue is never summed                           across currencies). Read it weekly with jeeta.outreach.report:                           adapt targeting within the ICP of the frame; change the ICP or the rubric through                           jeeta.strategy.frame_apply (prospecting) when the card who_we_seek says so, else propose it                           with jeeta.strategy.proposal_create. [risk: READ]",
             permissions: &[Permission::ProspectsWork],
             schema: report_schema,
             run: report,
@@ -305,6 +317,7 @@ fn record_properties() -> serde_json::Map<String, Value> {
         "district": text(80, "The district."),
         "language": { "type": "string", "minLength": 2, "maxLength": 8, "description": "A BCP 47 primary tag: tr, en." },
         "segment_key": { "type": "string", "pattern": "^[a-z0-9_]{2,32}$", "description": "The ICP entry's audience segment." },
+        "icp_key": { "type": "string", "pattern": "^[a-z0-9_]{2,32}$", "description": "The purpose: the ICP entry (a key of the playbook's workspace.icp) the business is sought for. A research_task_id gives its task's entry." },
         "labels": { "type": "array", "maxItems": 20, "items": text(40, "A label.") },
         "phone": field(text(40, "As published."), "The business's published phone."),
         "email": field(text(254, "As published; never guessed."), "The business's published email."),
@@ -368,9 +381,9 @@ fn field_names() -> Value {
         "type": "array",
         "items": {
             "type": "string",
-            "enum": ["sector", "city", "district", "language", "segment_key", "labels", "phone",
-                     "email", "website", "instagram", "tiktok", "address", "contact_person",
-                     "size", "signals", "notes"],
+            "enum": ["sector", "city", "district", "language", "segment_key", "icp_key", "labels",
+                     "phone", "email", "website", "instagram", "tiktok", "address",
+                     "contact_person", "size", "signals", "notes"],
         },
     })
 }
@@ -420,8 +433,10 @@ fn list_schema() -> Schema {
             "research_task_id": uuid("Only this task's prospects."),
             "city": text(80, "The city, as recorded."),
             "segment_key": text(32, "The segment."),
+            "icp_key": text(32, "The purpose: the ICP entry the prospects were sought for."),
             "bucket": { "type": "string", "enum": ["0-24", "25-49", "50-74", "75-100"] },
             "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+            "counts": { "type": "boolean", "description": "Also answer how many prospects each value of every filter holds." },
             "before_at": { "type": "string", "format": "date-time", "description": "next.before_at of the previous page." },
             "before_id": uuid("next.before_id of the previous page."),
         },
@@ -533,7 +548,7 @@ fn report_schema() -> Schema {
         "properties": {
             "from": { "type": "string", "format": "date-time", "description": "The range's start (included)." },
             "to": { "type": "string", "format": "date-time", "description": "The range's end (excluded), at most 366 days after from." },
-            "group_by": { "type": "string", "enum": ["source", "research_task", "segment", "sector", "city", "score_bucket", "rubric_digest"] },
+            "group_by": { "type": "string", "enum": ["source", "research_task", "segment", "purpose", "sector", "city", "score_bucket", "rubric_digest"] },
         },
         "required": ["from", "to"],
         "additionalProperties": false,
