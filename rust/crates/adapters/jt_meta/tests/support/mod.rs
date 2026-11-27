@@ -348,6 +348,7 @@ pub fn instagram_app() -> InstagramApp {
         app_id: INSTAGRAM_APP_ID.into(),
         app_secret: INSTAGRAM_APP_SECRET.into(),
         comment_scopes: false,
+        message_scopes: false,
     }
 }
 

@@ -14,8 +14,10 @@ use jt_connector::{
     ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES, Provider,
 };
 use jt_meta::{
-    ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_INSIGHTS_SCOPE, INSTAGRAM_SCOPES, META_HOSTS,
-    MetaBases, MetaConnector, PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
+    ContainerPoll, FACEBOOK_SCOPES, INSTAGRAM_ECHO_FIELD, INSTAGRAM_INSIGHTS_SCOPE,
+    INSTAGRAM_MESSAGE_SCOPES, INSTAGRAM_MESSAGES_SCOPE, INSTAGRAM_MESSAGING_FIELDS,
+    INSTAGRAM_SCOPES, META_HOSTS, MetaBases, MetaConnector, PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD,
+    PAGE_MESSAGING_FIELDS,
 };
 use jt_outbound::FIXED_HOSTS;
 use serde_json::{Value, json};
@@ -3581,6 +3583,7 @@ async fn the_business_app_sign_in_opens_embedded_signup_with_its_extras() {
         app_id: "ig".into(),
         app_secret: "ig-secret".into(),
         comment_scopes: false,
+        message_scopes: false,
     });
     let refused = r.meta.authorize_url_for(
         &instagram,
@@ -4030,6 +4033,69 @@ async fn instagram_authorize_appends_its_comment_scopes_when_flag_on() {
     assert_eq!(scope_of(&url), Some(expected.join(",")));
 }
 
+/// The Instagram app's message flag adds `instagram_business_manage_messages` to Instagram
+/// Login's request, and only that; with the comment flag too, which already asks for it, each
+/// scope is asked for once. Off, the URL is byte for byte what it was before the flag.
+#[tokio::test]
+async fn instagram_authorize_appends_the_message_scope_when_its_flag_is_on() {
+    let r = rig().await;
+    let url = |app: InstagramApp| {
+        r.meta
+            .authorize_url(&OAuthApp::Instagram(app), &redirect(), "state-1", None)
+            .unwrap()
+    };
+    assert_eq!(
+        INSTAGRAM_MESSAGE_SCOPES,
+        ["instagram_business_manage_messages"]
+    );
+    assert_eq!(
+        INSTAGRAM_MESSAGES_SCOPE,
+        "instagram_business_manage_messages"
+    );
+    // Off: exactly the URL of before.
+    assert_eq!(
+        url(instagram_app()).as_str(),
+        format!(
+            "https://www.instagram.com/oauth/authorize?client_id={INSTAGRAM_APP_ID}&redirect_uri={}&response_type=code&scope={}&state=state-1",
+            url::form_urlencoded::byte_serialize(redirect().as_str().as_bytes())
+                .collect::<String>(),
+            url::form_urlencoded::byte_serialize(INSTAGRAM_SCOPES.join(",").as_bytes())
+                .collect::<String>(),
+        )
+    );
+    // On.
+    let messages = InstagramApp {
+        message_scopes: true,
+        ..instagram_app()
+    };
+    let expected: Vec<&str> = INSTAGRAM_SCOPES
+        .iter()
+        .chain(INSTAGRAM_MESSAGE_SCOPES)
+        .copied()
+        .collect();
+    assert_eq!(scope_of(&url(messages)), Some(expected.join(",")));
+    // With the comment flag: the comment scopes, the message scope among them once.
+    let both = InstagramApp {
+        comment_scopes: true,
+        message_scopes: true,
+        ..instagram_app()
+    };
+    let expected: Vec<&str> = INSTAGRAM_SCOPES
+        .iter()
+        .chain(INSTAGRAM_COMMENT_SCOPES)
+        .copied()
+        .collect();
+    assert_eq!(scope_of(&url(both)), Some(expected.join(",")));
+    // The Meta app's request never carries it.
+    let mut meta = meta_app();
+    meta.comment_scopes = true;
+    let fb = r
+        .meta
+        .authorize_url(&OAuthApp::Meta(meta), &redirect(), "s", None)
+        .unwrap();
+    assert!(!scope_of(&fb).unwrap().contains("instagram_business_"));
+}
+
 /// Facebook Login's scopes with the comment ones, as a grant holding them records them.
 fn comment_grant_scopes() -> Vec<&'static str> {
     FACEBOOK_SCOPES
@@ -4201,7 +4267,8 @@ async fn instagram_login_subscribes_comment_fields_with_grant() {
         Some("comments,live_comments")
     );
     assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN));
-    // With the messages scope, its messages too.
+    // With the messages scope, its messages, their postbacks and (with the comment permission
+    // the echoes need) the echoes of its own replies too.
     m.clear();
     r.meta
         .on_connected(
@@ -4212,9 +4279,11 @@ async fn instagram_login_subscribes_comment_fields_with_grant() {
         .unwrap();
     assert_eq!(
         m.request("POST", &path).param("subscribed_fields"),
-        Some("comments,live_comments,messages")
+        Some("comments,live_comments,messages,messaging_postbacks,message_echoes")
     );
-    // Best effort: a refusal is a fact, not the error.
+    // Best effort: a refusal is a fact, not the error; asked once more with the fields of
+    // before the extras.
+    m.clear();
     m.set(
         "POST",
         &path,
@@ -4229,6 +4298,89 @@ async fn instagram_login_subscribes_comment_fields_with_grant() {
         .await
         .unwrap();
     assert_eq!(facts, json!({ "subscribed": false }));
+    let asked: Vec<Option<String>> = m
+        .requests("POST", &path)
+        .iter()
+        .map(|c| c.param("subscribed_fields").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            Some("comments,live_comments,messages,messaging_postbacks,message_echoes".to_owned()),
+            Some("comments,live_comments,messages".to_owned()),
+        ]
+    );
+}
+
+/// An Instagram Login grant with the messages permission and no comment permission subscribes
+/// the account to its direct messages, from either kind the token serves (`instagram`,
+/// `instagram_dm`: the same token, the same account, the same union); without the echoes, whose
+/// permission (by Meta's fields reference) is the comment one. A grant with neither asks
+/// nothing, as before.
+#[tokio::test]
+async fn instagram_login_subscribes_its_messages_with_the_messages_permission() {
+    let r = rig().await;
+    let m = &r.mock;
+    let path = format!("/ig/{IG}/subscribed_apps");
+    m.on("POST", &path, ok(json!({ "success": true })));
+    assert_eq!(INSTAGRAM_MESSAGING_FIELDS, "messages,messaging_postbacks");
+    assert_eq!(INSTAGRAM_ECHO_FIELD, "message_echoes");
+    for kind in ["instagram", "instagram_dm"] {
+        m.clear();
+        let facts = r
+            .meta
+            .on_connected(
+                &ig_login_granted(INSTAGRAM_MESSAGE_SCOPES),
+                &public(kind, Some(IG)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(facts, json!({ "subscribed": true }), "{kind}");
+        let call = m.request("POST", &path);
+        assert_eq!(
+            call.param("subscribed_fields"),
+            Some(INSTAGRAM_MESSAGING_FIELDS),
+            "{kind}"
+        );
+        assert_eq!(call.bearer(), Some(IG_LOGIN_TOKEN), "{kind}");
+    }
+    // A refusal of the extras keeps the messages.
+    m.clear();
+    m.set(
+        "POST",
+        &path,
+        status(403, graph_fixture(m, "error_permission")),
+    );
+    r.meta
+        .on_connected(
+            &ig_login_granted(INSTAGRAM_MESSAGE_SCOPES),
+            &public("instagram_dm", Some(IG)),
+        )
+        .await
+        .unwrap();
+    let asked: Vec<Option<String>> = m
+        .requests("POST", &path)
+        .iter()
+        .map(|c| c.param("subscribed_fields").map(str::to_owned))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            Some(INSTAGRAM_MESSAGING_FIELDS.to_owned()),
+            Some("messages".to_owned())
+        ]
+    );
+    // Neither comments nor messages: nothing asked, for either kind.
+    m.clear();
+    for kind in ["instagram", "instagram_dm"] {
+        let facts = r
+            .meta
+            .on_connected(&ig_login_cred(), &public(kind, Some(IG)))
+            .await
+            .unwrap();
+        assert_eq!(facts, Value::Null, "{kind}");
+    }
+    assert!(m.recorded().is_empty());
 }
 
 #[tokio::test]

@@ -3332,6 +3332,405 @@ async fn bound_confirm_binds_first_asset_and_creates_the_rest() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Instagram messages through Instagram Login (`JEETA_INSTAGRAM_MESSAGE_SCOPES`)
+// ---------------------------------------------------------------------------------------------
+
+/// The Instagram Login account every test below connects.
+const IG_LOGIN: &str = "17841400000000077";
+
+/// The Instagram Login permission of direct messages.
+const IG_MESSAGES: &str = "instagram_business_manage_messages";
+
+/// An Instagram Login token (`token`) granted the base scopes and `extra`.
+fn ig_login_token(token: &str, extra: &[&str]) -> Credential {
+    let mut scopes = vec![
+        "instagram_business_basic".to_owned(),
+        "instagram_business_content_publish".to_owned(),
+    ];
+    scopes.extend(extra.iter().map(|s| (*s).to_owned()));
+    Credential::OAuth {
+        access_token: token.into(),
+        refresh_token: None,
+        expires_at: Some(FIXED_NOW + Duration::days(60)),
+        scopes,
+    }
+}
+
+/// What Instagram Login lists for a grant of `credential`, as the Meta adapter does: the account
+/// as `instagram`, and as `instagram_dm` too when the grant holds the messages permission.
+fn ig_login_assets(credential: &Credential) -> Vec<Asset> {
+    let messages = matches!(credential, Credential::OAuth { scopes, .. }
+        if scopes.iter().any(|s| s == IG_MESSAGES));
+    let kinds: &[&str] = if messages {
+        &["instagram", "instagram_dm"]
+    } else {
+        &["instagram"]
+    };
+    kinds
+        .iter()
+        .map(|kind| Asset {
+            kind_key: (*kind).into(),
+            external_id: IG_LOGIN.into(),
+            name: "@cay".into(),
+            credential: credential.clone(),
+            public: json!({ "username": "cay", "login": "instagram" }),
+        })
+        .collect()
+}
+
+/// Every app configured, the Instagram app's message flag as `on`.
+fn with_message_flag(on: bool) -> Arc<FakeAppConfig> {
+    let mut apps = FakeAppConfig::with_all_apps();
+    apps.instagram.as_mut().unwrap().message_scopes = on;
+    Arc::new(apps)
+}
+
+impl Rig {
+    /// Connects [`IG_LOGIN`] through Instagram Login with a grant of the base scopes (no
+    /// messages), its probe succeeding, and returns its `instagram` capability.
+    async fn connect_ig_login(&self) -> Capability {
+        let out = connector::start_oauth(&self.w.deps, &self.w.owner_ctx, start("instagram"))
+            .await
+            .unwrap();
+        let credential = ig_login_token("IGQ-ig-token", &[]);
+        self.meta_oauth.push_exchange(Ok(credential.clone()));
+        self.meta_oauth
+            .push_assets(Ok(ig_login_assets(&credential)));
+        let owner = self.owner().await;
+        let pending = self
+            .complete_as(&self.w.deps, &owner, &state_of(&out), "code-1")
+            .await
+            .unwrap();
+        self.meta.push_probe(ok_probe(IG_LOGIN));
+        let mut out = self.confirm(&pending, &[IG_LOGIN]).await;
+        assert_eq!(out.len(), 1);
+        out.remove(0).capability
+    }
+
+    /// The app the pending flow `out` signs in with.
+    fn flow_app(&self, out: &StartOut) -> OAuthCallback {
+        self.pending_rows()
+            .into_iter()
+            .find(|p| p.id == out.pending_id)
+            .unwrap()
+            .app
+    }
+
+    /// Completes the started flow `out` at its own callback, the provider granting `credential`.
+    async fn ig_login_completed(
+        &self,
+        out: &StartOut,
+        credential: &Credential,
+    ) -> PendingAssetsOut {
+        self.meta_oauth.push_exchange(Ok(credential.clone()));
+        self.meta_oauth.push_assets(Ok(ig_login_assets(credential)));
+        let owner = self.owner().await;
+        self.complete_as(&self.w.deps, &owner, &state_of(out), "code-2")
+            .await
+            .unwrap()
+    }
+
+    /// The live capabilities of `kind`.
+    fn live_of(&self, kind: &str) -> Vec<Capability> {
+        self.w
+            .uow
+            .snapshot()
+            .capabilities
+            .into_iter()
+            .map(|c| c.capability)
+            .filter(|c| c.kind_key == kind && c.status != StoredStatus::Retired)
+            .collect()
+    }
+}
+
+/// Where a new `instagram_dm` connection signs in: through Facebook Login (the account's Page),
+/// as always, unless the Instagram app's message flag is on and either the workspace's Instagram
+/// account is an Instagram Login one or there is no Meta app: then through Instagram Login, which
+/// needs no Page. Instagram Login without the flag never connects messages (`CONFLICT`
+/// `provider_product_not_enabled`), and an `instagram_dm` capability Instagram Login issued
+/// reconnects through it.
+#[tokio::test]
+async fn instagram_messages_sign_in_through_instagram_login_for_such_an_account() {
+    let mut r = rig().await;
+    let o = r.w.owner_ctx.clone();
+    // The flag on, but no Instagram Login account: the Meta app, as before.
+    r.w.deps.apps = with_message_flag(true);
+    let dm = r.start("instagram_dm").await;
+    assert_eq!(r.flow_app(&dm), OAuthCallback::Meta);
+    assert_eq!(query(&dm, "client_id").as_deref(), Some("meta-app-id"));
+
+    // An Instagram Login account, the flag still off: the Meta app, byte for byte as before.
+    r.w.deps.apps = with_message_flag(false);
+    let ig = r.connect_ig_login().await;
+    assert_eq!(ig.connector_public["access"]["app"], "instagram");
+    let dm = r.start("instagram_dm").await;
+    assert_eq!(r.flow_app(&dm), OAuthCallback::Meta);
+    assert_eq!(redirect_of(&dm), "https://panel.test/oauth/callback/meta");
+
+    // The flag on: Instagram Login, at its own callback, with the Instagram app.
+    r.w.deps.apps = with_message_flag(true);
+    let dm = r.start("instagram_dm").await;
+    assert_eq!(r.flow_app(&dm), OAuthCallback::Instagram);
+    assert_eq!(
+        redirect_of(&dm),
+        "https://panel.test/oauth/callback/instagram"
+    );
+    assert_eq!(query(&dm, "client_id").as_deref(), Some("instagram-app-id"));
+    let row = r
+        .pending_rows()
+        .into_iter()
+        .find(|p| p.id == dm.pending_id)
+        .unwrap();
+    assert_eq!(
+        (row.kind_key.as_str(), row.capability_id),
+        ("instagram_dm", None)
+    );
+    // Every other Meta kind keeps its app.
+    let page = r.start("facebook_page").await;
+    assert_eq!(r.flow_app(&page), OAuthCallback::Meta);
+
+    // No Meta app at all: Instagram Login with the flag; without it there is no way in.
+    let mut no_meta = r.w.deps.clone();
+    let mut apps = (*with_message_flag(true)).clone();
+    apps.meta = None;
+    no_meta.apps = Arc::new(apps.clone());
+    let out = connector::start_oauth(&no_meta, &o, start("instagram_dm"))
+        .await
+        .unwrap();
+    assert_eq!(r.flow_app(&out), OAuthCallback::Instagram);
+    apps.instagram.as_mut().unwrap().message_scopes = false;
+    no_meta.apps = Arc::new(apps);
+    let e = err(connector::start_oauth(&no_meta, &o, start("instagram_dm")).await);
+    assert_eq!(e.details["reason"], "provider_app_not_configured");
+
+    // A declared `instagram_dm` signs in as a new connection would.
+    let declared = r.w.declare("instagram_dm", "Mesajlar").await.capability.id;
+    let out = connector::reconnect(&r.w.deps, &o, declared).await.unwrap();
+    assert_eq!(r.flow_app(&out), OAuthCallback::Instagram);
+
+    // An `instagram_dm` Instagram Login issued reconnects through it; with the flag turned off
+    // again it cannot (the sign-in would not reach its messages), nothing written.
+    let pending = r
+        .ig_login_completed(&out, &ig_login_token("IGQ-ig-token-2", &[IG_MESSAGES]))
+        .await;
+    r.meta.push_probe(ok_probe(IG_LOGIN));
+    r.meta.push_probe(ok_probe(IG_LOGIN));
+    let connected = r.confirm(&pending, &[IG_LOGIN]).await;
+    assert_eq!(connected[0].capability.id, declared);
+    assert_eq!(
+        connected[0].capability.connector_public["access"]["app"],
+        "instagram"
+    );
+    let out = connector::reconnect(&r.w.deps, &o, declared).await.unwrap();
+    assert_eq!(r.flow_app(&out), OAuthCallback::Instagram);
+    r.w.deps.apps = with_message_flag(false);
+    let flows = r.pending_rows().len();
+    let e = err(connector::reconnect(&r.w.deps, &o, declared).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(e.details["reason"], "provider_product_not_enabled");
+    assert_eq!(r.pending_rows().len(), flows);
+}
+
+/// The owner reconnects an Instagram Login account once the message flag is on: the sign-in
+/// lists the account's direct messages beside it (one token, one account), and confirming the
+/// account renews its `instagram` capability in place (same id, so its posts and history stay;
+/// no second one) and creates its `instagram_dm`, both with the fresh grant and both run through
+/// the connection step (the account's webhook subscription) and probed. Reconnecting again, from
+/// either capability, renews both: nothing is duplicated and nothing is refused.
+#[tokio::test]
+async fn reconnecting_an_instagram_login_account_adds_its_messages_in_place() {
+    let mut r = rig().await;
+    let o = r.w.owner_ctx.clone();
+    let ig = r.connect_ig_login().await;
+    let connected_before = r.w.entries("connector.connected").len();
+    r.w.deps.apps = with_message_flag(true);
+
+    let out = connector::reconnect(&r.w.deps, &o, ig.id).await.unwrap();
+    assert_eq!(r.flow_app(&out), OAuthCallback::Instagram);
+    let granted = ig_login_token("IGQ-ig-token-2", &[IG_MESSAGES]);
+    let pending = r.ig_login_completed(&out, &granted).await;
+    let kinds: Vec<(&str, &str)> = pending
+        .assets
+        .iter()
+        .map(|a| (a.kind_key.as_str(), a.external_id.as_str()))
+        .collect();
+    assert_eq!(kinds, [("instagram", IG_LOGIN), ("instagram_dm", IG_LOGIN)]);
+
+    let calls_before = r.meta.calls().len();
+    r.meta.push_probe(ok_probe(IG_LOGIN));
+    r.meta.push_probe(ok_probe(IG_LOGIN));
+    let out = r.confirm(&pending, &[IG_LOGIN]).await;
+    let got: Vec<(&str, StoredStatus)> = out
+        .iter()
+        .map(|c| (c.capability.kind_key.as_str(), c.capability.status))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("instagram", StoredStatus::Verified),
+            ("instagram_dm", StoredStatus::Verified)
+        ]
+    );
+    assert_eq!(
+        out[0].capability.id, ig.id,
+        "the account's capability is renewed in place"
+    );
+    let dm = out[1].capability.clone();
+    assert_eq!(dm.external_id.as_deref(), Some(IG_LOGIN));
+    assert_eq!(r.live_of("instagram").len(), 1);
+    assert_eq!(r.live_of("instagram_dm").len(), 1);
+    for id in [ig.id, dm.id] {
+        assert_eq!(r.sealed_credential(id), granted);
+        let public = &r.capability(id).connector_public;
+        assert_eq!(public["access"]["app"], "instagram");
+        assert!(
+            public["access"]["scopes"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(IG_MESSAGES)),
+            "{public}"
+        );
+        assert_no_secret("the public facts", &public.to_string());
+    }
+    // Each ran the connection step with the fresh grant, then its probe.
+    let steps: Vec<String> = r.meta.calls()[calls_before..]
+        .iter()
+        .filter_map(|c| match c {
+            ConnectorCall::OnConnected { credential, public } => {
+                assert_eq!(credential, &granted);
+                Some(public["kind_key"].as_str().unwrap().to_owned())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(steps, ["instagram", "instagram_dm"]);
+    let connected: Vec<serde_json::Value> = r.w.entries("connector.connected")[connected_before..]
+        .iter()
+        .map(|e| e.payload.clone())
+        .collect();
+    assert_eq!(
+        connected,
+        [
+            json!({ "kind_key": "instagram", "external_id": IG_LOGIN, "reconnected": true }),
+            json!({ "kind_key": "instagram_dm", "external_id": IG_LOGIN }),
+        ]
+    );
+
+    // Again, from the account and then from its messages: both renewed, none added.
+    for from in [ig.id, dm.id] {
+        let out = connector::reconnect(&r.w.deps, &o, from).await.unwrap();
+        assert_eq!(r.flow_app(&out), OAuthCallback::Instagram);
+        let granted = ig_login_token("IGQ-ig-token-3", &[IG_MESSAGES]);
+        let pending = r.ig_login_completed(&out, &granted).await;
+        r.meta.push_probe(ok_probe(IG_LOGIN));
+        r.meta.push_probe(ok_probe(IG_LOGIN));
+        let out = r.confirm(&pending, &[IG_LOGIN]).await;
+        let mut ids: Vec<CapabilityId> = out.iter().map(|c| c.capability.id).collect();
+        ids.sort();
+        let mut expected = vec![ig.id, dm.id];
+        expected.sort();
+        assert_eq!(ids, expected);
+        assert_eq!(r.live_of("instagram").len(), 1);
+        assert_eq!(r.live_of("instagram_dm").len(), 1);
+        for id in [ig.id, dm.id] {
+            assert_eq!(r.sealed_credential(id), granted);
+            assert_eq!(r.capability(id).status, StoredStatus::Verified);
+        }
+    }
+}
+
+/// Starting "Instagram messages" anew through Instagram Login lists the account and its messages
+/// together: the account's live `instagram` capability, which the Instagram app issued, is
+/// renewed rather than refused as a duplicate, and `instagram_dm` is created. One that another
+/// app issued (Facebook Login, through a Page) is left exactly as it is. A Facebook Login flow
+/// still refuses an account held by its kind, as before.
+#[tokio::test]
+async fn a_new_instagram_messages_connection_shares_the_accounts_one_token() {
+    let mut r = rig().await;
+    let o = r.w.owner_ctx.clone();
+    let ig = r.connect_ig_login().await;
+    r.w.deps.apps = with_message_flag(true);
+
+    let out = r.start("instagram_dm").await;
+    assert_eq!(r.flow_app(&out), OAuthCallback::Instagram);
+    let granted = ig_login_token("IGQ-ig-token-2", &[IG_MESSAGES]);
+    let pending = r.ig_login_completed(&out, &granted).await;
+    assert_eq!(pending.assets.len(), 2);
+    r.meta.push_probe(ok_probe(IG_LOGIN));
+    r.meta.push_probe(ok_probe(IG_LOGIN));
+    let out = r.confirm(&pending, &[IG_LOGIN]).await;
+    let kinds: Vec<&str> = out.iter().map(|c| c.capability.kind_key.as_str()).collect();
+    assert_eq!(kinds, ["instagram", "instagram_dm"]);
+    assert_eq!(out[0].capability.id, ig.id);
+    assert_eq!(r.live_of("instagram").len(), 1);
+    assert_eq!(r.sealed_credential(ig.id), granted);
+    // A second new connection of the same messages is the duplicate it always was.
+    let again = r.start("instagram_dm").await;
+    let pending = r.ig_login_completed(&again, &granted).await;
+    let e =
+        err(connector::confirm_assets(&r.w.deps, &o, r.confirming(&pending, &[IG_LOGIN])).await);
+    assert_eq!(e.code, ErrorCode::Conflict);
+    assert_eq!(
+        e.details,
+        json!({ "kind_key": "instagram_dm", "external_id": IG_LOGIN })
+    );
+    assert_eq!(r.sealed_credential(ig.id), granted, "nothing written");
+
+    // An account whose `instagram` came through Facebook Login (its Page): left as it is.
+    let other = "17841400000000078";
+    let (_, page_flow) = r
+        .completed_with(vec![Asset {
+            kind_key: "instagram".into(),
+            external_id: other.into(),
+            name: "@simit".into(),
+            credential: Credential::PageToken {
+                page_id: "page-1".into(),
+                token: "EAAB-page-1".into(),
+            },
+            public: json!({ "username": "simit", "page_id": "page-1", "login": "facebook" }),
+        }])
+        .await;
+    r.meta.push_probe(ok_probe(other));
+    let through_page = r.confirm(&page_flow, &[other]).await.remove(0).capability;
+    let sealed_before = r.stored(through_page.id).sealed;
+    let public_before = r.capability(through_page.id).connector_public;
+    let mut apps = (*with_message_flag(true)).clone();
+    apps.meta = None;
+    let mut no_meta = r.w.deps.clone();
+    no_meta.apps = Arc::new(apps);
+    let out = connector::start_oauth(&no_meta, &o, start("instagram_dm"))
+        .await
+        .unwrap();
+    let credential = ig_login_token("IGQ-ig-token-4", &[IG_MESSAGES]);
+    r.meta_oauth.push_exchange(Ok(credential.clone()));
+    r.meta_oauth.push_assets(Ok(ig_login_assets(&credential)
+        .into_iter()
+        .map(|a| Asset {
+            external_id: other.into(),
+            ..a
+        })
+        .collect()));
+    let owner = r.owner().await;
+    let pending = r
+        .complete_as(&no_meta, &owner, &state_of(&out), "code-3")
+        .await
+        .unwrap();
+    r.meta.push_probe(ok_probe(other));
+    let out = r.confirm(&pending, &[other]).await;
+    let kinds: Vec<&str> = out.iter().map(|c| c.capability.kind_key.as_str()).collect();
+    assert_eq!(kinds, ["instagram_dm"]);
+    assert_eq!(r.stored(through_page.id).sealed, sealed_before);
+    assert_eq!(
+        r.capability(through_page.id).connector_public,
+        public_before
+    );
+    assert_eq!(
+        r.capability(through_page.id).connector_public["access"]["app"],
+        "meta"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Retiring, pending work
 // ---------------------------------------------------------------------------------------------
 

@@ -179,6 +179,13 @@ const LINKEDIN_ADS: &str = "linkedin_ads";
 ///
 /// [`XApp::ad_scopes`]: crate::ports::connectors::XApp::ad_scopes
 const X_ADS: &str = "x_ads";
+/// The Meta kind of an Instagram account's direct messages, which Instagram Login reaches only
+/// with the Instagram app's message scope ([`InstagramApp::message_scopes`]).
+///
+/// [`InstagramApp::message_scopes`]: crate::ports::connectors::InstagramApp::message_scopes
+const INSTAGRAM_DM: &str = "instagram_dm";
+/// The Meta kind of an Instagram account itself (publishing, comments).
+const INSTAGRAM: &str = "instagram";
 const PUBLIC_URL_NOT_CONFIGURED: &str = "public base url not configured";
 const NO_ADAPTER: &str = "provider adapter not available";
 
@@ -506,11 +513,15 @@ pub const VERIFY_TOKEN_HINT: &str = "set in the Meta app dashboard";
 /// (`details.reason = "public_base_url_not_configured"`), whichever apps are configured; the
 /// provider's app must be configured (`instagram` signs in with the Instagram app, the other Meta
 /// kinds with the Meta app, `x` with the X app, `tiktok` with the TikTok app, the LinkedIn kinds
-/// with the LinkedIn app), else `CONFLICT` "provider app not configured"
+/// with the LinkedIn app; `instagram_dm` signs in with the Instagram app instead when its message
+/// flag is on, `JEETA_INSTAGRAM_MESSAGE_SCOPES`, and the Meta app is not configured or the
+/// workspace's Instagram account was connected through Instagram Login: such an account has no
+/// Facebook Page to reach its messages through), else `CONFLICT` "provider app not configured"
 /// (`details.reason = "provider_app_not_configured"`, `details.provider`); a `linkedin_page`
 /// flow needs the LinkedIn app's organization scopes (`JEETA_LINKEDIN_ORG_SCOPES`, set once
-/// LinkedIn approved the Community Management API), else `CONFLICT` "provider product not
-/// enabled" (`details.reason = "provider_product_not_enabled"`, `details.provider`); and its
+/// LinkedIn approved the Community Management API), and an `instagram_dm` flow through Instagram
+/// Login the Instagram app's message flag, else `CONFLICT` "provider product not enabled"
+/// (`details.reason = "provider_product_not_enabled"`, `details.provider`); and its
 /// adapter present, else `CONFLICT`. A `flow` must be one for the kind ([`OAuthFlow::kind_key`]:
 /// `whatsapp_business_app` for `whatsapp_cloud`), else `VALIDATION` naming `flow`, and
 /// `whatsapp_business_app` needs the Meta app's WhatsApp Embedded Signup configuration
@@ -549,8 +560,10 @@ pub async fn start_oauth(deps: &Deps, ctx: &Ctx, input: StartOAuth) -> Result<St
 /// `details = {provider, retryable: true, retry_after_s?, reason}`, the reason redacted. Assets of
 /// kinds the provider does not serve are dropped, each account is kept once per kind, and keys
 /// that look like a secret's name are dropped from their public facts. A flow bound to a
-/// capability ([`reconnect`]) keeps only that capability's account when it names one; a declared
-/// capability that names none is offered every asset. Either way an account that reaches no
+/// capability ([`reconnect`]) keeps only that capability's account when it names one (its kind's
+/// asset, and through Instagram Login the account's other kind too: `instagram` and
+/// `instagram_dm` share the account's one token); a declared capability that names none is
+/// offered every asset. Either way an account that reaches no
 /// asset of the capability's kind (or not its account) is `VALIDATION` with
 /// `details.reason = "account_mismatch"`. A flow running a sign-in variant ([`OAuthFlow`])
 /// exchanges the code and lists the assets as the variant says (`OAuthProvider::exchange_for`,
@@ -667,9 +680,14 @@ pub async fn complete_oauth(
     if let Some(capability) = &bound {
         // A reconnection keeps its capability's account only; a declared capability's first
         // connection is offered every asset (the first chosen of its kind becomes it), but needs
-        // one of its kind.
+        // one of its kind. Through Instagram Login the account's other kind stays beside it
+        // (`instagram` and `instagram_dm` hold one token): reconnecting with the message scope
+        // brings the account's direct messages.
         if let Some(held) = &capability.external_id {
-            assets.retain(|a| a.kind_key == capability.kind_key && a.external_id == *held);
+            let siblings = flow.app == OAuthCallback::Instagram;
+            assets.retain(|a| {
+                a.external_id == *held && (a.kind_key == capability.kind_key || siblings)
+            });
         }
         if !assets.iter().any(|a| a.kind_key == capability.kind_key) {
             return Err(AppError::validation(
@@ -736,7 +754,11 @@ pub async fn complete_oauth(
 /// a connector's account is (back to `declared`, the old account's facts dropped; an account held
 /// elsewhere is `CONFLICT`), the credential sealed and the
 /// asset's facts written. Every other chosen asset becomes a new capability, as above (the bound
-/// capability's own account is no duplicate). Nothing is written when any of it is refused. The
+/// capability's own account is no duplicate). Through Instagram Login, bound or not, a chosen
+/// asset of another kind than the flow's whose account a live capability of its kind already
+/// holds is not refused: one token serves `instagram` and `instagram_dm` alike, so that
+/// capability is renewed as a reconnection is when the Instagram app issued it (its id, posts and
+/// history kept), and left as it is otherwise. Nothing is written when any of it is refused. The
 /// flow is deleted in the same transaction.
 ///
 /// Writes `connector.connected` per capability (payload `kind_key`, `external_id`, and
@@ -817,12 +839,20 @@ async fn confirm_assets_with_hosts(
         )
         .await?;
         let mut ids = vec![id];
+        let (renewed, rest) =
+            renew_held_siblings(deps, repos.as_mut(), ctx, &flow, rest, &hosts).await?;
+        ids.extend(renewed);
         if !rest.is_empty() {
             ids.extend(create(deps, repos.as_mut(), ctx, &flow, rest, &hosts).await?);
         }
         ids
     } else {
-        create(deps, repos.as_mut(), ctx, &flow, chosen, &hosts).await?
+        let (mut ids, rest) =
+            renew_held_siblings(deps, repos.as_mut(), ctx, &flow, chosen, &hosts).await?;
+        if !rest.is_empty() {
+            ids.extend(create(deps, repos.as_mut(), ctx, &flow, rest, &hosts).await?);
+        }
+        ids
     };
     repos.oauth_pending().delete(flow.id).await?;
     repos.commit().await?;
@@ -1432,8 +1462,16 @@ async fn begin_oauth(
     {
         return Err(invalid("flow", "this sign-in connects another kind"));
     }
+    let dm_through_instagram =
+        kind_key == INSTAGRAM_DM && dm_through_instagram_login(deps, ctx).await?;
     let callback = match bound {
-        Some(capability) => reconnect_app(deps.apps.as_ref(), provider, capability),
+        Some(capability) => reconnect_app(
+            deps.apps.as_ref(),
+            provider,
+            capability,
+            dm_through_instagram,
+        ),
+        None if dm_through_instagram => Some(OAuthCallback::Instagram),
         None => OAuthCallback::of_flow(provider, kind_key),
     }
     .ok_or_else(|| app_not_configured(provider))?;
@@ -1452,6 +1490,13 @@ async fn begin_oauth(
         return Err(product_not_enabled(provider));
     }
     if kind_key == X_ADS && matches!(&app, OAuthApp::X(x) if !x.ad_scopes) {
+        return Err(product_not_enabled(provider));
+    }
+    // Instagram Login reaches direct messages only with the message scope, which it asks for
+    // only while the Instagram app's message flag is on.
+    if kind_key == INSTAGRAM_DM
+        && matches!(&app, OAuthApp::Instagram(instagram) if !instagram.message_scopes)
+    {
         return Err(product_not_enabled(provider));
     }
     if flow == Some(OAuthFlow::WhatsappBusinessApp)
@@ -1593,28 +1638,65 @@ fn oauth_app(apps: &dyn PlatformAppConfig, app: OAuthCallback) -> Option<OAuthAp
 
 /// The app a reconnection of `capability`, of `provider`, signs in with: the one that issued its
 /// credential (`connector_public.access.app`, written when an OAuth flow's credential is sealed
-/// and when a Meta token is pasted), so an `instagram` capability connected through Facebook
-/// Login (its Page) or with a pasted Meta token comes back through the Meta app and one connected
-/// through Instagram Login through the Instagram app. A capability that names none (declared and
-/// never connected, or sealed before the app was recorded) signs in, when it is `instagram`, with the Meta app when
-/// that is configured and the Instagram app otherwise; with its kind's app for every other kind
+/// and when a Meta token is pasted), so an `instagram` or `instagram_dm` capability connected
+/// through Facebook Login (its Page) or with a pasted Meta token comes back through the Meta app
+/// and one connected through Instagram Login through the Instagram app. A capability that names
+/// none (declared and never connected, or sealed before the app was recorded) signs in, when it is
+/// `instagram`, with the Meta app when that is configured and the Instagram app otherwise; when
+/// it is `instagram_dm`, with the Instagram app when `dm_through_instagram`
+/// ([`dm_through_instagram_login`]), else the Meta app; with its kind's app for every other kind
 /// ([`OAuthCallback::of_flow`]). `None` for a provider without OAuth.
 fn reconnect_app(
     apps: &dyn PlatformAppConfig,
     provider: Provider,
     capability: &Capability,
+    dm_through_instagram: bool,
 ) -> Option<OAuthCallback> {
-    let instagram = provider == Provider::Meta && capability.kind_key == "instagram";
+    let meta = provider == Provider::Meta;
+    let instagram = meta && capability.kind_key == INSTAGRAM;
+    let instagram_kind = instagram || (meta && capability.kind_key == INSTAGRAM_DM);
     let issued = capability.connector_public["access"]["app"]
         .as_str()
         .and_then(OAuthCallback::parse)
         .filter(|app| app.provider() == provider)
-        .filter(|app| *app != OAuthCallback::Instagram || instagram);
+        .filter(|app| *app != OAuthCallback::Instagram || instagram_kind);
     match issued {
         Some(app) => Some(app),
         None if instagram && apps.meta_app().is_some() => Some(OAuthCallback::Meta),
+        None if dm_through_instagram => Some(OAuthCallback::Instagram),
         None => OAuthCallback::of_flow(provider, &capability.kind_key),
     }
+}
+
+/// Whether a new `instagram_dm` connection (or a declared one's first) signs in with Instagram
+/// Login rather than Facebook Login: the Instagram app is configured with its message flag
+/// ([`InstagramApp::message_scopes`]), and either the Meta app is not configured or the
+/// workspace's Instagram account was connected through Instagram Login (a live `instagram`
+/// capability the Instagram app issued, `connector_public.access.app = "instagram"`), which has
+/// no Facebook Page to reach its messages through. Otherwise Facebook Login, through the account's
+/// Page, as always.
+///
+/// [`InstagramApp::message_scopes`]: crate::ports::connectors::InstagramApp::message_scopes
+async fn dm_through_instagram_login(deps: &Deps, ctx: &Ctx) -> Result<bool, AppError> {
+    let apps = deps.apps.as_ref();
+    if !apps.instagram_app().is_some_and(|app| app.message_scopes) {
+        return Ok(false);
+    }
+    if apps.meta_app().is_none() {
+        return Ok(true);
+    }
+    let mut repos = deps.uow.tenant(ctx.workspace_id).await?;
+    let instagram = repos
+        .capabilities()
+        .list(CapabilityFilter {
+            kind: Some(INSTAGRAM),
+            ..CapabilityFilter::default()
+        })
+        .await?;
+    Ok(instagram.iter().any(|c| {
+        c.status != StoredStatus::Retired
+            && c.connector_public["access"]["app"] == OAuthCallback::Instagram.key()
+    }))
 }
 
 /// The public facts of `credential`, issued by an OAuth flow signed in with `app`: its own
@@ -1991,6 +2073,54 @@ async fn renew(
     )
     .await?;
     Ok(chosen)
+}
+
+/// Of the chosen `assets` of `flow`, those of an account a live capability of their kind already
+/// holds, when the flow signed in through Instagram Login and they are of another kind than the
+/// flow's own: one Instagram Login token is the account's, for `instagram` and `instagram_dm`
+/// alike, so such an asset is that capability's, not a new one. A capability the Instagram app
+/// issued (`connector_public.access.app = "instagram"`) is renewed as a reconnection is
+/// ([`renew`]: the fresh credential sealed into it, its id, and with it its posts and history,
+/// kept); one another app issued (Facebook Login, through a Page) is left as it is. Returns the
+/// renewed capabilities and the assets left to create, in their order; every asset of any other
+/// flow is left to create (and refused there when its account is held, as always).
+async fn renew_held_siblings(
+    deps: &Deps,
+    repos: &mut dyn TenantRepos,
+    ctx: &Ctx,
+    flow: &OAuthPendingRow,
+    assets: Vec<Asset>,
+    hosts: &[String],
+) -> Result<(Vec<CapabilityId>, Vec<Asset>), AppError> {
+    if flow.app != OAuthCallback::Instagram {
+        return Ok((Vec::new(), assets));
+    }
+    let live: Vec<Capability> = repos
+        .capabilities()
+        .list(CapabilityFilter::default())
+        .await?
+        .into_iter()
+        .filter(|c| c.status != StoredStatus::Retired)
+        .collect();
+    let mut renewed = Vec::new();
+    let mut rest = Vec::new();
+    for asset in assets {
+        let holder = live.iter().find(|c| {
+            asset.kind_key != flow.kind_key
+                && c.kind_key == asset.kind_key
+                && c.external_id.as_deref() == Some(asset.external_id.as_str())
+        });
+        match holder {
+            Some(c) if c.connector_public["access"]["app"] == OAuthCallback::Instagram.key() => {
+                let first = asset.external_id.clone();
+                renew(deps, repos, ctx, (flow, c.id), &first, vec![asset], hosts).await?;
+                renewed.push(c.id);
+            }
+            Some(_) => {}
+            None => rest.push(asset),
+        }
+    }
+    Ok((renewed, rest))
 }
 
 /// `CONFLICT`: a live capability of `kind_key` already holds the account `external_id`.

@@ -77,6 +77,14 @@ pub struct InstagramApp {
     /// (`JEETA_INSTAGRAM_COMMENT_SCOPES`, default off), as [`MetaApp::comment_scopes`] for
     /// Facebook Login.
     pub comment_scopes: bool,
+    /// Whether Instagram Login flows ask for the direct-message scope,
+    /// `instagram_business_manage_messages` (`JEETA_INSTAGRAM_MESSAGE_SCOPES`, default off): set
+    /// by the operator once the Instagram product offers that permission (Instagram refuses a
+    /// whole sign-in that asks for one the app is not set up for). Then `instagram_dm`, an
+    /// Instagram Login account's direct messages, connects through Instagram Login, without a
+    /// Facebook Page (`usecases::connector::start_oauth`); off, every Instagram Login request is
+    /// what it was before.
+    pub message_scopes: bool,
 }
 
 impl fmt::Debug for InstagramApp {
@@ -85,6 +93,7 @@ impl fmt::Debug for InstagramApp {
             .field("app_id", &self.app_id)
             .field("app_secret", &Masked)
             .field("comment_scopes", &self.comment_scopes)
+            .field("message_scopes", &self.message_scopes)
             .finish()
     }
 }
@@ -254,7 +263,7 @@ pub trait PlatformAppConfig: Send + Sync {
 /// | callback | app | a new connection of | a reconnection of |
 /// |---|---|---|---|
 /// | `meta` | the Meta app (Facebook Login) | every Meta kind but `instagram` | every Meta capability the Meta app issued, `instagram` ones included (through their Page) |
-/// | `instagram` | the Instagram app (Instagram Login) | `instagram` | an `instagram` capability the Instagram app issued |
+/// | `instagram` | the Instagram app (Instagram Login) | `instagram`; `instagram_dm` too while the app's message flag is on, for a workspace whose Instagram account the Instagram app issued or that has no Meta app (`usecases::connector::start_oauth`) | an `instagram` or `instagram_dm` capability the Instagram app issued |
 /// | `x` | the X app | `x`, `x_ads` (the latter only with the ad scopes) | the same |
 /// | `tiktok` | the TikTok app | `tiktok` | `tiktok` |
 /// | `tiktok_ads` | the TikTok for Business app | `tiktok_ads` | `tiktok_ads` |
@@ -2248,6 +2257,7 @@ mod tests {
             app_id: "ig-id".into(),
             app_secret: "ig-secret-value".into(),
             comment_scopes: false,
+            message_scopes: false,
         };
         let x = XApp {
             client_id: "x-id".into(),
@@ -2300,7 +2310,7 @@ mod tests {
     }
 
     #[test]
-    fn meta_app_debug_shows_comment_scopes_flag() {
+    fn app_debug_shows_the_scope_flags() {
         let meta = MetaApp {
             app_id: "meta-id".into(),
             app_secret: "meta-secret-value".into(),
@@ -2314,10 +2324,12 @@ mod tests {
             app_id: "ig-id".into(),
             app_secret: "ig-secret-value".into(),
             comment_scopes: false,
+            message_scopes: true,
         };
         let printed = format!("{meta:?} {instagram:?}");
         assert!(printed.contains("comment_scopes: true"), "{printed}");
         assert!(printed.contains("comment_scopes: false"), "{printed}");
+        assert!(printed.contains("message_scopes: true"), "{printed}");
         for secret in ["meta-secret-value", "verify-token-value", "ig-secret-value"] {
             assert!(!printed.contains(secret), "{printed}");
         }

@@ -24,6 +24,7 @@ use url::Url;
 
 use crate::MetaConnector;
 use crate::graph::{Auth, Body, GraphApp, graph_version, integer, join, missing};
+use crate::messaging::INSTAGRAM_MESSAGES_SCOPE;
 
 /// The scopes Facebook Login asks for when the Meta app has no login configuration: Pages
 /// (listing, posting, engagement, messaging, webhooks), Instagram through the Page (basic,
@@ -53,7 +54,8 @@ pub const FACEBOOK_SCOPES: &[&str] = &[
 
 /// The scopes Instagram Login asks for: the account, publishing, and its insights (Studio reads a
 /// post's and the account's counters with them; spec D29), whatever the flags;
-/// [`INSTAGRAM_COMMENT_SCOPES`] are added while the Instagram app's comment flag is on.
+/// [`INSTAGRAM_COMMENT_SCOPES`] are added while the Instagram app's comment flag is on, and
+/// [`INSTAGRAM_MESSAGE_SCOPES`] (those not added already) while its message flag is on.
 pub const INSTAGRAM_SCOPES: &[&str] = &[
     "instagram_business_basic",
     "instagram_business_content_publish",
@@ -62,6 +64,13 @@ pub const INSTAGRAM_SCOPES: &[&str] = &[
 
 /// The permission an Instagram Login account's insights need.
 pub const INSTAGRAM_INSIGHTS_SCOPE: &str = "instagram_business_manage_insights";
+
+/// The scopes Instagram Login adds to its request while the Instagram app's message flag is on
+/// (`InstagramApp::message_scopes`): its direct messages, which Meta's Instagram Login messaging
+/// reference asks of every send and of the `messages` webhook
+/// (<https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/>).
+/// A grant holding it lists the account's `instagram_dm` beside its `instagram`.
+pub const INSTAGRAM_MESSAGE_SCOPES: &[&str] = &[INSTAGRAM_MESSAGES_SCOPE];
 
 /// The webhook fields a Facebook Page is always subscribed to when it is connected: its messages,
 /// the echoes of its own replies, postbacks and reactions (Instagram messages arrive through the
@@ -75,8 +84,23 @@ pub const PAGE_MESSAGING_FIELDS: &str =
 pub const PAGE_FEED_FIELD: &str = "feed";
 
 /// The webhook fields an Instagram Login account is subscribed to when its grant enables
-/// comments; `messages` is added when it also holds `instagram_business_manage_messages`.
+/// comments (`jt_connector::comment_grant`); [`INSTAGRAM_MESSAGING_FIELDS`] are added when it
+/// holds `instagram_business_manage_messages`, with or without comments.
 pub const INSTAGRAM_COMMENT_FIELDS: &str = "comments,live_comments";
+
+/// The webhook fields an Instagram Login account is subscribed to when its grant holds
+/// `instagram_business_manage_messages`: its direct messages and the postbacks of their buttons,
+/// the two the webhook parser makes events of (Meta's Instagram webhook fields reference lists
+/// both under that permission for Instagram Login,
+/// <https://developers.facebook.com/documentation/instagram-platform/webhooks/fields>).
+/// Reactions and read receipts are left out: the parser keeps neither.
+pub const INSTAGRAM_MESSAGING_FIELDS: &str = "messages,messaging_postbacks";
+
+/// The webhook field of the echoes of what the account itself sends, which Instagram Login
+/// delivers apart from `messages` and which that reference lists under
+/// `instagram_business_manage_comments`: subscribed beside [`INSTAGRAM_MESSAGING_FIELDS`] only
+/// when the grant holds that permission too.
+pub const INSTAGRAM_ECHO_FIELD: &str = "message_echoes";
 
 /// The webhook field of a Page's lead-gen submissions, subscribed besides
 /// [`PAGE_MESSAGING_FIELDS`] only when the grant holds `leads_retrieval`: Meta refuses the whole
@@ -90,12 +114,31 @@ pub(crate) const LEADS_RETRIEVAL: &str = "leads_retrieval";
 const REFRESH_WINDOW: Duration = Duration::days(7);
 
 /// `base`, then `extra` when there is one, as a `scope` parameter.
-fn scopes(base: &[&str], extra: Option<&[&str]>) -> String {
+fn scopes<'a>(base: &[&'a str], extra: Option<Vec<&'a str>>) -> String {
     base.iter()
-        .chain(extra.unwrap_or_default())
         .copied()
+        .chain(extra.unwrap_or_default())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// What Instagram Login asks for beside [`INSTAGRAM_SCOPES`] under `instagram`'s flags:
+/// [`INSTAGRAM_COMMENT_SCOPES`] while its comment flag is on, then those of
+/// [`INSTAGRAM_MESSAGE_SCOPES`] not among them while its message flag is on (each scope once);
+/// `None` with both flags off, so the request is exactly what it was before them.
+fn instagram_extra(instagram: &InstagramApp) -> Option<Vec<&'static str>> {
+    let mut extra: Vec<&'static str> = Vec::new();
+    if instagram.comment_scopes {
+        extra.extend(INSTAGRAM_COMMENT_SCOPES);
+    }
+    if instagram.message_scopes {
+        for scope in INSTAGRAM_MESSAGE_SCOPES {
+            if !extra.contains(scope) {
+                extra.push(scope);
+            }
+        }
+    }
+    (!extra.is_empty()).then_some(extra)
 }
 
 /// Whether `access_token` with `scopes` is an Instagram Login token (see the crate docs).
@@ -140,7 +183,8 @@ pub(crate) fn authorize_url(
                         "scope",
                         &scopes(
                             FACEBOOK_SCOPES,
-                            meta.comment_scopes.then_some(FACEBOOK_COMMENT_SCOPES),
+                            meta.comment_scopes
+                                .then(|| FACEBOOK_COMMENT_SCOPES.to_vec()),
                         ),
                     ),
                 };
@@ -163,10 +207,7 @@ pub(crate) fn authorize_url(
                 .append_pair("response_type", "code")
                 .append_pair(
                     "scope",
-                    &scopes(
-                        INSTAGRAM_SCOPES,
-                        instagram.comment_scopes.then_some(INSTAGRAM_COMMENT_SCOPES),
-                    ),
+                    &scopes(INSTAGRAM_SCOPES, instagram_extra(instagram)),
                 )
                 .append_pair("state", state);
             Ok(url)

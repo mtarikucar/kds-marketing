@@ -22,7 +22,7 @@ const MAX_WHATSAPP_TEXT: usize = 4096;
 const MAX_INSTAGRAM_LOGIN_TEXT_BYTES: usize = 1000;
 
 /// The permission an Instagram Login account's direct messages need.
-pub(crate) const INSTAGRAM_MESSAGES_SCOPE: &str = "instagram_business_manage_messages";
+pub const INSTAGRAM_MESSAGES_SCOPE: &str = "instagram_business_manage_messages";
 
 /// The longest Messenger text, in characters (a Facebook private reply's bound too:
 /// `jt_inbox::public::FACEBOOK_PRIVATE_MAX`, pinned equal by a test).
