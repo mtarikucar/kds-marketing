@@ -340,9 +340,12 @@ pub struct JudgeRequest {
 
 /// The check's answer: `allowed` only from a clear tool call (none on a refusal, a cut answer or
 /// no tool call).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JudgeAnswer {
     pub allowed: Option<bool>,
+    /// When not allowed: what in the message is not, in the check's few words (none when it said
+    /// nothing). The model's own text may be quoted in it: never stored or logged.
+    pub reason: Option<String>,
     pub usage: Usage,
 }
 
@@ -375,10 +378,12 @@ pub struct QueueRow {
     /// up to then is handled); the job's sweep schedules a newer one left without.
     pub handled_at: Option<OffsetDateTime>,
     /// The last automatic hand-over (the automatic replies, the server or the response-time
-    /// job), from before the agent kept every conversation: the executor generation it wrote and
-    /// when. While the conversation is still at that generation and no person wrote since, a
-    /// person does not hold it: the customer's next message brings the assistant back. Written
-    /// only by [`AutoReplyRepo::handover_mark`]; [`AutoReplyRepo::queue_save`] keeps it as stored.
+    /// job): from before the agent kept every conversation, the executor generation it wrote and
+    /// when (while the conversation is still at that generation and no person wrote since, a
+    /// person does not hold it: the customer's next message brings the assistant back); since,
+    /// only when the owner was last asked (no generation: a hand-back never runs a customer
+    /// message from before it again). Written only by [`AutoReplyRepo::handover_mark`];
+    /// [`AutoReplyRepo::queue_save`] keeps it as stored.
     pub auto_handed_generation: Option<u32>,
     pub auto_handed_at: Option<OffsetDateTime>,
     /// When the owner was last told of an automatic hand-over (its notice) and the customer
@@ -599,8 +604,9 @@ pub trait AutoReplyRepo: Send + Sync {
     /// Records an automatic hand-over of conversation `id` at `at` (making its queue row when
     /// there is none): `generation`, the executor generation it wrote, when the assistant may come
     /// back from it (none: a person finishes it); with `told`, that the owner was told of it then,
-    /// for that reason. The server makes none any more (the agent keeps every conversation): the
-    /// marks stored before still bring the assistant back, and this writes them as they were.
+    /// for that reason. Since the agent keeps every conversation, the owner's being asked is
+    /// recorded so with no generation (`autoreply::keep`); the marks with one stored before still
+    /// bring the assistant back.
     async fn handover_mark(
         &mut self,
         id: ConversationId,

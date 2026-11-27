@@ -2322,6 +2322,7 @@ impl jt_app::ports::reply_model::ReplyModel for ScriptedModel {
         let next = lock(&self.verdicts).pop_front();
         next.unwrap_or(Ok(jt_app::ports::reply_model::JudgeAnswer {
             allowed: Some(true),
+            reason: None,
             usage: Default::default(),
         }))
     }
