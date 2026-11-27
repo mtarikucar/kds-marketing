@@ -17,10 +17,10 @@
 //!   sent, never again, and so does a row found still `sending` later (a crash in between).
 //! - **What it says**: what happened, the reason in plain words (a fixed table of codes), for an
 //!   order its amount and the shop's reference, and the conversation's link in the panel. Never a
-//!   customer's name, text or summary; the row holds codes and ids only. While the agent keeps
-//!   every conversation (`AutoReply::keeps`), a would-be hand-over's notice says the automatic
-//!   replies need the owner on a point and keep the conversation (its dedupe key starts with
-//!   `NEEDS_YOU`: one per open item of the owner's).
+//!   customer's name, text or summary; the row holds codes and ids only. The agent keeps every
+//!   conversation: a would-be hand-over's notice says the automatic replies need the owner on a
+//!   point and keep the conversation (its dedupe key starts with `NEEDS_YOU`: one per open item
+//!   of the owner's); one queued while hand-overs still gave it to a person says so.
 //! - **Never back in the inbox** (`own_notice`): a polled mail (the notice's inbox copy, its Sent
 //!   copy, an answer to it, or a bounce of it) is dropped when its `Message-ID` or `In-Reply-To` is
 //!   `<jeeta-notice.{id}.…>`, or it comes from the workspace's own mailbox address with
@@ -590,6 +590,7 @@ fn headline(row: &NoticeRow) -> (&'static str, &'static str) {
             "Otomatik yanıtın bir konuda size ihtiyacı var; konuşma otomatik yanıtta kalıyor ve \
              siz Devral'a basmadıkça müşteriye o yanıt vermeye devam ediyor.",
         ),
+        // One queued while hand-overs still gave the conversation to a person.
         NoticeKind::HandedOver => (
             "Jeeta: bir konuşma sizi bekliyor",
             "Otomatik yanıt bir konuşmayı size devretti.",

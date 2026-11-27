@@ -978,50 +978,6 @@ describe('KnowledgePage automatic replies', () => {
     });
   });
 
-  it('lets the agent keep every conversation with one switch and its sentence', async () => {
-    const user = userEvent.setup();
-    const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': onRules }, { ...knowledge, rules: onRules }));
-    renderAt('/knowledge');
-    await page();
-    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
-    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
-    const section = within(dialog).getByRole('region', { name: k.rules.dialog.autoReply });
-    const keeps = within(section).getByRole('switch', { name: k.rules.dialog.keeps });
-    expect(keeps).not.toBeChecked();
-    expect(keeps).toHaveAccessibleDescription(k.rules.dialog.keepsHelp);
-    await user.click(keeps);
-    await user.click(within(dialog).getByRole('button', { name: k.save }));
-    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
-    expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toMatchObject({
-      auto_reply: { capability_ids: [WHATSAPP_ID], keeps_conversations: true },
-    });
-  });
-
-  it('shows the switch as stored and leaves the setting alone when it does not move', async () => {
-    const user = userEvent.setup();
-    const keeping = { ...onRules, auto_reply: { ...onRules.auto_reply, keeps_conversations: true } };
-    const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': keeping }, { ...knowledge, rules: keeping }));
-    renderAt('/knowledge');
-    await page();
-    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
-    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
-    const section = within(dialog).getByRole('region', { name: k.rules.dialog.autoReply });
-    expect(within(section).getByRole('switch', { name: k.rules.dialog.keeps })).toBeChecked();
-    await user.click(within(dialog).getByRole('button', { name: k.save }));
-    await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
-    expect((writes(calls, 'PUT', '/api/knowledge/rules')[0].body as { auto_reply?: unknown }).auto_reply).toBeUndefined();
-  });
-
-  it('shows no keep switch while the replies are off', async () => {
-    const user = userEvent.setup();
-    mockFetch(routes({}));
-    renderAt('/knowledge');
-    await page();
-    await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
-    const dialog = await screen.findByRole('dialog', { name: k.rules.title });
-    expect(within(dialog).queryByRole('switch', { name: k.rules.dialog.keeps })).not.toBeInTheDocument();
-  });
-
   it('shows no email line and no checkbox without a verified mailbox', async () => {
     const user = userEvent.setup();
     const noMailbox = { ...onRules, auto_reply: { ...onRules.auto_reply, notify: { available: false, on: true, from: null } } };

@@ -918,7 +918,7 @@ fn failure_note(o: &OrderRow) -> String {
     text
 }
 
-/// Hands conversation `c` (when it is still the agent's) to a person over a failed order, with
+/// Asks the owner over a failed order of conversation `c` (when it is still the agent's), with
 /// the fixed line and the note; else only the note. The line's outbox id, when one was queued.
 async fn hand_over_failed(
     deps: &Deps,
@@ -999,7 +999,7 @@ async fn finish_order(
         && (outbound_after_summary(r.as_mut(), &o).await?
             || !only_harmless_since(r.as_mut(), &o, c.as_ref()).await?);
     let person = person_after_summary(r.as_mut(), &o).await?;
-    // Still the agent's and ours, whatever else happened: a held-back link goes to a person.
+    // Still the agent's and ours, whatever else happened: a held-back link asks the owner.
     let agents = c
         .clone()
         .filter(|c| c.executor == Executor::Agent && c.state == ConvState::Ours);
@@ -1058,7 +1058,6 @@ async fn finish_order(
                             .await?
                             .activity_revision,
                         quote: None,
-                        handing_over: false,
                     };
                     enqueue(deps, ctx, r.as_mut(), c.id, &message, &send).await?
                 }
@@ -1091,8 +1090,7 @@ async fn finish_order(
                     .await?;
                     match &agents {
                         Some(c) => {
-                            // A keep's line to the customer, when one was queued (a hand-over
-                            // queues none here).
+                            // The keep's line to the customer, when one was queued.
                             if let Some(outbox) = hand_over(
                                 deps,
                                 ctx,
@@ -1177,7 +1175,8 @@ async fn accept_quote(
 
 /// The sweep's part for workspace `ws` (see [`reconcile`]): every order left `calling` longer
 /// than [`ORDER_CALL_STALE`] (a crash between the shop's call and its answer) becomes `unknown`,
-/// and its conversation goes to a person (`order_interrupted`). Errors are logged with a code.
+/// and the owner is asked about its conversation (`order_interrupted`). Errors are logged with a
+/// code.
 pub(super) async fn interrupted(deps: &Deps, ws: WorkspaceId, now: OffsetDateTime) {
     let result = async {
         let ids = {

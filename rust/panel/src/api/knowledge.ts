@@ -128,8 +128,6 @@ export interface AutoReplyView {
   /** The bargaining discount, in percent: the preferred step and the largest (0: none). */
   discount_preferred_pct: number;
   discount_max_pct: number;
-  /** The agent keeps every conversation: where it would hand one over it asks the owner (a task). */
-  keeps_conversations?: boolean;
 }
 
 /** `read::OrderView`: the automatic replies' orders through the workspace's shop. */
@@ -161,8 +159,6 @@ export interface AutoReplyInput {
   /** The bargaining discount in percent (0 to 50, preferred at most largest); left out: as stored. */
   discount_preferred_pct?: number;
   discount_max_pct?: number;
-  /** The agent keeps every conversation, on or off; left out: as stored. */
-  keeps_conversations?: boolean;
 }
 
 /** `KnowledgeOut.goals`: "Hedefler". */
