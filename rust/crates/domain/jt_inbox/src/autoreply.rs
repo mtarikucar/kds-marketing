@@ -28,8 +28,11 @@
 //! (letter by letter: `ucretsiz`, `yuz`, `kirk` are `ücretsiz`, `yüz`, `kırk`), while a word written
 //! with Turkish letters is read exactly as written.
 //!
-//! A reply ([`check_reply`]), and a hand-over's line, may hold none of it; [`refused_parts`] names
-//! what a refused one held, word by word and by kind ([`PartKind`]). A quote
+//! A reply ([`check_reply`]), and a hand-over's line, may hold none of it, but for a price the
+//! business already gave the customer ([`check_reply_known`], [`amounts_stated`]);
+//! [`refused_parts`] names what a refused one held, word by word and by kind ([`PartKind`]). The
+//! automatic replies' own messages never say that the matter was passed on or that a person or the
+//! team will write ([`passes_on`], their use case's [`Refusal::PassedOn`]). A quote
 //! ([`check_quote`]) states its amount exactly once, next to its currency, and nothing else of it.
 //! What the rules cannot list is left to a second, independent check by the model (the use case's
 //! judge). A link (any `label.tld`, an IP address, an `xn--` name, anything with a scheme) is
@@ -56,6 +59,9 @@ pub enum Refusal {
     QuoteTextMismatch,
     /// The text carries a link the cards do not hold.
     LinkInReply,
+    /// An automatic reply says the matter was passed on, or that a person or the team will write
+    /// ([`passes_on`]; the automatic replies' use case refuses it, the reply rules do not).
+    PassedOn,
 }
 
 impl Refusal {
@@ -68,6 +74,7 @@ impl Refusal {
             Refusal::QuoteOutOfRange => "quote_out_of_range",
             Refusal::QuoteTextMismatch => "quote_text_mismatch",
             Refusal::LinkInReply => "link_in_reply",
+            Refusal::PassedOn => "passed_on",
         }
     }
 }
@@ -122,11 +129,132 @@ pub enum Reading {
 
 /// [`check_reply`] read as `reading` says.
 pub fn check_reply_in(text: &str, cards: &str, year: i32, reading: Reading) -> Result<(), Refusal> {
+    check_reply_known(text, cards, year, reading, &[])
+}
+
+/// [`check_reply_in`], where a value of `known` (in minor units: a price or a number the business
+/// already gave this customer, [`amounts_stated`]) may be stated: as an amount, its currency beside
+/// it, or as a bare number (an order's number). Every other amount, currency word, number and
+/// money word is refused as before.
+pub fn check_reply_known(
+    text: &str,
+    cards: &str,
+    year: i32,
+    reading: Reading,
+    known: &[i64],
+) -> Result<(), Refusal> {
     check_text(text, cards)?;
-    if !scan_in(text, year, reading).clean() {
+    let words = words_of(text);
+    let s = scan_in(text, year, reading);
+    let at = known_at(&s, known);
+    if s.amounts.len() != at.len()
+        || s.numbers.iter().any(|i| !known_number(&words, *i, known))
+        || !s.terms.is_empty()
+        || !s.currency.iter().all(|c| beside_any(*c, &at))
+    {
         return Err(Refusal::PriceWithoutQuote);
     }
     Ok(())
+}
+
+/// The number word `w` holds, as whole units in minor units (`3500` is 350 000).
+fn number_value(w: &Word) -> Option<i64> {
+    let (num, _) = split_number(w.stem.trim_start_matches(['₺', '$', '€', '£']));
+    parse_amount(num).map(|(whole, kurus)| whole.saturating_mul(100).saturating_add(kurus))
+}
+
+/// Whether word `i` of `words` is a number of `known`.
+fn known_number(words: &[Word], i: usize, known: &[i64]) -> bool {
+    words
+        .get(i)
+        .and_then(number_value)
+        .is_some_and(|v| known.contains(&v))
+}
+
+/// Where `s` states an amount of `known`.
+fn known_at(s: &Scan, known: &[i64]) -> Vec<usize> {
+    s.amounts
+        .iter()
+        .filter(|(_, minor)| known.contains(minor))
+        .map(|(i, _)| *i)
+        .collect()
+}
+
+/// Whether word `i` is one of `at`, or right before or after one.
+fn beside_any(i: usize, at: &[usize]) -> bool {
+    at.iter().any(|a| i == *a || i + 1 == *a || i == *a + 1)
+}
+
+/// The values `text` states as the business wrote it (a person's message, one from the phone, a
+/// note on the customer, an automatic quote that went out), in minor units, read as a person's
+/// message is ([`states_money`]): every number beside a currency, and every other number in no
+/// allowed form (`3500 olur`, an order's number) as whole units. Each once, smallest first.
+pub fn amounts_stated(text: &str, year: i32) -> Vec<i64> {
+    let words = words_of(text);
+    let s = scan_in(text, year, Reading::Team);
+    let mut out: Vec<i64> = s.amounts.iter().map(|(_, minor)| *minor).collect();
+    out.extend(
+        s.numbers
+            .iter()
+            .chain(&s.terms)
+            .filter_map(|i| words.get(*i).and_then(number_value)),
+    );
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Whether `text` names the payment method ([`PAYMENT_METHOD_STEMS`], `eft`): once the business
+/// did so to a customer, a reply to them may too ([`Reading::Ordering`]).
+pub fn names_payment_method(text: &str) -> bool {
+    words_of(text)
+        .iter()
+        .any(|w| starts_any(&w.stem, PAYMENT_METHOD_STEMS) || is(&w.stem, "eft"))
+}
+
+/// The words that say a matter was passed on, or that a person or the team will write, by a stem
+/// the word starts with (read as [`starts`] reads it): the team (`ekibimize`), a colleague
+/// (`arkadaşım`), a representative, passing on or handing over (`ilettim`, `aktardım`,
+/// `devrettim`, `yönlendirdim`), and their English twins.
+const PASSED_ON_STEMS: &[&str] = &[
+    "ekib",
+    "arkadaşım",
+    "arkadaşlarım",
+    "temsilci",
+    "yetkili",
+    "ilett",
+    "iletiyor",
+    "iletece",
+    "iletil",
+    "aktard",
+    "aktarıyor",
+    "aktaraca",
+    "aktarıl",
+    "devrett",
+    "devrediyor",
+    "devredece",
+    "devredil",
+    "yönlendir",
+    "team",
+    "colleague",
+    "staff",
+    "representative",
+    "forwarded",
+];
+
+/// Whether `text` says the matter was passed on, or that a person or the team will write
+/// ([`PASSED_ON_STEMS`]; `ekip` in any form but `ekipman`; `passed on`). An automatic reply never
+/// does: the agent keeps the conversation and answers for itself.
+pub fn passes_on(text: &str) -> bool {
+    let words = words_of(text);
+    words.iter().enumerate().any(|(i, w)| {
+        starts_any(&w.stem, PASSED_ON_STEMS)
+            || (starts(&w.stem, "ekip") && !starts(&w.stem, "ekipman"))
+            || (w.stem == "passed"
+                && words
+                    .get(i + 1)
+                    .is_some_and(|n| matches!(n.stem.as_str(), "on" | "along")))
+    })
 }
 
 /// A quote of `amount` whole currency units with its `text`, checked against `range` in calendar
@@ -324,12 +452,40 @@ pub fn refused_parts(text: &str, cards: &str, year: i32) -> Vec<RefusedPart> {
 
 /// [`refused_parts`] read as `reading` says ([`check_reply_in`]).
 pub fn refused_parts_in(text: &str, cards: &str, year: i32, reading: Reading) -> Vec<RefusedPart> {
+    refused_parts_known(text, cards, year, reading, &[])
+}
+
+/// [`refused_parts_in`] of a text where the amounts of `known` may be stated
+/// ([`check_reply_known`]): those and their currency are not named.
+pub fn refused_parts_known(
+    text: &str,
+    cards: &str,
+    year: i32,
+    reading: Reading,
+    known: &[i64],
+) -> Vec<RefusedPart> {
     let words = words_of(text);
     let s = scan_in(text, year, reading);
+    let allowed = known_at(&s, known);
     let mut at: Vec<(usize, PartKind)> = Vec::new();
-    at.extend(s.amounts.iter().map(|(i, _)| (*i, PartKind::Amount)));
-    at.extend(s.currency.iter().map(|i| (*i, PartKind::Currency)));
-    at.extend(s.numbers.iter().map(|i| (*i, PartKind::Number)));
+    at.extend(
+        s.amounts
+            .iter()
+            .filter(|(i, _)| !allowed.contains(i))
+            .map(|(i, _)| (*i, PartKind::Amount)),
+    );
+    at.extend(
+        s.currency
+            .iter()
+            .filter(|i| !beside_any(**i, &allowed))
+            .map(|i| (*i, PartKind::Currency)),
+    );
+    at.extend(
+        s.numbers
+            .iter()
+            .filter(|i| !known_number(&words, **i, known))
+            .map(|i| (*i, PartKind::Number)),
+    );
     at.extend(s.terms.iter().map(|i| {
         let kind = if s.number_words.contains(i) {
             PartKind::NumberWord
@@ -1377,6 +1533,92 @@ mod tests {
             "Merhaba, bakıyorum.",
         ] {
             assert!(!states_money(text, YEAR), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_price_the_business_gave_may_be_stated_again_and_no_other() {
+        let known = amounts_stated(
+            "Önizlemeden sonra fiyatı 2.500 TL olarak güncelledik.",
+            YEAR,
+        );
+        assert_eq!(known, [250_000]);
+        assert_eq!(amounts_stated("3500 olur", YEAR), [350_000]);
+        let order = amounts_stated("Sipariş numaranız 10234.", YEAR);
+        assert_eq!(
+            check_reply_known(
+                "Açıklamaya 10234 yazmanız yeterli.",
+                "",
+                YEAR,
+                Reading::Reply,
+                &order
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            reply("Açıklamaya 10234 yazmanız yeterli."),
+            Err(Refusal::PriceWithoutQuote)
+        );
+        assert_eq!(
+            amounts_stated("Kargo 2 gün içinde çıkar.", YEAR),
+            Vec::<i64>::new()
+        );
+        let check = |text: &str| check_reply_known(text, "", YEAR, Reading::Reply, &known);
+        for text in [
+            "Güncel fiyat 2.500 TL, kişiselleştirme dahil.",
+            "Fiyatımız 2500 TL olarak kaldı.",
+            "₺2.500 olarak geçerli.",
+        ] {
+            assert_eq!(check(text), Ok(()), "{text}");
+        }
+        for text in [
+            "Size 2.000 TL yapabiliriz.",
+            "2.500 TL yerine 2.000 TL olur.",
+            "2.500 TL, %10 indirimle.",
+            "2.500 TL ve 3 taksit.",
+        ] {
+            assert_eq!(check(text), Err(Refusal::PriceWithoutQuote), "{text}");
+        }
+        // Without it, the same text is refused as any price; the parts named leave the known one.
+        assert_eq!(
+            reply("Güncel fiyat 2.500 TL."),
+            Err(Refusal::PriceWithoutQuote)
+        );
+        let parts = refused_parts_known(
+            "2.500 TL yerine 2.000 TL olur.",
+            "",
+            YEAR,
+            Reading::Reply,
+            &known,
+        );
+        assert_eq!(
+            parts
+                .iter()
+                .map(|p| (p.kind, p.text.as_str()))
+                .collect::<Vec<_>>(),
+            [(PartKind::Amount, "2.000"), (PartKind::Currency, "tl")]
+        );
+    }
+
+    #[test]
+    fn a_text_that_passes_the_matter_on_is_told_apart() {
+        for text in [
+            "Bu konuyu ekibimize ilettim, size buradan dönüş yapacaklar.",
+            "Sizi ekip arkadaşıma aktarıyorum.",
+            "Bir arkadaşım size yazacak.",
+            "Yetkili birimimize yönlendirdim.",
+            "Our team will get back to you here.",
+            "I've passed this on to a colleague.",
+        ] {
+            assert!(passes_on(text), "{text}");
+        }
+        for text in [
+            "Bunu netleştirip size buradan döneceğim.",
+            "Arkadaşınız için çok güzel olur.",
+            "İletişim bilgilerinizi yazar mısınız?",
+            "Ekipmanımız bu boyutu basabiliyor.",
+        ] {
+            assert!(!passes_on(text), "{text}");
         }
     }
 

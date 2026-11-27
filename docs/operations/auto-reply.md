@@ -60,15 +60,30 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   the model is told it cannot open them. The model uses what it sees to place the work in the
   range, and hands over when a photo is unclear or shows something outside the standard. The
   server's check on the answer stays text-only.
-- It answers through one tool: a reply, a quote, or a hand-over (it asks the owner). A reply the server's
-  rules refuse for a number, an amount or a link is asked for once more in the same run, with a
-  line saying why; the second answer is checked the same way (and by the model's check), and only
-  if it fails too is the conversation handed over with the first reason. That call is stored and
-  counted like any other.
+- It answers through one tool: a reply, a quote, or a hand-over (it asks the owner). A reply the
+  server's rules refuse for a number, an amount, a link or for passing the matter on is asked for
+  once more in the same run, with a line saying why; the second answer is checked the same way
+  (and by the model's check). If that fails too and the customer asked nothing about price, the
+  refused reply's own sentences the rules let through go out instead (none left: the owner is
+  asked with the first reason). That call is stored and counted like any other.
+- **The ordinary steps of a sale are the agent's**: confirming a design, choosing an option, the
+  details the order needs and taking them, how the customer pays, explaining a price the business
+  already gave, a thank-you. `hand_over` is only for what it cannot answer; `payment_problem` is
+  a payment that failed or is disputed, never a price question or an order's details.
+- **What the agent knows.** The last 30 messages, the business's own among them (a person's in the
+  panel and the phone's Business App included), and the business's own notes on the customer's
+  journey (a person's or an agent's, the latest ten, each cut to 1000 characters; the server's own
+  hand-over and order notes are not read), sent as an uncached note. A reply may state again a
+  price or a number the business already gave this customer there (an amount beside its currency,
+  `3500 olur`, an order's number), and the second check is told those prices; an amount that
+  appears nowhere is still refused. Once the business named the payment method (havale, ödeme,
+  EFT), a reply may too.
 - It never says or implies it is a person. Asked whether the customer is talking to a person, a bot
-  or an AI, it says in one short sentence that it is the business's automatic assistant and that a
-  person from the team can take over whenever the customer wants; it does not say so unprompted. A
-  customer who then asks for a person is handed over (`asks_for_person`). It writes short, everyday
+  or an AI, it says in one short sentence that it is the business's automatic assistant; it does
+  not say so unprompted. A customer who then asks for a person is handed over (`asks_for_person`).
+  No automatic text ever says that the matter was passed on or that the team, a colleague or a
+  person will write (`passed_on`: `ekibimize`, `arkadaşım`, `ilettim`, `aktardım`, `devrettim`,
+  `yönlendirdim`, `our team`, `colleague` …). It writes short, everyday
   messages in the customer's language, with at most one emoji and at most three short questions at
   a time. The server's check never refuses a message for saying it is the automatic assistant.
 - The server checks every answer. A reply (and a hand-over's line) is first normalised (NFKC,
@@ -105,10 +120,7 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   ledger `inbox.autoreply.reentered`), on the normal settle time, but only when the assistant
   could answer it (every check of a run passes); otherwise the conversation stays with the
   person. An order's hand-over (`order_*`) was never marked: the assistant comes back from it only
-  with a hand-back. The customer's "the team will get back to you" line goes out at most once in
-  12 hours, whatever the reason (`line_told_at`, set only when the line was actually queued); a
-  hand-back, or a person writing to the customer, forgets it, and while the customer was told,
-  the model is told so in the conversation's note. For a served conversation the response-time
+  with a hand-back. For a served conversation the response-time
   job asks nothing whose customer message is outside the 24-hour reply window or was answered by
   a run (a reply or a quote queued after it; a run skipped or given up did not answer it);
   conversations the automatic replies do not serve, and every conversation with the feature off,
@@ -116,8 +128,9 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   conversation back by hand.
 - When a person on the team stated money in the current journey (an amount, a currency, a
   discount or payment word, or a bare number such as "3500 olur"), it never quotes in that
-  journey: a quote becomes a hand-over (`human_quoted`), and the model is told so. Replies that
-  are not about price still go out, continuing from what the team said, never contradicting it.
+  journey: a quote becomes a hand-over (`human_quoted`), and the model is told so. Replies still
+  go out, continuing from what the team said, never contradicting it, and may repeat the price the
+  team gave.
 - **Bargaining.** In Kurallar, next to "En az / En çok", the owner sets "Pazarlık indirimi":
   a preferred and a largest percent (0 to 50, preferred at most largest; both 0, the default: no
   bargaining, and the request to the model is as before). Only a person saves them, from the
@@ -155,8 +168,8 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   consumer and the schedule), only when it is at most 15 minutes old and came after the number
   was turned on.
 - A hand-over asks the owner and keeps the conversation the agent's (below): a task for the
-  journey's owner (or the unassigned queue), the model's summary as a journey note, one short line
-  to the customer, and an email to the team managers (below).
+  journey's owner (or the unassigned queue), the model's summary as a journey note, and an email
+  to the team managers (below). The customer is never told of it.
 - While it answers a number's conversations, agents are not offered them in `work.pending`.
 
 ## The agent keeps every conversation
@@ -183,21 +196,17 @@ create or whose link could not go, and the response-time job) does instead:
   over, hands it back or closes it.
 - **The owner's email**, as for a hand-over, worded "Otomatik yanıtın bir konuda size ihtiyacı
   var; konuşma otomatik yanıtta kalıyor…": once per open item.
-- **One line to the customer**, at most once per open item and at most once in 12 hours
-  whatever the reason, as a hand-over's line (`line_told_at`; a person writing to the customer, or
-  a hand-back, ends that quiet): the model's own hand-over line when it passes the rules and the
-  check, else a fixed line, "Bu konuyu ekibimize ilettim, size buradan dönüş yapacaklar.", or its
-  English twin "I've passed this on to our team; they'll get back to you here." for a customer
-  the server knows to read another language. The only thing it knows of a customer's language is
-  the pool prospect the person was promoted from (its language, else its country); a WhatsApp
-  customer who simply wrote in is unknown, and gets Turkish. It is the agent's automatic
-  message, held to the capability's approval, hours and daily cap as any other; outside the
-  working hours none is tried, and the response-time job sends none. A line that never went out
-  does not count as telling the customer.
+- **Nothing to the customer about it.** No line says the matter was passed on, or that the team
+  or a person will write. What the customer gets is the model's own answer in the hand-over's
+  `text` (everything it can answer, and for that point, briefly, that it will confirm it and get
+  back to them), sent as the agent's automatic message when it passes the rules and the check
+  (its sentences that pass, when some do not); without one, nothing. A hand-over the server
+  decides (a refusal, a model failure, the limits, the working hours, the response-time job)
+  sends nothing to the customer.
 - **The conversation stays the agent's** and the customer's next message is answered as any
-  other. The model is told, in the cached workspace part, that a hand-over asks the team about one
-  point and keeps the conversation, and, in the conversation's note, which points are still open
-  with the team, so it answers everything else and does not hand the same point over again.
+  other. The model is told, in the cached workspace part, that a hand-over asks the business about
+  one point and keeps the conversation, and, in the conversation's note, which points are still
+  open, so it answers everything else and does not hand the same point over again.
 
 What the agent may say does not change: a price only through `quote` and within the range, the
 one automatic quote per journey, nothing the cards do not say, the discount steps, the second
@@ -205,8 +214,8 @@ check, and no quote after a person on the team priced. Whatever the server refus
 sent; only the holder of the conversation differs. The day's limits and spend are counted as
 before (the run that would have handed over is still a `handed_over` run; the line is not a
 model call). Ledger `inbox.autoreply.needs_owner` (`run_id`, `reason`, `by`, `task_id`;
-`repeat`, `owner_notified: false`, `customer_told: false` when so) takes the place of
-`inbox.autoreply.handed_over`. The response-time job hands no served conversation over: it asks
+`repeat`, `owner_notified: false`, `customer_told: false` when no answer went out) takes the place
+of `inbox.autoreply.handed_over`. The response-time job hands no served conversation over: it asks
 the owner once for the customer's latest message (`response_overdue`), and not at all while
 another item is open on the conversation. A take-over, a lost journey and a departing member
 change the executor as before, and an agent (an MCP key) may write in a conversation the agent
@@ -364,8 +373,8 @@ optional. Kurallar then shows "Sipariş: {host} üzerinden ödeme bağlantısı"
   Marking the journey won stays a person's act: Jeeta sees no payment.
 - On a refusal, an outage, an unknown outcome or a failed check, the owner is asked
   (`order_rejected`, `order_auth`, `order_unavailable`, `order_unknown`, …), the customer gets
-  "Siparişinizi ekibimiz tamamlayacak, kısa süre içinde dönüş yapacağız." ("Our team will complete
-  your order; we will get back to you shortly."), and a journey note names the code and says to
+  "Siparişinizi kontrol edip kısa süre içinde size dönüş yapacağım." ("I will check your order and
+  get back to you shortly."), and a journey note names the code and says to
   look in the shop for `jeeta_ref {id}`. After the call, only the tool's own refusal counts as
   "nothing was done"; any other status (`408`, `409`, `425`, `429`, a `5xx`, …), a timeout or a
   broken connection is an unknown outcome. A take-over during the call, or a send fence's refusal,

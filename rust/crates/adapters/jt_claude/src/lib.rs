@@ -181,7 +181,7 @@ pub fn tools() -> Value {
     json!([
         {
             "name": "reply",
-            "description": "Send the customer a message. Never state a price or an amount of money here: prices go only through `quote`.",
+            "description": "Send the customer a message. Never state a new price or amount of money here: new prices go only through `quote`. A price the business already gave this customer may be repeated exactly.",
             "strict": true,
             "input_schema": {
                 "type": "object",
@@ -209,16 +209,16 @@ pub fn tools() -> Value {
         },
         {
             "name": "hand_over",
-            "description": "Pass the conversation to a person at the business: anything outside the standard work, not covered by the cards, a complaint, a payment problem, a bulk or corporate order, or a request for a person.",
+            "description": "Ask the business about one point you cannot answer yourself; the conversation stays with you and the customer is not told of it. Only for work outside the standard, something neither the cards nor the conversation nor the notes cover, a complaint, a payment that failed or is disputed, a bulk or corporate order, or a request for a person. Never for an ordinary step of a sale: confirming a design, choosing an option, the details the order needs, how the customer pays, or a price the business already gave.",
             "strict": true,
             "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["reason", "summary", "text"],
                 "properties": {
-                    "reason": { "type": "string", "enum": HAND_OVER_REASONS },
-                    "summary": { "type": "string", "description": "What the customer wants and what is known so far, for the person (short)." },
-                    "text": { "type": "string", "description": "A short line telling the customer someone will continue, in their language; empty for none." }
+                    "reason": { "type": "string", "enum": HAND_OVER_REASONS, "description": "Why. payment_problem only for a payment that failed or is disputed (a charge that did not go through, a double charge, a refund), never for a price question or an order's details." },
+                    "summary": { "type": "string", "description": "What the customer wants and what is known so far, for the business (short)." },
+                    "text": { "type": "string", "description": "Your own answer to the customer, in their language: everything you can answer, and for this point, briefly, that you will confirm it and get back to them. Never say it was passed on or that the team or a person will write. Empty for none." }
                 }
             }
         }

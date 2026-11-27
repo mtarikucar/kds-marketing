@@ -88,18 +88,19 @@ confirm. When the customer confirms it, call `create_order` again with exactly t
 If the customer corrects something, call it again with the corrected details: a new summary \
 follows.
 - Never write the summary, their details, an amount or a link yourself, in `text` or anywhere.
-- Never promise payment terms, deadlines or refunds the cards do not state. A payment question \
-the cards don't answer, a change of the order, or a cancellation: `hand_over` with \
-`payment_problem`.
+- Never promise payment terms, deadlines or refunds the cards do not state. A payment that \
+failed or is disputed: `hand_over` with `payment_problem`. A cancellation, or a change that needs \
+a new price: `hand_over` with `not_covered`. A choice the customer makes before ordering (an \
+option, a detail, whose name goes on the order) is yours: carry on.
 - If the order exists and the customer asks for the link again, call `create_order` again with \
 the same details.";
 
 /// The fixed message the payment link goes in; the link follows it.
 pub const ORDER_LINK: &str =
     "Siparişiniz oluşturuldu. Ödemeyi kartla ya da havaleyle bu bağlantıdan yapabilirsiniz:";
-/// The fixed line to the customer when the order could not be created.
-pub const ORDER_LATER: &str =
-    "Siparişinizi ekibimiz tamamlayacak, kısa süre içinde dönüş yapacağız.";
+/// The fixed line to the customer when the order could not be created: the agent will get back
+/// to them (it never says the matter was passed on).
+pub const ORDER_LATER: &str = "Siparişinizi kontrol edip kısa süre içinde size dönüş yapacağım.";
 /// The second check's facts for the model's line that goes with the link.
 pub const ORDER_FACTS: &str = "The server's facts: this message accompanies an order the server \
 creates for the quoted amount; it may state no price.";
@@ -220,8 +221,9 @@ pub(super) fn done_part(reference: &str) -> String {
     };
     format!(
         "\n# The order\nThis customer's order was created and its payment link sent.{named} \
-         Answer questions about it only from the cards. A change, a cancellation or a payment \
-         question the cards do not answer: `hand_over` with `payment_problem`.\n"
+         Answer questions about it from the cards and the conversation. A payment that failed or \
+         is disputed: `hand_over` with `payment_problem`; a cancellation, or a change that needs a \
+         new price: `hand_over` with `not_covered`.\n"
     )
 }
 
@@ -256,7 +258,7 @@ fn checked_line(
     if line.is_empty() {
         return Ok(None);
     }
-    rules::check_reply_in(line, &s.cards, year, s.reading()).map_err(|r| r.key())?;
+    s.check(line, year).map_err(|r| r.key())?;
     if let Some(reason) = verdict.refusal() {
         return Err(reason);
     }
@@ -951,7 +953,6 @@ async fn hand_over_failed(
                     by: By::Server,
                     summary: Some(&text),
                     line: Some(ORDER_LATER),
-                    cards: "",
                     line_allowed: true,
                 },
             )
@@ -1102,7 +1103,6 @@ async fn finish_order(
                                     by: By::Server,
                                     summary: Some(&text),
                                     line: None,
-                                    cards: "",
                                     line_allowed: false,
                                 },
                             )

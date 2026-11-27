@@ -621,7 +621,7 @@ pub(crate) fn reason_words(code: Option<&str>) -> &'static str {
         "out_of_standard" => "İstek standart işin dışında",
         "bulk_or_corporate" => "Toplu ya da kurumsal bir istek",
         "complaint" => "Müşteri bir şikâyetini iletti",
-        "payment_problem" => "Bir ödeme sorusu var",
+        "payment_problem" => "Bir ödeme başarısız oldu ya da itiraz var",
         "not_covered" => "Kartlarda yanıtı olmayan bir soru",
         "outside_active_hours" => "Çalışma saatleri dışında",
         "failed" => "Otomatik yanıt şu an yanıt üretemedi",
