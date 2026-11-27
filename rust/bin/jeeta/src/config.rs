@@ -86,6 +86,12 @@ pub const INSTAGRAM_APP_SECRET: &str = "JEETA_INSTAGRAM_APP_SECRET";
 /// Whether Instagram Login flows ask for the comment scopes (`1`/`true`; default off): set once
 /// Meta's App Review granted them. Requires the Instagram app.
 pub const INSTAGRAM_COMMENT_SCOPES: &str = "JEETA_INSTAGRAM_COMMENT_SCOPES";
+/// Whether Instagram Login flows ask for the direct-message permission,
+/// `instagram_business_manage_messages` (`1`/`true`; default off): set once the Instagram product
+/// offers it in Meta's app dashboard (Instagram refuses a whole sign-in that asks for a permission
+/// the app is not set up for). It lets an Instagram Login account's direct messages
+/// (`instagram_dm`) connect without a Facebook Page. Requires the Instagram app.
+pub const INSTAGRAM_MESSAGE_SCOPES: &str = "JEETA_INSTAGRAM_MESSAGE_SCOPES";
 /// The platform's X app (OAuth 2.0 confidential client) id.
 pub const X_CLIENT_ID: &str = "JEETA_X_CLIENT_ID";
 /// The X app's client secret; set together with [`X_CLIENT_ID`].
@@ -180,6 +186,7 @@ const VARS: &[&str] = &[
     INSTAGRAM_APP_ID,
     INSTAGRAM_APP_SECRET,
     INSTAGRAM_COMMENT_SCOPES,
+    INSTAGRAM_MESSAGE_SCOPES,
     X_CLIENT_ID,
     X_CLIENT_SECRET,
     X_AD_SCOPES,
@@ -739,18 +746,20 @@ fn parse_apps<'a>(get: &impl Fn(&str) -> Option<&'a str>) -> Result<EnvPlatformA
             app_id,
             app_secret,
             comment_scopes: parse_flag(INSTAGRAM_COMMENT_SCOPES, get(INSTAGRAM_COMMENT_SCOPES))?,
+            message_scopes: parse_flag(INSTAGRAM_MESSAGE_SCOPES, get(INSTAGRAM_MESSAGE_SCOPES))?,
         }),
         None => {
-            // The flag means nothing without the Instagram app: half a configuration.
-            if get(INSTAGRAM_COMMENT_SCOPES).is_some() {
-                return Err(ConfigError::new(
-                    INSTAGRAM_APP_ID,
-                    format!(
-                        "must be set (with {INSTAGRAM_APP_SECRET}) because \
-                         {INSTAGRAM_COMMENT_SCOPES} is: the Instagram app is configured as a \
-                         whole or not at all"
-                    ),
-                ));
+            // The flags mean nothing without the Instagram app: half a configuration.
+            for flag in [INSTAGRAM_COMMENT_SCOPES, INSTAGRAM_MESSAGE_SCOPES] {
+                if get(flag).is_some() {
+                    return Err(ConfigError::new(
+                        INSTAGRAM_APP_ID,
+                        format!(
+                            "must be set (with {INSTAGRAM_APP_SECRET}) because {flag} is: the \
+                             Instagram app is configured as a whole or not at all"
+                        ),
+                    ));
+                }
             }
             None
         }
@@ -1604,22 +1613,26 @@ mod tests {
 
     #[test]
     fn comment_scope_flags_default_off() {
-        // The live Meta app is in review: unset, no flow asks for a comment scope.
+        // The live Meta app is in review: unset, no flow asks for a comment or message scope.
         let all = Config::from_map(&with(ALL_APPS)).unwrap();
         assert!(!all.apps.meta_app().unwrap().comment_scopes);
         assert!(!all.apps.instagram_app().unwrap().comment_scopes);
+        assert!(!all.apps.instagram_app().unwrap().message_scopes);
         for off in ["", " ", "0", "false", "FALSE"] {
             let mut vars = with(ALL_APPS);
             vars.insert(META_COMMENT_SCOPES.to_owned(), off.to_owned());
             vars.insert(INSTAGRAM_COMMENT_SCOPES.to_owned(), off.to_owned());
+            vars.insert(INSTAGRAM_MESSAGE_SCOPES.to_owned(), off.to_owned());
             let apps = Config::from_map(&vars).unwrap().apps;
             assert!(!apps.meta_app().unwrap().comment_scopes, "{off:?}");
             assert!(!apps.instagram_app().unwrap().comment_scopes, "{off:?}");
+            assert!(!apps.instagram_app().unwrap().message_scopes, "{off:?}");
         }
         // Anything else is refused, naming the flag.
         for (flag, bad) in [
             (META_COMMENT_SCOPES, "yes"),
             (INSTAGRAM_COMMENT_SCOPES, "on"),
+            (INSTAGRAM_MESSAGE_SCOPES, "enabled"),
         ] {
             let mut vars = with(ALL_APPS);
             vars.insert(flag.to_owned(), bad.to_owned());
@@ -1629,6 +1642,7 @@ mod tests {
         for (flag, app) in [
             (META_COMMENT_SCOPES, META_APP_ID),
             (INSTAGRAM_COMMENT_SCOPES, INSTAGRAM_APP_ID),
+            (INSTAGRAM_MESSAGE_SCOPES, INSTAGRAM_APP_ID),
         ] {
             let err = error(&with(&[
                 (flag, "1"),
@@ -1652,6 +1666,14 @@ mod tests {
             let apps = Config::from_map(&vars).unwrap().apps;
             assert!(!apps.meta_app().unwrap().comment_scopes, "{on:?}");
             assert!(apps.instagram_app().unwrap().comment_scopes, "{on:?}");
+            assert!(!apps.instagram_app().unwrap().message_scopes, "{on:?}");
+            // The message flag is its own: it turns neither comment flag on.
+            let mut vars = with(ALL_APPS);
+            vars.insert(INSTAGRAM_MESSAGE_SCOPES.to_owned(), on.to_owned());
+            let apps = Config::from_map(&vars).unwrap().apps;
+            assert!(!apps.meta_app().unwrap().comment_scopes, "{on:?}");
+            assert!(!apps.instagram_app().unwrap().comment_scopes, "{on:?}");
+            assert!(apps.instagram_app().unwrap().message_scopes, "{on:?}");
         }
     }
 
@@ -1775,6 +1797,7 @@ mod tests {
             INSTAGRAM_APP_ID,
             INSTAGRAM_APP_SECRET,
             INSTAGRAM_COMMENT_SCOPES,
+            INSTAGRAM_MESSAGE_SCOPES,
             X_CLIENT_ID,
             X_CLIENT_SECRET,
             X_AD_SCOPES,

@@ -108,6 +108,7 @@ impl FakeAppConfig {
                 app_id: "instagram-app-id".into(),
                 app_secret: "instagram-app-secret".into(),
                 comment_scopes: false,
+                message_scopes: false,
             }),
             x: Some(XApp {
                 client_id: "x-client-id".into(),

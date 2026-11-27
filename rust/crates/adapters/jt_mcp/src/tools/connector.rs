@@ -58,6 +58,9 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                           the signed-in user reaches directly) (review_facebook cannot be connected \
                           yet: no sign-in finds Facebook comments); NetGSM kinds (sms_line, \
                           netgsm_pbx) take credentials instead (jeeta.connector.set_credentials). \
+                          instagram_dm signs in through Instagram Login (no Facebook Page needed) \
+                          when the workspace's Instagram account was connected that way and the \
+                          platform enabled Instagram messages, else through Facebook Login. \
                           flow whatsapp_business_app (with whatsapp_cloud only) connects a number \
                           the business already uses in the WhatsApp Business app on its phone, \
                           which keeps working beside the inbox (Meta's coexistence onboarding; \

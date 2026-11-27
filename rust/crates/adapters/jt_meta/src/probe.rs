@@ -39,9 +39,11 @@ use crate::MetaConnector;
 use crate::assets::ad_account_number;
 use crate::credential::{MetaCred, account_of, granted_scopes, kind_of};
 use crate::graph::{Auth, Body, GraphApp, integer, missing, node, text};
+use crate::messaging::INSTAGRAM_MESSAGES_SCOPE;
 use crate::oauth::{
-    INSTAGRAM_COMMENT_FIELDS, INSTAGRAM_INSIGHTS_SCOPE, LEADS_RETRIEVAL, PAGE_FEED_FIELD,
-    PAGE_LEADGEN_FIELD, PAGE_MESSAGING_FIELDS,
+    INSTAGRAM_COMMENT_FIELDS, INSTAGRAM_ECHO_FIELD, INSTAGRAM_INSIGHTS_SCOPE,
+    INSTAGRAM_MESSAGING_FIELDS, LEADS_RETRIEVAL, PAGE_FEED_FIELD, PAGE_LEADGEN_FIELD,
+    PAGE_MESSAGING_FIELDS,
 };
 
 /// The probe of `cred` for the capability whose public fields are `public` (never fails: a
@@ -254,8 +256,9 @@ async fn ad_account_facts(
 ///   subscription when one field lacks its permission, so a refusal naming an optional field
 ///   ([`refuses_field`]) is asked again without it: the messages arrive whatever becomes of the
 ///   leads and comments. Any other failure is the error;
-/// - `instagram` with an Instagram Login token whose grant enables comments: subscribes the
-///   account to its comments ([`subscribe_instagram`]), best effort;
+/// - `instagram` and `instagram_dm` with an Instagram Login token whose grant enables comments or
+///   holds `instagram_business_manage_messages`: subscribes the account to what the grant allows
+///   ([`subscribe_instagram`]: one union, whatever kind asks), best effort;
 /// - `whatsapp_cloud`: subscribes the WhatsApp Business Account when its id is known
 ///   (`POST /{waba}/subscribed_apps`); once subscribed, sends that account's webhooks to this
 ///   instance ([`override_callback`]: Meta's webhook override,
@@ -289,7 +292,7 @@ pub(crate) async fn on_connected(
         ("facebook_page" | "messenger" | "instagram_dm", MetaCred::User { token }) => {
             subscribe_page(connector, "me", token, leads, feed).await
         }
-        ("instagram", MetaCred::Instagram { token }) => {
+        ("instagram" | "instagram_dm", MetaCred::Instagram { token }) => {
             subscribe_instagram(connector, public, token, &scopes).await
         }
         (
@@ -527,34 +530,76 @@ async fn subscribe_page(
     Ok(facts)
 }
 
-/// Subscribes an Instagram Login account to its comments (and, with
-/// `instagram_business_manage_messages`, its messages) when its grant enables comments:
-/// `POST graph.instagram.com/{account}/subscribed_apps?subscribed_fields=...` (Meta's Instagram
-/// webhook setup, <https://developers.facebook.com/documentation/instagram-platform/webhooks/setup>).
-/// Best effort: `{"subscribed": bool}`, a failure logged; without the grant nothing is asked
-/// (`Null`).
+/// The webhook field of an Instagram Login account's direct messages, the first of
+/// [`INSTAGRAM_MESSAGING_FIELDS`].
+const INSTAGRAM_MESSAGES_FIELD: &str = "messages";
+
+/// The permission Meta's Instagram webhook fields reference names for [`INSTAGRAM_ECHO_FIELD`]
+/// under Instagram Login.
+const INSTAGRAM_COMMENTS_SCOPE: &str = "instagram_business_manage_comments";
+
+/// Subscribes an Instagram Login account to the platform app's webhooks as its grant allows:
+/// [`INSTAGRAM_COMMENT_FIELDS`] when it enables comments, [`INSTAGRAM_MESSAGING_FIELDS`] when it
+/// holds `instagram_business_manage_messages`, and with both permissions [`INSTAGRAM_ECHO_FIELD`]
+/// too: `POST graph.instagram.com/{account}/subscribed_apps?subscribed_fields=...` (Meta's
+/// Instagram webhook setup,
+/// <https://developers.facebook.com/documentation/instagram-platform/webhooks/setup>). One union
+/// from one grant, whichever kind asks (`instagram` and `instagram_dm` hold the same token for the
+/// same account). The postbacks and the echoes are extras: a refused subscription is asked once
+/// more without them, with exactly the fields of before them (the comment fields, and `messages`
+/// with the messages permission), so a refusal of an extra never costs the account its comments
+/// or its messages. Best effort: `{"subscribed": bool}`, a failure logged; a grant with neither
+/// comments nor messages asks nothing (`Null`).
 async fn subscribe_instagram(
     connector: &MetaConnector,
     public: &Value,
     token: &str,
     scopes: &[&str],
 ) -> Result<Value, ConnectorError> {
-    if !comment_grant("instagram", scopes).enabled() {
+    let comments = comment_grant("instagram", scopes).enabled();
+    let messages = scopes.contains(&INSTAGRAM_MESSAGES_SCOPE);
+    if !comments && !messages {
         return Ok(Value::Null);
     }
     let account = match account_of(public) {
         Some(account) => node(account)?,
         None => "me",
     };
-    let mut fields = INSTAGRAM_COMMENT_FIELDS.to_owned();
-    if scopes.contains(&"instagram_business_manage_messages") {
-        fields.push_str(",messages");
+    let mut wanted: Vec<&str> = Vec::new();
+    let mut before: Vec<&str> = Vec::new();
+    if comments {
+        wanted.push(INSTAGRAM_COMMENT_FIELDS);
+        before.push(INSTAGRAM_COMMENT_FIELDS);
     }
+    if messages {
+        wanted.push(INSTAGRAM_MESSAGING_FIELDS);
+        before.push(INSTAGRAM_MESSAGES_FIELD);
+        if scopes.contains(&INSTAGRAM_COMMENTS_SCOPE) {
+            wanted.push(INSTAGRAM_ECHO_FIELD);
+        }
+    }
+    let (wanted, before) = (wanted.join(","), before.join(","));
+    let mut subscribed = subscribe_instagram_fields(connector, account, token, &wanted).await;
+    if !subscribed && wanted != before {
+        tracing::warn!("asking the Instagram subscription again without its extra fields");
+        subscribed = subscribe_instagram_fields(connector, account, token, &before).await;
+    }
+    Ok(json!({ "subscribed": subscribed }))
+}
+
+/// `POST graph.instagram.com/{account}/subscribed_apps` with `fields`: whether Meta took it (an
+/// answer that does not say it failed); a failure logged.
+async fn subscribe_instagram_fields(
+    connector: &MetaConnector,
+    account: &str,
+    token: &str,
+    fields: &str,
+) -> bool {
     let url = connector.instagram_url(
         &[account, "subscribed_apps"],
-        &[("subscribed_fields", &fields)],
+        &[("subscribed_fields", fields)],
     );
-    let subscribed = match connector
+    match connector
         .call(Method::POST, url, Auth::Bearer(token), Body::Empty)
         .await
     {
@@ -562,12 +607,11 @@ async fn subscribe_instagram(
         Err(e) => {
             tracing::warn!(
                 error_kind = e.kind(),
-                "the Instagram comment subscription failed"
+                "the Instagram webhook subscription failed"
             );
             false
         }
-    };
-    Ok(json!({ "subscribed": subscribed }))
+    }
 }
 
 /// `POST /{page}/subscribed_apps` with `fields`; an answer saying it did not succeed is
