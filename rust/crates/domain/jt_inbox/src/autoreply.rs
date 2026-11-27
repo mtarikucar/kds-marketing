@@ -243,7 +243,7 @@ const PASSED_ON_STEMS: &[&str] = &[
 ];
 
 /// Whether `text` says the matter was passed on, or that a person or the team will write
-/// ([`PASSED_ON_STEMS`]; `ekip` in any form but `ekipman`; `passed on`). An automatic reply never
+/// (`PASSED_ON_STEMS`; `ekip` in any form but `ekipman`; `passed on`). An automatic reply never
 /// does: the agent keeps the conversation and answers for itself.
 pub fn passes_on(text: &str) -> bool {
     let words = words_of(text);
