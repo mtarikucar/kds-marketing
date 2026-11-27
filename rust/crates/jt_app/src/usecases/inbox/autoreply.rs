@@ -60,7 +60,10 @@
 //! again a price the business already gave this customer there (`known_amounts`,
 //! `rules::check_reply_known`), and the payment method once the business named it. A reply the
 //! rules refuse, whose repair could not be had, goes out as its own sentences the rules let through
-//! when the customer asked nothing about price (`safe_reply`).
+//! when the customer asked nothing about price (`safe_reply`). A text the second check refuses is
+//! asked for once more with the check's objection; refused again, the customer gets the safe line
+//! ([`SAFE_LINE`]) and the owner is asked. A hand-back never runs again a customer message that
+//! already asked the owner, or that the business answered.
 //!
 //! **What is kept.** One run row per model call (codes and numbers, the model's cost in
 //! millionths of a dollar): a refused answer the model was asked to repair is `skipped`
@@ -393,11 +396,18 @@ async fn mark_handed_back(
     }
     // A person handed it back: what the customer and the owner were told is forgotten.
     r.auto_reply().told_clear(id).await?;
-    // The customer's last message still waits for an answer inside the reply window: the
-    // replies take it now, on the same debounce as any message.
+    // The customer's last message still waits for an answer inside the reply window, and did not
+    // already ask the owner (`keep` marks when): the replies take it now, on the same debounce as
+    // any message.
+    let asked = r
+        .auto_reply()
+        .queue_get(id)
+        .await?
+        .and_then(|q| q.auto_handed_at);
     let waiting = match r.conversations().get(id).await? {
         Some(c) => {
-            c.last_inbound_at.is_some_and(|at| now - at < REPLY_WINDOW)
+            c.last_inbound_at
+                .is_some_and(|at| now - at < REPLY_WINDOW && asked.is_none_or(|h| h < at))
                 && r.messages()
                     .recent(id, 1)
                     .await?
@@ -910,16 +920,86 @@ pub async fn work(
         answer = next;
         run = next_run;
     }
-    drop(request);
     let answer = answer.map(|a| safe_answer(a, &snapshot, ctx.now.year()));
     match answer {
-        Ok(answer) => {
-            let verdict = judge(deps, model, &ctx, &snapshot, &answer).await?;
+        Ok(mut answer) => {
+            let (mut verdict, objection) = judge(deps, model, &ctx, &snapshot, &answer).await?;
+            // The check refused a reply or a quote: asked once more, its objection named, within
+            // the day's limits. A usable answer takes the refused one's place and is checked as
+            // any; otherwise the refused one goes on (the safe line and the owner, `decide`).
+            if verdict == Verdict::Refused
+                && matches!(
+                    answer.tool,
+                    Some(ModelTool::Reply { .. } | ModelTool::Quote { .. })
+                )
+                && within_limits(deps, &ctx, &snapshot).await?
+            {
+                let note = check_repair(objection.as_deref());
+                request.system_note = Some(match &state_note {
+                    Some(state) => format!("{state}\n{note}"),
+                    None => note,
+                });
+                let next = model.answer(&request).await;
+                ctx = system_ctx(ws, deps.clock.now().max(now));
+                let mut next_run = called(deps, &ctx, model.model(), &snapshot, &next).await?;
+                let mut r = deps.uow.tenant(ws).await?;
+                match next {
+                    Ok(n) if n.stop == ModelStop::ToolUse && n.tool.is_some() => {
+                        run.outcome = RunOutcome::Skipped;
+                        run.reason = Some("repaired".into());
+                        r.auto_reply().run_update(&run).await?;
+                        record(
+                            r.as_mut(),
+                            &ctx,
+                            "inbox.autoreply.refused",
+                            "conversation",
+                            snapshot.conversation.id,
+                            json!({
+                                "run_id": run.id,
+                                "reason": "judge_refused",
+                                "repair": repairs + 1,
+                            }),
+                        )
+                        .await?;
+                        r.commit().await?;
+                        answer = safe_answer(n, &snapshot, ctx.now.year());
+                        run = next_run;
+                        verdict = judge(deps, model, &ctx, &snapshot, &answer).await?.0;
+                    }
+                    Ok(_) => {
+                        next_run.outcome = RunOutcome::Skipped;
+                        next_run.reason = Some("repair_unusable".into());
+                        r.auto_reply().run_update(&next_run).await?;
+                        r.commit().await?;
+                    }
+                    Err(_) => r.commit().await?,
+                }
+            }
+            drop(request);
             settle(deps, &ctx, run, &snapshot, answer, verdict).await
         }
         Err(error) => failed(deps, &ctx, &snapshot, error).await,
     }
 }
+
+/// The longest objection of the second check the model is told, in characters.
+const MAX_OBJECTION_CHARS: usize = 300;
+
+/// What the model is told when the second check refused its answer, and why when it said.
+fn check_repair(objection: Option<&str>) -> String {
+    let why = objection
+        .map(|o| format!(" ({})", jt_knowledge::cut(o, MAX_OBJECTION_CHARS)))
+        .unwrap_or_default();
+    format!(
+        "Your previous answer was not sent: the check refused it{why}. Write it again without \
+         that and keep the rest; state no price, payment term, delivery or production commitment \
+         the cards and the conversation do not hold."
+    )
+}
+
+/// What the customer gets when the second check refused the answer twice (the owner is asked
+/// too): no amount, no commitment, nothing passed on.
+pub const SAFE_LINE: &str = "Mesajınızı aldım, bu konuyu netleştirip size buradan döneceğim.";
 
 /// How many times a refused reply is asked for again ([`work`]).
 const MAX_REPAIRS: u32 = 2;
@@ -1451,15 +1531,16 @@ impl Verdict {
 }
 
 /// The second, independent check (no lock held): the text the answer would send, when the rules
-/// let it through, is put to the model once more with one strict tool (`verdict {allowed}`); only
-/// a clear `allowed: true` lets it go. The call is recorded and counted as any other.
+/// let it through, is put to the model once more with one strict tool (`verdict {allowed,
+/// reason}`); only a clear `allowed: true` lets it go. The call is recorded and counted as any
+/// other. Answers the verdict and, for a refusal, the check's objection (never stored).
 async fn judge(
     deps: &Deps,
     model: &Arc<dyn ReplyModel>,
     ctx: &Ctx,
     s: &Snapshot,
     answer: &ModelAnswer,
-) -> Result<Verdict, AppError> {
+) -> Result<(Verdict, Option<String>), AppError> {
     let year = ctx.now.year();
     let no_price = if s.known.is_empty() {
         "The server's facts: this message is not a quote; it may state no price.".to_owned()
@@ -1528,7 +1609,7 @@ async fn judge(
                 ),
             )
         }
-        _ => return Ok(Verdict::None),
+        _ => return Ok((Verdict::None, None)),
     };
     let request = JudgeRequest {
         system: JUDGE_SYSTEM.to_owned(),
@@ -1577,7 +1658,11 @@ async fn judge(
     let mut r = deps.uow.tenant(ctx.workspace_id).await?;
     r.auto_reply().run_insert(&run).await?;
     r.commit().await?;
-    Ok(verdict)
+    let objection = match (&answered, verdict) {
+        (Ok(a), Verdict::Refused) => a.reason.clone(),
+        _ => None,
+    };
+    Ok((verdict, objection))
 }
 
 /// Records model call `answer` at once, in a transaction of its own, before anything that could
@@ -2556,7 +2641,7 @@ async fn decide(
                 return server_refused_for(deps, ctx, r, c, run_id, refusal.key(), &kinds).await;
             }
             if let Some(reason) = verdict.refusal() {
-                return server_refused(deps, ctx, r, c, run_id, reason).await;
+                return check_refused(deps, ctx, r, c, run_id, reason).await;
             }
             queue(deps, ctx, r, s, c, run_id, &text, None).await
         }
@@ -2578,7 +2663,7 @@ async fn decide(
                 }
             };
             if let Some(reason) = verdict.refusal() {
-                return server_refused(deps, ctx, r, c, run_id, reason).await;
+                return check_refused(deps, ctx, r, c, run_id, reason).await;
             }
             let quote = QuoteRow {
                 id: deps.ids.uuid(),
@@ -2746,6 +2831,46 @@ async fn quote_used(r: &mut dyn TenantRepos, journey: JourneyId) -> Result<bool,
         }
     }
     Ok(false)
+}
+
+/// The second check did not allow a reply or a quote (`reason`), its one retry included
+/// ([`work`]): ledger `inbox.autoreply.refused`, then the owner is asked; when it refused
+/// (`judge_refused`), the customer gets [`SAFE_LINE`]. A check that could not be had asks the
+/// owner as any refusal does.
+async fn check_refused(
+    deps: &Deps,
+    ctx: &Ctx,
+    r: &mut dyn TenantRepos,
+    c: &Conversation,
+    run_id: Uuid,
+    reason: &'static str,
+) -> Result<Decided, AppError> {
+    record(
+        r,
+        ctx,
+        "inbox.autoreply.refused",
+        "conversation",
+        c.id,
+        json!({ "run_id": run_id, "reason": reason }),
+    )
+    .await?;
+    let safe = (reason == "judge_refused").then_some(SAFE_LINE);
+    let line = hand_over(
+        deps,
+        ctx,
+        r,
+        c,
+        HandOver {
+            run_id: Some(run_id),
+            reason,
+            by: By::Server,
+            summary: None,
+            line: safe,
+            line_allowed: safe.is_some(),
+        },
+    )
+    .await?;
+    Ok(Decided::handed_over(reason, line))
 }
 
 /// The server turned down what the model wrote: ledger `inbox.autoreply.refused`, then the
@@ -3062,6 +3187,11 @@ async fn keep(
     };
     // Claimed before anything is made: a run that loses finds the winner's item.
     let mut won = r.auto_reply().owner_item_insert(&fresh).await?;
+    // When the owner was asked, so a hand-back does not run the same message again
+    // (`mark_handed_back`); no generation: nothing to come back from.
+    r.auto_reply()
+        .handover_mark(c.id, None, ctx.now, None)
+        .await?;
     let item = if won {
         fresh
     } else {

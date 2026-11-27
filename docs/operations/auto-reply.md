@@ -96,15 +96,20 @@ Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–�
   the cards lack (any `label.tld`, an IP address, an `xn--` name, anything with a scheme). A quote
   is within the range, states that amount exactly once next to its currency and nothing else of
   money, and is the journey's first one that went out; the currency is the workspace's.
-- Whatever passes those rules is checked once more by the model (one strict `verdict` tool):
-  anything but a clear "allowed" (a refusal, an error, no answer) is not sent and the owner is
-  asked (`judge_refused`, `judge_unavailable`). The check is a model call like any
-  other: recorded, counted and paid for.
+- Whatever passes those rules is checked once more by the model (one strict `verdict` tool,
+  with the reason of a refusal): anything but a clear "allowed" is not sent. A reply or a quote
+  the check refuses is asked for once more with the check's reason (never stored); refused again,
+  or with no usable answer, the customer gets "Mesajınızı aldım, bu konuyu netleştirip size
+  buradan döneceğim." and the owner is asked (`judge_refused`). A check that could not be had
+  asks the owner (`judge_unavailable`). The check is a model call like any other: recorded,
+  counted and paid for.
 - **The assistant answers first; a person is the second factor.** It answers every customer
   message that is the latest one of a conversation it serves, whatever a person wrote before (in
   the panel or from the phone's Business App), unless a person has taken the conversation over:
   then it stays out until the conversation is handed back, and a customer message still waiting
-  inside the 24-hour reply window is answered at once on the hand-back. A run whose message a
+  inside the 24-hour reply window is answered at once on the hand-back, unless it already asked
+  the owner (the queue row's `auto_handed_at`, written each time the owner is asked) or the
+  business wrote after it. A run whose message a
   person answers meanwhile (the conversation turns `theirs`, or a newer message moves its
   activity) drops its answer, at the run's end, at the send and at the approval of a held reply
   (`stale`), so the customer never gets two answers to one message; a take-over during a run

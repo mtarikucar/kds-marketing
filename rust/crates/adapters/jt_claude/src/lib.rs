@@ -576,7 +576,7 @@ impl ClaudeModel {
     }
 }
 
-/// The check's one tool: `verdict {allowed}`, strict.
+/// The check's one tool: `verdict {allowed, reason}`, strict.
 pub fn verdict_tool() -> Value {
     json!([{
         "name": "verdict",
@@ -585,8 +585,11 @@ pub fn verdict_tool() -> Value {
         "input_schema": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["allowed"],
-            "properties": { "allowed": { "type": "boolean" } }
+            "required": ["allowed", "reason"],
+            "properties": {
+                "allowed": { "type": "boolean" },
+                "reason": { "type": "string", "description": "When allowed is false: what in the message is not allowed, in a few words. Empty otherwise." }
+            }
         }
     }])
 }
@@ -624,13 +627,22 @@ pub fn verdict_of(response: &MessageResponse, prices: &Prices) -> JudgeAnswer {
         response.stop_reason.as_deref(),
         Some("refusal" | "max_tokens")
     );
-    let allowed = response
+    let verdict = response
         .content
         .iter()
         .find(|b| b["type"] == "tool_use" && b["name"] == "verdict")
-        .and_then(|b| b["input"]["allowed"].as_bool())
         .filter(|_| !stopped);
-    JudgeAnswer { allowed, usage }
+    let allowed = verdict.and_then(|b| b["input"]["allowed"].as_bool());
+    let reason = verdict
+        .and_then(|b| b["input"]["reason"].as_str())
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(str::to_owned);
+    JudgeAnswer {
+        allowed,
+        reason,
+        usage,
+    }
 }
 
 #[cfg(test)]

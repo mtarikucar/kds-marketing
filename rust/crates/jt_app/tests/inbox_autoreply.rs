@@ -15,6 +15,7 @@ use jt_app::ports::reply_model::{
     ModelAnswer, ModelError, ModelStop, ModelTool, PER_CONVERSATION_DAILY, Part, RunOutcome,
     RunRow, Speaker, Usage, WORKSPACE_DAILY_SPEND_MICRO_USD,
 };
+use jt_app::usecases::inbox::autoreply::SAFE_LINE;
 use jt_app::usecases::inbox::{context, conversations, public, replies};
 use jt_app::usecases::jobs::{self, JobReport};
 use jt_app::usecases::knowledge::{cards, read, rules};
@@ -1232,14 +1233,17 @@ async fn a_text_the_check_refuses_is_not_sent_and_the_call_is_counted() {
         .answer(reply("Merhaba, siparişiniz yarın kapınızda."));
     t.model.verdict(Ok(JudgeAnswer {
         allowed: Some(false),
+        reason: None,
         usage: Usage {
             input_tokens: 300,
             cost_micro_usd: 40,
             ..Usage::default()
         },
     }));
+    t.meta.push_send_text(accepted());
     job(&t, due(0)).await;
-    assert!(texts_sent(&t).is_empty());
+    // Asked again, its answer unusable: the safe line goes, the owner is asked.
+    assert_eq!(texts_sent(&t), [SAFE_LINE]);
     asked_the_owner(&t);
     assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["judge_refused"]);
     let judged = t.model.judged();
@@ -1257,6 +1261,7 @@ async fn a_check_that_fails_or_answers_unclearly_hands_over() {
         Err(ModelError::Unavailable { status: Some(529) }),
         Ok(JudgeAnswer {
             allowed: None,
+            reason: None,
             usage: Usage::default(),
         }),
     ] {
@@ -1286,6 +1291,7 @@ async fn a_hand_over_line_the_check_refuses_is_not_sent() {
     }));
     t.model.verdict(Ok(JudgeAnswer {
         allowed: Some(false),
+        reason: None,
         usage: Usage::default(),
     }));
     job(&t, due(0)).await;
@@ -5748,4 +5754,85 @@ async fn a_thank_you_after_the_agreed_total_gets_a_plain_reply() {
     job(&t, due(60)).await;
     assert_eq!(texts_sent(&t), ["Rica ederiz! İyi günler."]);
     assert!(t.w.ledger("inbox.autoreply.needs_owner").is_empty());
+}
+
+#[tokio::test]
+async fn the_checks_objection_is_asked_for_once_and_then_the_safe_line_goes() {
+    let refused = || {
+        Ok(JudgeAnswer {
+            allowed: Some(false),
+            reason: Some("a delivery date the cards do not give".into()),
+            usage: Usage::default(),
+        })
+    };
+    // Allowed the second time: it goes out, and nothing for the owner.
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(reply("Siparişiniz yarın kapınızda."));
+    t.model.verdict(refused());
+    t.model.answer(reply(
+        "Siparişinizi hazırlıyoruz, kargoya verince haber vereceğim.",
+    ));
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    let requests = t.model.requests();
+    assert_eq!(requests.len(), 2, "one retry");
+    assert!(
+        requests[1]
+            .system_note
+            .as_deref()
+            .is_some_and(|n| n.contains("a delivery date the cards do not give"))
+    );
+    assert_eq!(t.model.judged().len(), 2);
+    assert_eq!(
+        texts_sent(&t),
+        ["Siparişinizi hazırlıyoruz, kargoya verince haber vereceğim."]
+    );
+    assert!(t.w.ledger("inbox.autoreply.needs_owner").is_empty());
+    // Refused again: the safe line goes, and the owner is asked.
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(reply("Siparişiniz yarın kapınızda."));
+    t.model.verdict(refused());
+    t.model.answer(reply("Siparişiniz bu hafta kapınızda."));
+    t.model.verdict(refused());
+    t.meta.push_send_text(accepted());
+    job(&t, due(0)).await;
+    assert_eq!(t.model.requests().len(), 2, "one retry only");
+    assert_eq!(texts_sent(&t), [SAFE_LINE]);
+    asked_the_owner(&t);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.needs_owner"),
+        ["judge_refused"]
+    );
+}
+
+#[tokio::test]
+async fn a_hand_back_never_runs_again_a_message_that_already_asked_the_owner() {
+    let t = setup().await;
+    inbound(&t, 0, 0).await;
+    t.model.answer(tool(ModelTool::HandOver {
+        reason: "not_covered".into(),
+        summary: "Özet.".into(),
+        text: None,
+    }));
+    job(&t, due(0)).await;
+    asked_the_owner(&t);
+    // A person takes it over and hands it back while that message is the latest.
+    let id = conversation(&t).id;
+    conversations::take_over(&t.w.deps, &at(&t.w.owner_ctx, consumed_at(60)), id)
+        .await
+        .unwrap();
+    conversations::hand_to_agent(&t.w.deps, &at(&t.w.owner_ctx, consumed_at(90)), id)
+        .await
+        .unwrap();
+    job(&t, consumed_at(90) + AUTOREPLY_SETTLE).await;
+    assert_eq!(t.model.requests().len(), 1, "not run again");
+    assert_eq!(t.w.entries("inbox.autoreply.needs_owner").len(), 1);
+    // The customer's next message is answered.
+    says(&t, "wamid.TEST-AGAIN-1", HALF_HOUR, "Bir sorum daha var.").await;
+    t.model.answer(reply("Elbette, buyurun."));
+    t.meta.push_send_text(accepted());
+    job(&t, due(HALF_HOUR)).await;
+    assert_eq!(texts_sent(&t), ["Elbette, buyurun."]);
 }
