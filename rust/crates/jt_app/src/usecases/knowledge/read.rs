@@ -146,7 +146,8 @@ pub struct AutoReplyView {
     /// The capabilities they answer on.
     pub capability_ids: Vec<CapabilityId>,
     pub price: Option<jt_knowledge::PriceRange>,
-    /// The live capabilities they can be turned on for (WhatsApp numbers), named.
+    /// The live capabilities they can be turned on for (WhatsApp numbers, Instagram accounts'
+    /// direct messages: `jt_knowledge::AUTO_REPLY_KINDS`), named, with their kind.
     pub accounts: Vec<AccountRef>,
     /// The owner's email notices of a hand-over or an order (`inbox::notices`).
     pub notify: NotifyView,

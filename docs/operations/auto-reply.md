@@ -1,7 +1,7 @@
 # Inbox auto-reply (Claude API)
 
-The server can answer a customer's WhatsApp message itself, through the Claude API, within what
-the workspace owner set in Kurallar and what the knowledge cards say. Anything outside the
+The server can answer a customer's WhatsApp message or Instagram direct message itself, through
+the Claude API, within what the workspace owner set in Kurallar and what the knowledge cards say. Anything outside the
 standard is asked of the owner, and the conversation stays the agent's. This reverses the "no AI inside Jeeta" rule for inbox replies only
 (spec `docs/superpowers/specs/2026-10-22-jeeta-rust-yeniden-yazim-design.md`, addendum C).
 
@@ -22,24 +22,61 @@ client `rust/crates/adapters/jt_mcp_client`).
 
 The key goes into `/etc/jeeta/jeeta.env` (root:jeeta, 0640) as `JEETA_ANTHROPIC_API_KEY=...`,
 then `systemctl restart jeeta`. Requests go to `api.anthropic.com` only (the `anthropic` entry of
-`jt_outbound`'s fixed hosts), under a 20 s timeout. A customer's photo is read from Meta
-(`graph.facebook.com`, then `lookaside.fbsbx.com`, both `meta` entries of the fixed hosts).
+`jt_outbound`'s fixed hosts), under a 20 s timeout. A customer's WhatsApp photo is read from Meta
+(`graph.facebook.com`, then `lookaside.fbsbx.com`, both `meta` entries of the fixed hosts); an
+Instagram photo is not read (see "Instagram").
 
 ## Turning it on for a workspace
 
-**Turning it on sends the number's customer messages, their text and their photos, to Anthropic
-(the Claude API).** Photos can show faces and children. The owner's privacy notice must say so
-before the switch is turned on (see "Data protection").
+**Turning it on sends the account's customer messages, their text and (on WhatsApp) their
+photos, to Anthropic (the Claude API).** Photos can show faces and children. The owner's privacy
+notice must say so before the switch is turned on (see "Data protection").
 
 1. The workspace is `active` (a `pending_payment` workspace sends nothing), the inbox module is
-   installed and its WhatsApp number is connected and verified.
+   installed and its WhatsApp number (`whatsapp_cloud`) or Instagram account's direct messages
+   (`instagram_dm`) are connected and verified.
 2. The owner opens Bilgi bankası → Kurallar → Düzenle, turns on "Mesajlara otomatik yanıt" for the
-   number and enters the range ("En az", "En çok"). Saving creates the card "Standart iş ve fiyat".
+   number or the account (one switch each; with both kinds connected each switch names its
+   channel, "WhatsApp · …", "Instagram · …") and enters the range ("En az", "En çok"), shared by
+   every account. Saving creates the card "Standart iş ve fiyat". Nothing is ever turned on by
+   itself: connecting an Instagram account leaves its switch off.
 3. The owner writes that card in their own words: what the standard work is, what places a price
    low or high in the range, and what is outside the standard. Until it has text the feature
    waits, and Kurallar says so.
 
-Kurallar then shows one line: "Mesajlara otomatik yanıt: WhatsApp · ₺min–₺max".
+Kurallar then shows one line naming the channels it is on for: "Mesajlara otomatik yanıt:
+WhatsApp, Instagram · ₺min–₺max" (or only the one that is on).
+
+## Instagram
+
+An Instagram account's direct messages (`instagram_dm`, Instagram Login or a Page token) are
+answered exactly as a number's: the same queue and settle time, the same tools, rules, second
+check, range, one quote, discount steps, limits, policy and hand-overs, and the same 24-hour reply
+window (Instagram's standard messaging window; no message tag is used). Where they differ:
+
+- **The model is told it writes on Instagram**, and to keep every message under 600 characters.
+- **One message's length.** Instagram takes at most 1000 bytes of text in a message
+  (`jt_inbox::autoreply::INSTAGRAM_MAX_TEXT_BYTES`, pinned to what the Meta adapter sends): a
+  Turkish letter such as `ş` takes two, so this is fewer than the 1000 characters any automatic
+  text may hold. Every automatic text on Instagram is checked before it is queued, the server's own
+  included. A model's reply, quote or hand-over line that does not fit is refused like any other
+  (`text_too_long`: nothing goes to the customer and the owner is asked; there is no repair). The
+  discounted quote and the payment link drop the model's line when the two would not fit; an order
+  summary that does not fit (very long details) asks the owner.
+- **Photos are not read.** Instagram's webhook names a photo only by a CDN address
+  (`attachments[].payload.url`), not a media id the server can ask Meta for with the account's
+  token, and the server follows no address from a webhook. The inbound path stores such a message
+  with no text, as before; for the model it reads as `[image]` with the note that it cannot see it,
+  so the model answers in words or hands over when the request depends on the photo. Nothing about
+  the photo is fetched or sent to Anthropic.
+- **The order's phone.** There is no number of the conversation to fall back on: the model asks
+  for a phone number, and a missing one is asked for like any other missing detail.
+- **What a person sends from the Instagram app** comes back as Meta's echo and is stored as the
+  business's own message (author `system`, no send of Jeeta's claims it). The automatic replies
+  read it as a person's, as they read the WhatsApp Business app's: a price in it means no automatic
+  quote in that journey (`human_quoted`), and one after an order's summary keeps the order from
+  going ahead (`order_person_wrote`). Like any newer message it also drops a run's answer that was
+  under way.
 
 ## What it does
 

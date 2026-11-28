@@ -119,7 +119,7 @@ export interface AutoReplyView {
   off_reason: 'no_key' | 'standard_missing' | null;
   capability_ids: Uuid[];
   price: PriceRange | null;
-  /** The WhatsApp numbers they can be turned on for. */
+  /** The WhatsApp numbers and Instagram accounts (`instagram_dm`) they can be turned on for, each on its own. */
   accounts: ApprovalAccount[];
   /** The owner's email notices of a hand-over or an order. */
   notify: NotifyView;

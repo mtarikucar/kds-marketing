@@ -18,8 +18,10 @@ use crate::graph::{missing, node, text};
 /// The longest WhatsApp text body, in characters.
 const MAX_WHATSAPP_TEXT: usize = 4096;
 /// The longest text Instagram Login's messages take, in UTF-8 bytes (Meta's messaging reference,
-/// <https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/>).
-const MAX_INSTAGRAM_LOGIN_TEXT_BYTES: usize = 1000;
+/// <https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/messaging-api/>;
+/// the inbox's automatic replies hold every text to it, `jt_inbox::autoreply::
+/// INSTAGRAM_MAX_TEXT_BYTES`, pinned equal by a test).
+pub const MAX_INSTAGRAM_LOGIN_TEXT_BYTES: usize = 1000;
 
 /// The permission an Instagram Login account's direct messages need.
 pub const INSTAGRAM_MESSAGES_SCOPE: &str = "instagram_business_manage_messages";
