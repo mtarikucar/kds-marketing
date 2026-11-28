@@ -37,12 +37,31 @@
 //! What the rules cannot list is left to a second, independent check by the model (the use case's
 //! judge). A link (any `label.tld`, an IP address, an `xn--` name, anything with a scheme) is
 //! allowed only when the cards hold the same host, and the same path when the text names one, as
-//! a whole token ([`links_allowed`]).
+//! a whole token ([`links_allowed`]). Every automatic text must also fit one message of its
+//! channel ([`fits_channel`]: Instagram counts bytes).
 
 use unicode_normalization::UnicodeNormalization;
 
+use crate::Channel;
+
 /// The longest text of one automatic message, in characters.
 pub const MAX_TEXT_CHARS: usize = 1_000;
+
+/// The longest text Instagram takes in one direct message, in UTF-8 bytes (Instagram Login's
+/// messaging API; the Meta adapter refuses a longer one before sending, and a test pins the two
+/// equal). A Turkish letter such as `ş` takes two bytes, so this is fewer than [`MAX_TEXT_CHARS`]
+/// characters.
+pub const INSTAGRAM_MAX_TEXT_BYTES: usize = 1_000;
+
+/// Whether automatic text `text`, as it is sent (trimmed), fits one message on `channel`: on
+/// Instagram at most [`INSTAGRAM_MAX_TEXT_BYTES`]; on any other channel the automatic replies
+/// serve, always (WhatsApp takes 4096 characters, more than any automatic text holds).
+pub fn fits_channel(text: &str, channel: Channel) -> bool {
+    match channel {
+        Channel::InstagramDm => text.trim().len() <= INSTAGRAM_MAX_TEXT_BYTES,
+        _ => true,
+    }
+}
 
 /// Why the server turned down what the model answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1750,6 +1769,20 @@ mod tests {
             reply(&"a".repeat(MAX_TEXT_CHARS + 1)),
             Err(Refusal::TextTooLong)
         );
+    }
+
+    #[test]
+    fn an_instagram_message_is_bounded_by_its_bytes_and_whatsapp_by_the_rules_alone() {
+        let ascii = "a".repeat(INSTAGRAM_MAX_TEXT_BYTES);
+        assert!(fits_channel(&ascii, Channel::InstagramDm));
+        assert!(fits_channel(&format!("  {ascii}\n"), Channel::InstagramDm));
+        assert!(!fits_channel(&format!("{ascii}a"), Channel::InstagramDm));
+        // Within the characters the rules allow, but over Instagram's bytes: `ş` is two.
+        let turkish = "ş".repeat(INSTAGRAM_MAX_TEXT_BYTES / 2 + 1);
+        assert!(turkish.chars().count() <= MAX_TEXT_CHARS);
+        assert!(!fits_channel(&turkish, Channel::InstagramDm));
+        assert!(fits_channel(&turkish, Channel::WhatsApp));
+        assert!(fits_channel(&"ş".repeat(MAX_TEXT_CHARS), Channel::WhatsApp));
     }
 
     #[test]

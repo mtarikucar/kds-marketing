@@ -10,7 +10,9 @@ use jt_app::ports::connectors::{
     PublicTarget, SubjectKind,
 };
 use jt_connector::{ConnectorError, Credential, FACEBOOK_COMMENT_SCOPES, INSTAGRAM_COMMENT_SCOPES};
-use jt_meta::{FACEBOOK_SCOPES, INSTAGRAM_SCOPES, MAX_MESSENGER_TEXT};
+use jt_meta::{
+    FACEBOOK_SCOPES, INSTAGRAM_SCOPES, MAX_INSTAGRAM_LOGIN_TEXT_BYTES, MAX_MESSENGER_TEXT,
+};
 use serde_json::{Value, json};
 use support::*;
 
@@ -544,6 +546,15 @@ async fn refused_without_grant_before_any_call() {
 fn facebook_private_bound_is_messengers() {
     // The inbox's bound of a Facebook private reply is the Messenger text this adapter sends.
     assert_eq!(jt_inbox::public::FACEBOOK_PRIVATE_MAX, MAX_MESSENGER_TEXT);
+}
+
+#[test]
+fn an_automatic_instagram_message_is_bounded_by_what_this_adapter_sends() {
+    // The automatic replies hold every Instagram text to the bytes Instagram Login takes.
+    assert_eq!(
+        jt_inbox::autoreply::INSTAGRAM_MAX_TEXT_BYTES,
+        MAX_INSTAGRAM_LOGIN_TEXT_BYTES
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

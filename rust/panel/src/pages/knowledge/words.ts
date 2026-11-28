@@ -38,17 +38,36 @@ export function messageLine(t: TFunction, cap: Cap | null, language: string): st
   return cap.period === 'weekly' ? t('knowledge.rules.messageWeekly', { amount }) : t('knowledge.rules.messageMonthly', { amount });
 }
 
+/** The channel each kind the automatic replies serve is named by, in this order. */
+const AUTO_REPLY_CHANNELS: Record<string, string> = { whatsapp_cloud: 'WhatsApp', instagram_dm: 'Instagram' };
+
+/** The channel an automatic-reply account is on ("WhatsApp", "Instagram"), or its kind. */
+export function autoReplyChannel(kind: string): string {
+  return AUTO_REPLY_CHANNELS[kind] ?? kind;
+}
+
+/** The channels the automatic replies are on for, each once, WhatsApp first: "WhatsApp, Instagram". */
+export function autoReplyChannels(auto: Pick<AutoReplyView, 'capability_ids' | 'accounts'>): string[] {
+  const kinds = new Set(auto.accounts.filter((a) => auto.capability_ids.includes(a.capability_id)).map((a) => a.kind));
+  const known = Object.keys(AUTO_REPLY_CHANNELS).filter((k) => kinds.has(k));
+  const other = [...kinds].filter((k) => !(k in AUTO_REPLY_CHANNELS)).sort();
+  return [...known, ...other].map(autoReplyChannel);
+}
+
 /**
- * The automatic replies' line: "Mesajlara otomatik yanıt: WhatsApp · ₺2.750–₺10.000", what keeps
- * them waiting, or `null` while they are off (the line is not shown).
+ * The automatic replies' line: "Mesajlara otomatik yanıt: WhatsApp, Instagram · ₺2.750–₺10.000",
+ * naming the channels they are on for, what keeps them waiting, or `null` while they are off or
+ * on for no account still connected (the line is not shown).
  */
 export function autoReplyLine(t: TFunction, auto: AutoReplyView, language: string): string | null {
   if (auto.capability_ids.length === 0) return null;
   if (auto.off_reason === 'no_key') return t('knowledge.rules.autoReplyNoKey');
   if (auto.off_reason === 'standard_missing' || !auto.price) return t('knowledge.rules.autoReplyWaiting');
+  const channels = autoReplyChannels(auto);
+  if (channels.length === 0) return null;
   const { min_minor, max_minor, currency } = auto.price;
   return t('knowledge.rules.autoReplyOn', {
-    channels: 'WhatsApp',
+    channels: channels.join(', '),
     min: capMoney(min_minor, currency, language),
     max: capMoney(max_minor, currency, language),
   });

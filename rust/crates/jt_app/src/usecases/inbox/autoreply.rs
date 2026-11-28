@@ -1,6 +1,16 @@
-//! The inbox's automatic replies: the server answers a customer's WhatsApp message itself, through
-//! the platform's model (`ports::reply_model`), within what the owner set in Kurallar (the
-//! capabilities it answers on, the price range) and what the knowledge cards say.
+//! The inbox's automatic replies: the server answers a customer's WhatsApp or Instagram direct
+//! message itself, through the platform's model (`ports::reply_model`), within what the owner set
+//! in Kurallar (the capabilities it answers on, each turned on by the owner; the price range) and
+//! what the knowledge cards say.
+//!
+//! **Channels** ([`AUTO_REPLY_KINDS`]). A WhatsApp number (`whatsapp_cloud`) and an Instagram
+//! account's direct messages (`instagram_dm`) are served alike, with two differences: the model is
+//! told which channel it writes on ([`system_fixed`], and the order's phone: on Instagram there is
+//! no number of the conversation to fall back on), and an Instagram text must fit Instagram's one
+//! message (`rules::fits_channel`, in bytes), which the server checks on every automatic text
+//! before it is queued (`enqueue`). A customer's Instagram photo is not read: Meta names it by an
+//! address, not a media id, and the server follows no address from a webhook; it is shown to the
+//! model as a photo it cannot see (`looking`).
 //!
 //! This reverses, for inbox replies only, the rule that Jeeta runs no model of its own (spec
 //! 2026-10-22 addendum "Inbox auto-reply"). Everything else stays as it was: an agent's and a
@@ -108,18 +118,49 @@ pub(crate) use orders::shop_in;
 /// The component the automatic replies act as.
 pub const COMPONENT: &str = "inbox_autoreply";
 
-/// The instructions every workspace's model reads first. The workspace's own part follows. Its
-/// rule on numbers is the reply rules' own list ([`rules::allowed_forms_prompt`]), so what the
-/// model is told and what the server lets through cannot part.
-pub static SYSTEM_FIXED: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    SYSTEM_FIXED_TEMPLATE.replace(NUMBERS_SLOT, &rules::allowed_forms_prompt())
-});
+/// The instructions every workspace's model reads first on WhatsApp. The workspace's own part
+/// follows. Its rule on numbers is the reply rules' own list ([`rules::allowed_forms_prompt`]), so
+/// what the model is told and what the server lets through cannot part.
+pub static SYSTEM_FIXED: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| fixed_for("WhatsApp", ""));
+
+/// [`SYSTEM_FIXED`] on Instagram: the channel named, and how long one message may be
+/// ([`rules::INSTAGRAM_MAX_TEXT_BYTES`]).
+pub static SYSTEM_FIXED_INSTAGRAM: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| fixed_for("Instagram", INSTAGRAM_LENGTH));
+
+/// What the model is told on Instagram of one message's length: well inside
+/// [`rules::INSTAGRAM_MAX_TEXT_BYTES`], whatever the letters.
+const INSTAGRAM_LENGTH: &str = " Instagram takes only short messages: keep every message under \
+600 characters.";
+
+/// The fixed instructions for conversation channel `channel` ([`SYSTEM_FIXED`],
+/// [`SYSTEM_FIXED_INSTAGRAM`]).
+pub fn system_fixed(channel: Channel) -> &'static str {
+    match channel {
+        Channel::InstagramDm => SYSTEM_FIXED_INSTAGRAM.as_str(),
+        _ => SYSTEM_FIXED.as_str(),
+    }
+}
+
+/// [`SYSTEM_FIXED_TEMPLATE`] with its slots filled: the channel's name, its line on length (empty
+/// for none) and the rule on numbers.
+fn fixed_for(channel: &str, length: &str) -> String {
+    SYSTEM_FIXED_TEMPLATE
+        .replace(CHANNEL_SLOT, channel)
+        .replace(LENGTH_SLOT, length)
+        .replace(NUMBERS_SLOT, &rules::allowed_forms_prompt())
+}
 
 /// Where [`SYSTEM_FIXED_TEMPLATE`] takes the rule on numbers.
 const NUMBERS_SLOT: &str = "{numbers}";
+/// Where [`SYSTEM_FIXED_TEMPLATE`] takes the channel's name.
+const CHANNEL_SLOT: &str = "{channel}";
+/// Where [`SYSTEM_FIXED_TEMPLATE`] takes the channel's line on length.
+const LENGTH_SLOT: &str = "{length}";
 
-/// [`SYSTEM_FIXED`] before the rule on numbers is put in.
-const SYSTEM_FIXED_TEMPLATE: &str = "You answer a small business's customers on WhatsApp, on the \
+/// [`SYSTEM_FIXED`] before its slots are filled ([`fixed_for`]).
+const SYSTEM_FIXED_TEMPLATE: &str = "You answer a small business's customers on {channel}, on the \
 business's behalf. The business's own words follow: who it is, its knowledge cards, its rules, its \
 notes and its price range.
 
@@ -135,8 +176,8 @@ one short sentence, that you are the business's automatic assistant. Then go on 
 
 How to answer:
 - Write in the customer's language (usually Turkish): short, warm, natural, everyday words, the \
-way people really write on WhatsApp. No stiff or translated-sounding phrasing, no long \
-sentences, at most one emoji.
+way people really write on {channel}. No stiff or translated-sounding phrasing, no long \
+sentences, at most one emoji.{length}
 - When you need information, ask at most three short questions at a time.
 - Follow the standard path: greet; find out what is wanted (who or what it is for, the style, the \
 size, the deadline, a photo when one helps); then quote within the price range, using the \
@@ -748,6 +789,8 @@ fn warn(ws: Option<WorkspaceId>, code: &str) {
 /// What step 1 read, for step 3 to compare.
 struct Snapshot {
     conversation: Conversation,
+    /// The conversation's channel: what one message of it may hold ([`rules::fits_channel`]).
+    channel: Channel,
     generation: u32,
     activity_revision: i64,
     capability: Capability,
@@ -787,13 +830,22 @@ impl Snapshot {
     }
 
     /// The reply rules over `text` ([`rules::check_reply_known`]: a price the business already gave
-    /// this customer may be stated), and that it passes nothing on ([`rules::passes_on`]).
+    /// this customer may be stated), that it passes nothing on ([`rules::passes_on`]) and that it
+    /// fits one message of the channel ([`Snapshot::fits`]).
     fn check(&self, text: &str, year: i32) -> Result<(), rules::Refusal> {
         rules::check_reply_known(text, &self.cards, year, self.reading(), &self.known)?;
         if rules::passes_on(text) {
             return Err(rules::Refusal::PassedOn);
         }
+        if !self.fits(text) {
+            return Err(rules::Refusal::TextTooLong);
+        }
         Ok(())
+    }
+
+    /// Whether `text` fits one message of the conversation's channel ([`rules::fits_channel`]).
+    fn fits(&self, text: &str) -> bool {
+        rules::fits_channel(text, self.channel)
     }
 
     /// What of `text` the reply rules refuse ([`rules::refused_parts_known`]).
@@ -1450,16 +1502,17 @@ fn money_text(minor: i64, currency: &str) -> String {
     format!("{grouped} {unit}")
 }
 
-/// The discounted quote's message: the model's short line (when it passes the reply rules),
-/// then the server's line stating the price.
-fn discount_message(lead: &str, price: i64, currency: &str, cards: &str, year: i32) -> String {
-    let line = format!("İndirimli fiyatımız: {}.", money_text(price, currency));
+/// The discounted quote's message: the model's short line (when it passes the reply rules and the
+/// two still fit one message of the channel), then the server's line stating the price in the
+/// workspace's currency.
+fn discount_message(lead: &str, price: i64, s: &Snapshot, year: i32) -> String {
+    let line = format!("İndirimli fiyatımız: {}.", money_text(price, &s.currency));
     let lead = lead.trim();
-    if lead.is_empty() || rules::check_reply(lead, cards, year).is_err() {
-        line
-    } else {
-        format!("{lead}\n{line}")
+    if lead.is_empty() || rules::check_reply(lead, &s.cards, year).is_err() {
+        return line;
     }
+    let both = format!("{lead}\n{line}");
+    if s.fits(&both) { both } else { line }
 }
 
 /// Whether one more model call stays within the day's limits (see `prepare`).
@@ -1562,7 +1615,8 @@ async fn judge(
             (text.as_str(), no_price)
         }
         (ModelStop::ToolUse, Some(ModelTool::Quote { amount, text, .. }))
-            if rules::check_quote(*amount, text, s.range, &s.cards, year).is_ok() =>
+            if rules::check_quote(*amount, text, s.range, &s.cards, year).is_ok()
+                && s.fits(text) =>
         {
             (
                 text.as_str(),
@@ -1596,7 +1650,7 @@ async fn judge(
             else {
                 return Ok((Verdict::None, None));
             };
-            discounted_text = discount_message(text, *price, &s.currency, &s.cards, year);
+            discounted_text = discount_message(text, *price, s, year);
             (
                 discounted_text.as_str(),
                 format!(
@@ -1954,7 +2008,9 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
             .collect();
         asks_price(&text.join("\n"), now.year())
     });
-    let looking = looking(deps, r.as_mut(), &capability, messages).await?;
+    let channel = conversation_channel(&c.kind_key)
+        .ok_or_else(|| AppError::internal("a served conversation's channel"))?;
+    let looking = looking(deps, r.as_mut(), &capability, channel, messages).await?;
     let frame = r.strategy().current_approved().await?;
     let price = auto
         .price
@@ -1989,6 +2045,7 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
     .collect();
     let system_note = (!notes.is_empty()).then(|| notes.join("\n"));
     let snapshot = Snapshot {
+        channel,
         generation: c.executor_generation,
         activity_revision: r.conversations().send_state(id).await?.activity_revision,
         capability,
@@ -2015,15 +2072,15 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
         ordering: order.is_some(),
         ..snapshot
     };
-    let mut system_fixed = SYSTEM_FIXED.as_str().to_owned();
+    let mut fixed = system_fixed(channel).to_owned();
     if let Some(offer) = &order {
-        system_fixed.push_str(orders::ORDER_FIXED);
+        fixed.push_str(orders::order_fixed(channel));
         if let Some(reference) = &offer.done {
             system_workspace.push_str(&orders::done_part(reference));
         }
     }
     let request = ModelRequest {
-        system_fixed,
+        system_fixed: fixed,
         system_workspace,
         system_note,
         offer_discount: auto.discount().1 > 0,
@@ -2043,12 +2100,36 @@ async fn prepare(deps: &Deps, ctx: &Ctx, id: ConversationId) -> Result<Prepared,
 /// [`MAX_IMAGES`], each by the media id of its inbound event (`payload.message.image.id`, found by
 /// the message's provider id); and, when there is one to fetch, the capability's credential.
 /// Nothing is fetched here.
+///
+/// On Instagram (`channel`) a customer's photo is stored with no text, and its event names it only
+/// by an address (`attachments[].payload.url`), never a media id: such a message reads as
+/// [`IMAGE_MARKER`] here, in the model's copy only, with no media id, so the model is told it
+/// cannot see it ([`IMAGE_UNSEEN`]) rather than that it holds no text. The address is never
+/// followed.
 async fn looking(
     deps: &Deps,
     r: &mut dyn TenantRepos,
     capability: &Capability,
-    messages: Vec<Message>,
+    channel: Channel,
+    mut messages: Vec<Message>,
 ) -> Result<Looking, AppError> {
+    if channel == Channel::InstagramDm {
+        for m in messages
+            .iter_mut()
+            .filter(|m| m.direction == Direction::Inbound && m.body.trim().is_empty())
+        {
+            let Some(mid) = &m.external_id else {
+                continue;
+            };
+            if r.inbound_events()
+                .find_external(jt_connector::Provider::Meta, mid)
+                .await?
+                .is_some_and(|event| direct_image(&event.payload))
+            {
+                m.body = IMAGE_MARKER.to_owned();
+            }
+        }
+    }
     let mut images = Vec::new();
     for m in messages.iter().rev() {
         if images.len() == MAX_IMAGES {
@@ -2094,6 +2175,15 @@ fn media_id(payload: &serde_json::Value) -> Option<String> {
         .as_str()
         .filter(|id| !id.trim().is_empty())
         .map(str::to_owned)
+}
+
+/// Whether an Instagram (or Messenger) direct message's inbound event carries a photo the customer
+/// sent (`messaging.message.attachments[].type` `image`); `false` once the sender was erased.
+fn direct_image(payload: &serde_json::Value) -> bool {
+    payload["erased_identity"] != true
+        && payload["messaging"]["message"]["attachments"]
+            .as_array()
+            .is_some_and(|all| all.iter().any(|a| a["type"] == "image"))
 }
 
 /// How long one image may take to fetch; one that takes longer is not shown.
@@ -2202,9 +2292,24 @@ pub(crate) fn history(messages: &[Message], seen: &HashMap<MessageId, Seen>) -> 
     turns
 }
 
-/// Whether a person on the team (in the panel, or from the phone's Business App) stated money in
-/// conversation `c` during the person's current open journey ([`rules::states_money`] over their
-/// messages: a bare number counts), an automatic reply a person approved not counted. Then the automatic replies never quote in that journey.
+/// Whether message `m` of a conversation of kind `kind_key` is one a person of the business wrote
+/// to the customer outside Jeeta's own sends or in the panel: a person's in the panel (`Human`),
+/// the WhatsApp Business app's on the phone (`BusinessApp`), or on Instagram one sent from the
+/// Instagram app, whose echo no send of Jeeta's claims (stored as `System`, the consumer's
+/// `echo`).
+fn by_a_person(m: &Message, kind_key: &str) -> bool {
+    m.direction == Direction::Outbound
+        && match m.author {
+            Author::Human(_) | Author::BusinessApp => true,
+            Author::System => conversation_channel(kind_key) == Some(Channel::InstagramDm),
+            Author::Agent | Author::Customer => false,
+        }
+}
+
+/// Whether a person on the team (in the panel, from the phone's Business App, or from the
+/// Instagram app: [`by_a_person`]) stated money in conversation `c` during the person's current
+/// open journey ([`rules::states_money`] over their messages: a bare number counts), an automatic
+/// reply a person approved not counted. Then the automatic replies never quote in that journey.
 async fn human_priced(
     r: &mut dyn TenantRepos,
     c: &Conversation,
@@ -2219,8 +2324,7 @@ async fn human_priced(
         .await?
         .into_iter()
         .filter(|m| {
-            m.direction == Direction::Outbound
-                && matches!(m.author, Author::Human(_) | Author::BusinessApp)
+            by_a_person(m, &c.kind_key)
                 && m.at >= journey.opened_at
                 && rules::states_money(&m.body, year)
         })
@@ -2728,7 +2832,7 @@ async fn decide(
             if let Some(reason) = verdict.refusal() {
                 return server_refused(deps, ctx, r, c, run_id, reason).await;
             }
-            let message = discount_message(&text, price, &s.currency, &s.cards, year);
+            let message = discount_message(&text, price, s, year);
             let quote = QuoteRow {
                 id: deps.ids.uuid(),
                 workspace_id: ctx.workspace_id,
@@ -2951,7 +3055,7 @@ async fn queue(
         activity_revision: s.activity_revision,
         quote,
     };
-    match enqueue(deps, ctx, r, c.id, text, &send).await? {
+    match enqueue(deps, ctx, r, c, text, &send).await? {
         Ok(outbox) => Ok(Decided {
             outcome: if quote.is_some() {
                 RunOutcome::Quoted
@@ -2985,16 +3089,24 @@ async fn queue(
     }
 }
 
-/// `replies::enqueue_in` for an automatic message: `Ok(Ok(outbox id))` when it is queued (or
-/// held), `Ok(Err(reason))` when a fence refused it.
+/// `replies::enqueue_in` for an automatic message in conversation `c`: `Ok(Ok(outbox id))` when it
+/// is queued (or held), `Ok(Err(reason))` when a fence refused it, or before any fence when the
+/// text does not fit one message of the conversation's channel (`text_too_long`,
+/// [`rules::fits_channel`]: every automatic text, the server's own included, passes here).
 async fn enqueue(
     deps: &Deps,
     ctx: &Ctx,
     r: &mut dyn TenantRepos,
-    id: ConversationId,
+    c: &Conversation,
     text: &str,
     send: &replies::AutoSend<'_>,
 ) -> Result<Result<Uuid, String>, AppError> {
+    let id = c.id;
+    if let Some(channel) = conversation_channel(&c.kind_key)
+        && !rules::fits_channel(text, channel)
+    {
+        return Ok(Err(rules::Refusal::TextTooLong.key().to_owned()));
+    }
     let input = replies::ReplyInput {
         image: None,
         text: text.to_owned(),
@@ -3244,7 +3356,7 @@ async fn keep(
             activity_revision: r.conversations().send_state(c.id).await?.activity_revision,
             quote: None,
         };
-        queued = enqueue(deps, ctx, r, c.id, line, &send).await?.ok();
+        queued = enqueue(deps, ctx, r, c, line, &send).await?.ok();
     }
     if queued.is_none() {
         payload["customer_told"] = json!(false);
@@ -3746,5 +3858,41 @@ mod tests {
     fn amounts_read_as_whole_units() {
         assert_eq!(whole(275_000), "2750");
         assert_eq!(whole(275_050), "2750.50");
+    }
+
+    #[test]
+    fn each_channel_has_its_own_instructions_and_whatsapps_are_as_they_were() {
+        let whatsapp = system_fixed(Channel::WhatsApp);
+        let instagram = system_fixed(Channel::InstagramDm);
+        assert_eq!(whatsapp, SYSTEM_FIXED.as_str());
+        for slot in [NUMBERS_SLOT, CHANNEL_SLOT, LENGTH_SLOT] {
+            assert!(
+                !whatsapp.contains(slot) && !instagram.contains(slot),
+                "{slot}"
+            );
+        }
+        // WhatsApp's text reads as it did before Instagram was served.
+        assert!(whatsapp.starts_with("You answer a small business's customers on WhatsApp, on"));
+        assert!(whatsapp.contains(
+            "the way people really write on WhatsApp. No stiff or translated-sounding phrasing, \
+             no long sentences, at most one emoji.\n- When you need information"
+        ));
+        assert!(!whatsapp.contains("Instagram"));
+        // Instagram's names its channel, never WhatsApp, and how short a message must be.
+        assert!(instagram.starts_with("You answer a small business's customers on Instagram, on"));
+        assert!(!instagram.contains("WhatsApp"));
+        assert!(instagram.contains(INSTAGRAM_LENGTH.trim()));
+        // Nothing else differs.
+        assert_eq!(
+            instagram
+                .replace(INSTAGRAM_LENGTH, "")
+                .replace("Instagram", "WhatsApp"),
+            whatsapp
+        );
+        // The order asks Instagram for the phone itself: there is no number to fall back on.
+        assert_eq!(orders::order_fixed(Channel::WhatsApp), orders::ORDER_FIXED);
+        let order = orders::order_fixed(Channel::InstagramDm);
+        assert!(!order.contains("WhatsApp"));
+        assert!(order.contains("full name, email, phone number"));
     }
 }

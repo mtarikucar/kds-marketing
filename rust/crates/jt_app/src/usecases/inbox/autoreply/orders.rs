@@ -95,6 +95,26 @@ option, a detail, whose name goes on the order) is yours: carry on.
 - If the order exists and the customer asks for the link again, call `create_order` again with \
 the same details.";
 
+/// How [`ORDER_FIXED`] asks for the phone on WhatsApp: the conversation's own number stands in
+/// for one the customer does not give (`own_phone`).
+const WHATSAPP_PHONE: &str = "phone (only if different from this WhatsApp number)";
+/// How the order asks for the phone on Instagram, where the conversation has no number: one the
+/// customer writes is required.
+const INSTAGRAM_PHONE: &str = "phone number (Instagram shows none)";
+
+/// [`ORDER_FIXED`] on Instagram ([`order_fixed`]).
+static ORDER_FIXED_INSTAGRAM: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| ORDER_FIXED.replace(WHATSAPP_PHONE, INSTAGRAM_PHONE));
+
+/// What follows the fixed instructions when the order is offered on conversation channel
+/// `channel`: [`ORDER_FIXED`], asking on Instagram for the phone number itself.
+pub fn order_fixed(channel: Channel) -> &'static str {
+    match channel {
+        Channel::InstagramDm => ORDER_FIXED_INSTAGRAM.as_str(),
+        _ => ORDER_FIXED,
+    }
+}
+
 /// The fixed message the payment link goes in; the link follows it.
 pub const ORDER_LINK: &str =
     "Siparişiniz oluşturuldu. Ödemeyi kartla ya da havaleyle bu bağlantıdan yapabilirsiniz:";
@@ -227,12 +247,17 @@ pub(super) fn done_part(reference: &str) -> String {
     )
 }
 
-/// The message the payment link goes out in: the model's line, when it wrote one, then the
-/// fixed text and the link.
-fn link_message(line: Option<&str>, url: &str) -> String {
+/// The message the payment link goes out in: the model's line, when it wrote one and the whole
+/// still fits one message of the channel (`s`, [`Snapshot::fits`]), then the fixed text and the
+/// link.
+fn link_message(line: Option<&str>, url: &str, s: &Snapshot) -> String {
+    let bare = format!("{ORDER_LINK} {url}");
     match line {
-        Some(line) => format!("{line}\n\n{ORDER_LINK} {url}"),
-        None => format!("{ORDER_LINK} {url}"),
+        Some(line) => {
+            let both = format!("{line}\n\n{bare}");
+            if s.fits(&both) { both } else { bare }
+        }
+        None => bare,
     }
 }
 
@@ -392,14 +417,13 @@ fn sent_at(row: &crate::ports::inbox::OutboxRow) -> OffsetDateTime {
         .unwrap_or(row.updated_at)
 }
 
-/// Whether a message written by a person on the team (in the panel or the phone's Business app,
-/// queued or sent) is in `messages` after `since`.
-fn person_wrote(messages: &[Message], since: OffsetDateTime) -> bool {
-    messages.iter().any(|m| {
-        m.direction == Direction::Outbound
-            && matches!(m.author, Author::Human(_) | Author::BusinessApp)
-            && m.at > since
-    })
+/// Whether a message written by a person on the team (in the panel, the phone's Business app or
+/// the Instagram app: `by_a_person`, queued or sent) is in `messages` of a conversation of kind
+/// `kind_key` after `since`.
+fn person_wrote(messages: &[Message], since: OffsetDateTime, kind_key: &str) -> bool {
+    messages
+        .iter()
+        .any(|m| by_a_person(m, kind_key) && m.at > since)
 }
 
 /// Whether a person on the team wrote in order `o`'s conversation (queued or sent) after its
@@ -414,11 +438,17 @@ async fn person_after_summary(r: &mut dyn TenantRepos, o: &OrderRow) -> Result<b
     let Some(shown) = r.messages().get(row.message_id).await? else {
         return Ok(false);
     };
+    let kind_key = r
+        .conversations()
+        .get(o.conversation_id)
+        .await?
+        .map(|c| c.kind_key)
+        .unwrap_or_default();
     let messages = r
         .messages()
         .recent(o.conversation_id, ORDER_HISTORY)
         .await?;
-    Ok(person_wrote(&messages, shown.at))
+    Ok(person_wrote(&messages, shown.at, &kind_key))
 }
 
 /// Whether anything was written to the customer in order `o`'s conversation (by anyone, queued or
@@ -480,12 +510,14 @@ async fn only_harmless_since(
 /// What the customer made of the summary queued as outbox row `summary` (see [`Answer`]): it
 /// counts only once its send succeeded; then every customer message the server received after that
 /// send must be an explicit yes, and no person on the team may have written after it was queued.
+/// `kind_key` is the conversation's kind.
 async fn answer_to(
     r: &mut dyn TenantRepos,
     messages: &[Message],
     summary: Option<Uuid>,
-    provider: Option<jt_connector::Provider>,
+    kind_key: &str,
 ) -> Result<Answer, AppError> {
+    let provider = jt_connector::provider_for_kind(kind_key);
     let Some(summary) = summary else {
         return Ok(Answer::NotConfirmed);
     };
@@ -495,7 +527,7 @@ async fn answer_to(
     let Some(shown) = r.messages().get(row.message_id).await? else {
         return Ok(Answer::NotConfirmed);
     };
-    if person_wrote(messages, shown.at) {
+    if person_wrote(messages, shown.at, kind_key) {
         return Ok(Answer::PersonWrote);
     }
     if row.state != "sent" {
@@ -577,7 +609,7 @@ pub(super) async fn decide(
             s,
             c,
             run_id,
-            &link_message(line.as_deref(), &url),
+            &link_message(line.as_deref(), &url, s),
             None,
         )
         .await?;
@@ -645,10 +677,7 @@ pub(super) async fn decide(
         o.confirm_hash.as_deref() == Some(hash.as_str()) && o.quote_id == quote.id
     });
     let answer = match &existing {
-        Some(o) => {
-            let provider = jt_connector::provider_for_kind(&c.kind_key);
-            answer_to(r, &messages, o.summary_outbox_id, provider).await?
-        }
+        Some(o) => answer_to(r, &messages, o.summary_outbox_id, &c.kind_key).await?,
         None => Answer::NotConfirmed,
     };
     if answer == Answer::PersonWrote {
@@ -1046,7 +1075,7 @@ async fn finish_order(
                 None,
             )
             .await?;
-            let message = link_message(line.as_deref(), &created.url);
+            let message = link_message(line.as_deref(), &created.url, s);
             let sent = match &current {
                 Some(c) => {
                     replies::supersede_held_auto(r.as_mut(), ctx, c.id).await?;
@@ -1060,7 +1089,7 @@ async fn finish_order(
                             .activity_revision,
                         quote: None,
                     };
-                    enqueue(deps, ctx, r.as_mut(), c.id, &message, &send).await?
+                    enqueue(deps, ctx, r.as_mut(), c, &message, &send).await?
                 }
                 None => Err("order_link_unsent".to_owned()),
             };

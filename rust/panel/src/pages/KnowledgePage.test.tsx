@@ -921,6 +921,51 @@ describe('KnowledgePage automatic replies', () => {
     });
   });
 
+  describe('with an Instagram account beside the number', () => {
+    const INSTAGRAM_DM_ID = '0190a000-0000-7000-8000-0000000000b1';
+    const accounts = [...knowledge.rules.auto_reply.accounts, { capability_id: INSTAGRAM_DM_ID, name: 'Alfa Instagram', kind: 'instagram_dm' }];
+    const withInstagram = (ids: string[]) => ({
+      ...knowledge,
+      rules: { ...onRules, auto_reply: { ...onRules.auto_reply, capability_ids: ids, accounts } },
+    });
+
+    it('turns them on for the Instagram account alone, each switch naming its channel', async () => {
+      const user = userEvent.setup();
+      const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': knowledge.rules }, withInstagram([WHATSAPP_ID])));
+      renderAt('/knowledge');
+      await page();
+      await user.click(screen.getByRole('button', { name: k.rules.editLabel }));
+      const dialog = await screen.findByRole('dialog', { name: k.rules.title });
+      const section = within(dialog).getByRole('region', { name: k.rules.dialog.autoReply });
+      const instagram = within(section).getByRole('switch', { name: 'Instagram · Alfa Instagram' });
+      expect(instagram).not.toBeChecked();
+      expect(within(section).getByRole('switch', { name: 'WhatsApp · Alfa WhatsApp' })).toBeChecked();
+      await user.click(within(section).getByRole('switch', { name: 'WhatsApp · Alfa WhatsApp' }));
+      await user.click(instagram);
+      await user.click(within(dialog).getByRole('button', { name: k.save }));
+      await waitFor(() => expect(writes(calls, 'PUT', '/api/knowledge/rules')).toHaveLength(1));
+      expect(writes(calls, 'PUT', '/api/knowledge/rules')[0].body).toMatchObject({
+        auto_reply: { capability_ids: [INSTAGRAM_DM_ID] },
+      });
+    });
+
+    it('names in Kurallar the channels they are on for', async () => {
+      mockFetch(routes({}, withInstagram([INSTAGRAM_DM_ID, WHATSAPP_ID])));
+      renderAt('/knowledge');
+      await page();
+      const rules = screen.getByRole('region', { name: k.rules.title });
+      expect(within(rules).getByText('Mesajlara otomatik yanıt: WhatsApp, Instagram · ₺1.000–₺5.000.')).toBeInTheDocument();
+    });
+
+    it('names Instagram alone while only the account is on', async () => {
+      mockFetch(routes({}, withInstagram([INSTAGRAM_DM_ID])));
+      renderAt('/knowledge');
+      await page();
+      const rules = screen.getByRole('region', { name: k.rules.title });
+      expect(within(rules).getByText('Mesajlara otomatik yanıt: Instagram · ₺1.000–₺5.000.')).toBeInTheDocument();
+    });
+  });
+
   it('names the mailbox email notices go out from, and turns them off in the dialog', async () => {
     const user = userEvent.setup();
     const calls = mockFetch(routes({ 'PUT /api/knowledge/rules': onRules }, { ...knowledge, rules: onRules }));

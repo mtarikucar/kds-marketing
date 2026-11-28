@@ -628,6 +628,7 @@ pub(crate) fn reason_words(code: Option<&str>) -> &'static str {
         "requote" => "Müşteri ikinci bir teklif istedi",
         "human_quoted" => "Fiyatı ekipten biri konuşmuştu",
         "response_overdue" => "Müşteri zamanında yanıt alamadı",
+        "text_too_long" => "Hazırlanan yanıt tek mesaja sığmadı",
         c if c.starts_with("limit_") => "Günlük otomatik yanıt sınırı doldu",
         c if c.starts_with("judge_") => "Hazırlanan yanıt denetimden geçmedi",
         "order_link_unsent" => "Sipariş oluştu, ödeme bağlantısını siz gönderin",

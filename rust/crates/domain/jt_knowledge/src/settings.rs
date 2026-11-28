@@ -251,8 +251,9 @@ impl KnowledgeSettings {
     }
 }
 
-/// The capability kinds whose conversations the automatic replies may answer.
-pub const AUTO_REPLY_KINDS: &[&str] = &["whatsapp_cloud"];
+/// The capability kinds whose conversations the automatic replies may answer: a WhatsApp number
+/// and an Instagram account's direct messages. Each is turned on by the owner, one by one.
+pub const AUTO_REPLY_KINDS: &[&str] = &["whatsapp_cloud", "instagram_dm"];
 /// The most capabilities the automatic replies may be on for.
 pub const MAX_AUTO_REPLY_CAPABILITIES: usize = 10;
 /// How many days an automatic quote stays valid.

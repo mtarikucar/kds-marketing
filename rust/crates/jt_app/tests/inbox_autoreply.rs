@@ -123,6 +123,12 @@ async fn setup() -> T {
 
 /// Turns the automatic replies on for the number, with the range, and writes the standard card.
 async fn turn_on(t: &T) {
+    turn_on_for(t, &[t.cap]).await;
+}
+
+/// Turns the automatic replies on for exactly `capabilities`, with the range, and writes the
+/// standard card.
+async fn turn_on_for(t: &T, capabilities: &[CapabilityId]) {
     let w = &t.w;
     let k = read::knowledge_get(&w.deps, &w.owner_ctx).await.unwrap();
     rules::rules_save(
@@ -136,7 +142,7 @@ async fn turn_on(t: &T) {
             post_approval: false,
             post_approval_accounts: None,
             auto_reply: Some(AutoReplyInput {
-                capability_ids: vec![t.cap.as_uuid()],
+                capability_ids: capabilities.iter().map(|c| c.as_uuid()).collect(),
                 min_minor: Some(MIN),
                 max_minor: Some(MAX),
                 notify_email: None,
@@ -181,6 +187,11 @@ async fn inbound(t: &T, n: usize, tick: i64) {
 }
 
 async fn put(t: &T, draft: InboundEventDraft, received: OffsetDateTime) {
+    put_on(t, t.cap, draft, received).await;
+}
+
+/// [`put`] on capability `cap`.
+async fn put_on(t: &T, cap: CapabilityId, draft: InboundEventDraft, received: OffsetDateTime) {
     let w = &t.w;
     let mut r = w.uow.tenant(w.ws).await.unwrap();
     r.inbound_events()
@@ -188,7 +199,7 @@ async fn put(t: &T, draft: InboundEventDraft, received: OffsetDateTime) {
             InboundEvent {
                 id: InboundEventId::new_v7(),
                 workspace_id: w.ws,
-                capability_id: Some(t.cap),
+                capability_id: Some(cap),
                 provider: Provider::Meta,
                 external_id: draft.external_id,
                 kind: draft.kind,
@@ -5835,4 +5846,355 @@ async fn a_hand_back_never_runs_again_a_message_that_already_asked_the_owner() {
     t.meta.push_send_text(accepted());
     job(&t, due(HALF_HOUR)).await;
     assert_eq!(texts_sent(&t), ["Elbette, buyurun."]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Instagram direct messages
+// ---------------------------------------------------------------------------------------------
+
+/// The fixture's invented Instagram account and its customer.
+const IG_ACCOUNT: &str = "17841400000000001";
+const IG_CUSTOMER: &str = "3000000000000001";
+/// An invented Instagram message id.
+const IG_MID: &str = "aWdfZAG1faXRlbTpURVNULUlHLTk=";
+
+/// A verified `instagram_dm` capability (Instagram Login, with the messages permission) beside
+/// the workspace's WhatsApp number; the automatic replies are not turned on for it.
+async fn instagram_account(t: &T) -> CapabilityId {
+    let w = &t.w;
+    let mut cap = Capability::new(
+        CapabilityId::new_v7(),
+        w.ws,
+        NewCapability {
+            kind_key: "instagram_dm".into(),
+            name: "Atölye Instagram".into(),
+            ..Default::default()
+        },
+        FIXED_NOW_T - Duration::days(2),
+    )
+    .unwrap();
+    cap.external_id = Some(IG_ACCOUNT.into());
+    cap.status = StoredStatus::Verified;
+    cap.last_verified_at = Some(FIXED_NOW_T - Duration::days(1));
+    let cred = Credential::OAuth {
+        access_token: "private-token".into(),
+        refresh_token: None,
+        expires_at: None,
+        scopes: vec!["instagram_business_manage_messages".into()],
+    };
+    let sealed = w
+        .deps
+        .seal
+        .seal(w.ws, &serde_json::to_vec(&cred).unwrap())
+        .unwrap();
+    let id = cap.id;
+    let mut r = w.uow.tenant(w.ws).await.unwrap();
+    r.capabilities().insert(cap, Some(sealed)).await.unwrap();
+    r.commit().await.unwrap();
+    id
+}
+
+/// The fixture's customer's Instagram direct message `mid` on `cap`, received at `tick` and
+/// consumed then: `text`, or without one a photo as Instagram sends it (an attachment's address,
+/// never a media id).
+async fn inbound_instagram(t: &T, cap: CapabilityId, mid: &str, text: Option<&str>, tick: i64) {
+    let mut draft = meta_drafts("instagram_messaging")
+        .into_iter()
+        .find(|d| d.kind == jt_connector::EventKind::Message)
+        .unwrap();
+    let received = FIXED_NOW_T + Duration::seconds(tick);
+    let m = &mut draft.payload["messaging"]["message"];
+    m["mid"] = json!(mid);
+    match text {
+        Some(text) => m["text"] = json!(text),
+        None => {
+            m.as_object_mut().unwrap().remove("text");
+            m["attachments"] = json!([
+                { "type": "image", "payload": { "url": "https://cdn.example.test/invented.jpg" } }
+            ]);
+        }
+    }
+    draft.external_id = mid.to_owned();
+    draft.payload["occurred_at"] = json!(received.format(&Rfc3339).unwrap());
+    put_on(t, cap, draft, received).await;
+    let report = jobs::run_inbox_consume(&t.w.deps, consumed_at(tick)).await;
+    assert_eq!(report.failed, 0, "{report:?}");
+}
+
+/// What a person of the business sends the fixture's customer from the Instagram app, as Meta
+/// echoes it (`is_echo`, `mid`), at `tick`, consumed then.
+async fn from_the_instagram_app(t: &T, cap: CapabilityId, mid: &str, tick: i64, body: &str) {
+    let mut echo = meta_drafts("instagram_messaging")
+        .into_iter()
+        .find(|d| d.kind == jt_connector::EventKind::MessageEcho)
+        .unwrap();
+    let at = FIXED_NOW_T + Duration::seconds(tick);
+    echo.payload["messaging"]["message"]["mid"] = json!(mid);
+    echo.payload["messaging"]["message"]["text"] = json!(body);
+    echo.external_id = mid.to_owned();
+    echo.payload["occurred_at"] = json!(at.format(&Rfc3339).unwrap());
+    put_on(t, cap, echo, at).await;
+    let report = jobs::run_inbox_consume(&t.w.deps, at + Duration::seconds(1)).await;
+    assert_eq!(report.failed, 0, "{report:?}");
+}
+
+/// The conversation on capability `cap`.
+fn conversation_on(t: &T, cap: CapabilityId) -> Conversation {
+    t.w.uow
+        .snapshot()
+        .inbox
+        .conversations
+        .into_iter()
+        .find(|c| c.capability_id == cap)
+        .expect("a conversation on the capability")
+}
+
+/// Whom each text sent went to.
+fn recipients(t: &T) -> Vec<String> {
+    t.meta
+        .calls()
+        .into_iter()
+        .filter_map(|c| match c {
+            jt_testkit::fakes::ConnectorCall::SendText { recipient_id, .. } => Some(recipient_id),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_instagram_conversation_its_account_is_turned_on_for_is_taken_and_answered() {
+    let t = setup_with(true, true).await;
+    let ig = instagram_account(&t).await;
+    // The owner can turn the replies on for the account, as for a number.
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert!(
+        k.rules
+            .auto_reply
+            .accounts
+            .iter()
+            .any(|a| a.capability_id == ig && a.kind == "instagram_dm")
+    );
+    turn_on_for(&t, &[ig]).await;
+    inbound_instagram(
+        &t,
+        ig,
+        IG_MID,
+        Some("Merhaba, figür yaptırmak istiyorum."),
+        0,
+    )
+    .await;
+    let c = conversation_on(&t, ig);
+    assert_eq!(c.kind_key, "instagram_dm");
+    assert!(
+        t.w.uow
+            .snapshot()
+            .auto_reply
+            .queue
+            .iter()
+            .any(|(_, q)| q.conversation_id == c.id && q.due_at.is_some()),
+        "scheduled"
+    );
+    t.model
+        .answer(reply("Merhaba! Kaç kişilik bir figür düşünüyorsunuz?"));
+    t.meta.push_send_text(accepted());
+    let report = job(&t, due(0)).await;
+    assert_eq!(report.changed, 1, "{report:?}");
+    assert_eq!(
+        texts_sent(&t),
+        ["Merhaba! Kaç kişilik bir figür düşünüyorsunuz?"]
+    );
+    assert_eq!(recipients(&t), [IG_CUSTOMER]);
+    // The model is told it writes on Instagram, and how short a message must be.
+    let request = &t.model.requests()[0];
+    assert_eq!(
+        request.system_fixed,
+        jt_app::usecases::inbox::autoreply::SYSTEM_FIXED_INSTAGRAM.as_str()
+    );
+    assert!(request.system_fixed.contains("customers on Instagram"));
+    assert!(!request.system_fixed.contains("WhatsApp"));
+    assert_eq!(t.model.judged().len(), 1, "checked as any answer");
+    let s = t.w.uow.snapshot();
+    let sent = s
+        .inbox
+        .messages
+        .iter()
+        .find(|m| m.direction == Direction::Outbound)
+        .unwrap();
+    assert_eq!(sent.conversation_id, c.id);
+    assert_eq!(sent.author, Author::Agent);
+    assert_eq!(sent.status, MsgStatus::Sent);
+    assert_eq!(runs(&t)[0].outcome, RunOutcome::Replied);
+    assert_eq!(runs(&t)[0].capability_id, ig);
+    assert_eq!(t.w.ledger("inbox.autoreply.replied").len(), 1);
+}
+
+#[tokio::test]
+async fn an_instagram_account_the_replies_are_not_turned_on_for_is_never_answered() {
+    // On for the WhatsApp number only: the Instagram account is the owner's own switch.
+    let t = setup().await;
+    let ig = instagram_account(&t).await;
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert_eq!(k.rules.auto_reply.capability_ids, [t.cap]);
+    inbound_instagram(&t, ig, IG_MID, Some("Merhaba, fiyat alabilir miyim?"), 0).await;
+    let c = conversation_on(&t, ig);
+    assert!(
+        !t.w.uow
+            .snapshot()
+            .auto_reply
+            .queue
+            .iter()
+            .any(|(_, q)| q.conversation_id == c.id),
+        "nothing scheduled"
+    );
+    assert_eq!(job(&t, due(0)).await.touched, 0);
+    // Nor by the sweep for messages left without a schedule.
+    assert_eq!(job(&t, due(0) + Duration::minutes(2)).await.touched, 0);
+    assert!(t.model.requests().is_empty());
+    assert!(texts_sent(&t).is_empty());
+    assert_eq!(conversation_on(&t, ig).executor, Executor::Agent);
+}
+
+#[tokio::test]
+async fn only_a_served_kind_can_be_turned_on() {
+    let t = setup_with(true, true).await;
+    let page = Capability::new(
+        CapabilityId::new_v7(),
+        t.w.ws,
+        NewCapability {
+            kind_key: "messenger".into(),
+            name: "Atölye Messenger".into(),
+            ..Default::default()
+        },
+        FIXED_NOW_T - Duration::days(2),
+    )
+    .unwrap();
+    let page_id = page.id;
+    let mut r = t.w.uow.tenant(t.w.ws).await.unwrap();
+    r.capabilities().insert(page, None).await.unwrap();
+    r.commit().await.unwrap();
+    let k = read::knowledge_get(&t.w.deps, &t.w.owner_ctx)
+        .await
+        .unwrap();
+    assert!(
+        k.rules
+            .auto_reply
+            .accounts
+            .iter()
+            .all(|a| a.capability_id != page_id),
+        "not offered"
+    );
+    let refused = rules::rules_save(
+        &t.w.deps,
+        &t.w.owner_ctx,
+        rules::RulesInput {
+            expected_revision: k.rules.revision,
+            prohibitions: vec![],
+            ad_budget: None,
+            message_budget: None,
+            post_approval: false,
+            post_approval_accounts: None,
+            auto_reply: Some(AutoReplyInput {
+                capability_ids: vec![page_id.as_uuid()],
+                min_minor: Some(MIN),
+                max_minor: Some(MAX),
+                notify_email: None,
+                discount_preferred_pct: None,
+                discount_max_pct: None,
+            }),
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.details["reason"], "no_such_number");
+}
+
+#[tokio::test]
+async fn an_instagram_photo_is_one_the_model_is_told_it_cannot_see_and_is_never_fetched() {
+    let t = setup_with(true, true).await;
+    let ig = instagram_account(&t).await;
+    turn_on_for(&t, &[ig]).await;
+    inbound_instagram(&t, ig, IG_MID, None, 0).await;
+    // The inbound path stores it as it always did: no text.
+    assert_eq!(stored_bodies(&t), [""]);
+    t.meta.push_send_text(accepted());
+    t.model.answer(reply(
+        "Fotoğrafı göremiyorum, ne istediğinizi yazar mısınız?",
+    ));
+    job(&t, due(0)).await;
+    assert!(t.meta.media_calls().is_empty(), "no address is followed");
+    let parts = last_turn(&t, 0);
+    assert_eq!(parts.len(), 1);
+    let text = text_of(&parts[0]);
+    assert!(text.starts_with("[image]\n"), "{text}");
+    assert!(text.contains("could not be loaded"), "{text}");
+    assert_eq!(
+        stored_bodies(&t)[0],
+        "",
+        "the stored message is left as it is"
+    );
+}
+
+#[tokio::test]
+async fn an_instagram_reply_longer_than_one_message_is_not_sent_and_asks_the_owner() {
+    let t = setup_with(true, true).await;
+    let ig = instagram_account(&t).await;
+    turn_on_for(&t, &[ig]).await;
+    inbound_instagram(&t, ig, IG_MID, Some("Merhaba, nasıl çalışıyorsunuz?"), 0).await;
+    // Within the characters any automatic text may hold, over the bytes Instagram takes.
+    let long = "Çok güzel düşünmüşsünüz, işçiliği özenle çalışırız. ".repeat(18);
+    assert!(long.trim().chars().count() <= jt_inbox::autoreply::MAX_TEXT_CHARS);
+    assert!(long.trim().len() > jt_inbox::autoreply::INSTAGRAM_MAX_TEXT_BYTES);
+    t.model.answer(reply(&long));
+    job(&t, due(0)).await;
+    assert!(texts_sent(&t).is_empty());
+    assert!(
+        t.model.judged().is_empty(),
+        "no check for a text that cannot go"
+    );
+    asked_the_owner(&t);
+    assert_eq!(reasons(&t, "inbox.autoreply.refused"), ["text_too_long"]);
+    assert_eq!(
+        reasons(&t, "inbox.autoreply.needs_owner"),
+        ["text_too_long"]
+    );
+}
+
+#[tokio::test]
+async fn a_price_sent_from_the_instagram_app_turns_a_later_quote_into_a_hand_over() {
+    let t = setup_with(true, true).await;
+    let ig = instagram_account(&t).await;
+    turn_on_for(&t, &[ig]).await;
+    inbound_instagram(&t, ig, IG_MID, Some("Merhaba, fiyat nedir?"), 0).await;
+    // A person of the business answers from the Instagram app: its echo is no send of Jeeta's.
+    from_the_instagram_app(
+        &t,
+        ig,
+        "aWdfZAG1faXRlbTpURVNULUlHLUFQUA==",
+        30,
+        "Bunun fiyatı 2.500 TL olur.",
+    )
+    .await;
+    inbound_instagram(
+        &t,
+        ig,
+        "aWdfZAG1faXRlbTpURVNULUlHLTEw",
+        Some("Peki, ne zaman hazır olur?"),
+        60,
+    )
+    .await;
+    t.model.answer(quote(1_250, "Teklifimiz 1.250 TL."));
+    job(&t, due(60)).await;
+    let request = &t.model.requests()[0];
+    assert!(
+        request
+            .system_workspace
+            .contains("A person on the team already discussed the price in this conversation")
+    );
+    assert!(texts_sent(&t).is_empty(), "no automatic quote");
+    asked_the_owner(&t);
+    assert_eq!(reasons(&t, "inbox.autoreply.needs_owner"), ["human_quoted"]);
 }

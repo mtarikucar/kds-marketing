@@ -306,7 +306,8 @@ async fn auto_reply_of(
             return Err(refused(
                 ErrorCode::NotFound,
                 "no_such_number",
-                "a listed number is not a live WhatsApp number of the workspace",
+                "a listed account is not a live WhatsApp number or Instagram account of the \
+                 workspace",
                 json!({ "field": format!("auto_reply.capability_ids[{i}]") }),
             ));
         }

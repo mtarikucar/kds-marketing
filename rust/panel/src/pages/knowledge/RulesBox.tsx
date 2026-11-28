@@ -28,7 +28,7 @@ import {
 } from '@/components/ui';
 import { can, isOwnerOrManager } from '@/lib/roles';
 import { isStale, useKnowledgeMutation } from './queries';
-import { adLine, approvalLine, autoReplyLine, knowledgeError, listedNames, messageLine, notifyLine, orderLine } from './words';
+import { adLine, approvalLine, autoReplyChannel, autoReplyLine, knowledgeError, listedNames, messageLine, notifyLine, orderLine } from './words';
 
 /** How many prohibitions the box shows before "{n} kural daha". */
 const SHOWN = 2;
@@ -183,9 +183,10 @@ function CapField({
 }
 
 /**
- * The automatic replies in the Kurallar dialog: a switch for each WhatsApp number, and the range
- * of their quotes ("En az", "En çok"). Without a model on the server the switches are disabled
- * and the section says so.
+ * The automatic replies in the Kurallar dialog: a switch for each connected WhatsApp number and
+ * Instagram account (named with its channel when both kinds are there), and the range of their
+ * quotes ("En az", "En çok"). Without a model on the server the switches are disabled and the
+ * section says so.
  */
 function AutoReplyField({
   auto,
@@ -217,6 +218,8 @@ function AutoReplyField({
   const { t } = useTranslation();
   const currency = auto.price?.currency ?? 'TRY';
   const on = ids.length > 0;
+  // With accounts of more than one channel, each switch names its channel.
+  const mixed = new Set(auto.accounts.map((a) => a.kind)).size > 1;
   return (
     <section className="flex flex-col gap-2" aria-label={t('knowledge.rules.dialog.autoReply')}>
       <h3 className="text-sm font-medium">{t('knowledge.rules.dialog.autoReply')}</h3>
@@ -228,7 +231,7 @@ function AutoReplyField({
             disabled={!auto.available}
             onCheckedChange={(checked) => onIds(checked ? [...ids, a.capability_id] : ids.filter((id) => id !== a.capability_id))}
           />
-          {a.name}
+          {mixed ? `${autoReplyChannel(a.kind)} · ${a.name}` : a.name}
         </label>
       ))}
       {(on || auto.price) && (
